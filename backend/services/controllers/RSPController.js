@@ -420,6 +420,20 @@ class RSPController extends EventEmitter {
             if (!this._lastAlarmEmitted || this._lastAlarmEmitted !== alarmType) {
                 this._lastAlarmEmitted = alarmType;
                 logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active})`);
+                
+                // If a job was running, capture the resume line immediately and pause!
+                if (this.job && this.job.active) {
+                    const stopLine = dict.last_executed_line ? (dict.last_executed_line + 1) : this.job.nextLineToRun();
+                    if (stopLine > 1) {
+                        this._resumeLine = stopLine;
+                        this._resumeGcode = this._loadedGcode;
+                        logger.info(`[RSP] Job halted by ${alarmType} at line ${stopLine}. Saved resume point.`);
+                        this.emit('console', `⚠️ Job paused by ${alarmType.toUpperCase()} at line ${stopLine}. Clear alarm / unlock ($X) and press START to resume.`);
+                    }
+                    this.job.pause();
+                    this.emit('sender:pause');
+                }
+
                 this.emit('alarm', {
                     type: alarmType,
                     code: dict.error_code || 0,
@@ -458,12 +472,39 @@ class RSPController extends EventEmitter {
             if (op === defs.EV_FAULT) {
                 const { axis, code } = codec.parseEvFault(f.payload.subarray(1));
                 logger.warn(`[RSP] EV_FAULT axis=${axis} code=${code}`);
+                if (this.job && this.job.active) {
+                    const stopLine = this.job.nextLineToRun();
+                    if (stopLine > 1) {
+                        this._resumeLine = stopLine;
+                        this._resumeGcode = this._loadedGcode;
+                    }
+                    this.job.pause();
+                    this.emit('sender:pause');
+                }
                 this.emit('alarm', { type: 'fault', axis, code });
             } else if (op === defs.EV_ESTOP) {
                 logger.warn('[RSP] EV_ESTOP received');
+                if (this.job && this.job.active) {
+                    const stopLine = this.job.nextLineToRun();
+                    if (stopLine > 1) {
+                        this._resumeLine = stopLine;
+                        this._resumeGcode = this._loadedGcode;
+                    }
+                    this.job.pause();
+                    this.emit('sender:pause');
+                }
                 this.emit('alarm', { type: 'estop' });
             } else if (op === defs.EV_COMM_LOST) {
                 logger.warn('[RSP] EV_COMM_LOST received (device entered safe-stop)');
+                if (this.job && this.job.active) {
+                    const stopLine = this.job.nextLineToRun();
+                    if (stopLine > 1) {
+                        this._resumeLine = stopLine;
+                        this._resumeGcode = this._loadedGcode;
+                    }
+                    this.job.pause();
+                    this.emit('sender:pause');
+                }
                 this.emit('alarm', { type: 'comm_lost' });
             }
             // EV_EXECUTED / EV_JOB_DONE / EV_STATUS are consumed internally
@@ -585,6 +626,9 @@ class RSPController extends EventEmitter {
                 this._lastAlarmEmitted = null;
                 this._fireAndForget(defs.OP_UNLOCK, Buffer.alloc(0));
                 this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
+                if (this._resumeLine > 1) {
+                    this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+                }
                 break;
 
             case 'reset':
@@ -921,9 +965,8 @@ class RSPController extends EventEmitter {
             return;
         }
         if (this.job.active) {
-            logger.warn('[RSP] gcode:start ignored -- a job is already active');
-            this.emit('console', '⚠️ START pressed but a job is already running.');
-            return;
+            logger.info('[RSP] gcode:start aborting previous active/paused job to restart/resume cleanly');
+            this.job.abort();
         }
         const lines = String(gcodeText || '').split(/\r?\n/);
         // Reset so the G-code panel doesn't show the previous job's last

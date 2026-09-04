@@ -62,6 +62,15 @@ const DEFAULT_HEARTBEAT_S = 1.0;
 // Absolute cap on how long any single command may sit unresolved, regardless
 // of how many times its retry counter gets reset by a valid BUFFER NAK.
 const DEFAULT_STALL_TIMEOUT_S = 20.0;
+// Max real silence on the wire during a job (heartbeat paused) before we
+// fire a keepalive HB anyway. Must stay well under the firmware's
+// HOST_WATCHDOG_TIMEOUT_MS=5000 (easycnc_protocol.c:112) -- confirmed root
+// cause of Tawfiq's false mid-job ESTOP reports (msg11752, 2026-09-04): a
+// single slow move or an exhausted execution-credit window (JobStream.depth)
+// can leave zero bytes going host->device for >5s with the normal-cadence
+// heartbeat suppressed the whole job, and the firmware self-ESTOPs assuming
+// the host process is gone.
+const DEFAULT_JOB_IDLE_HEARTBEAT_S = 2.0;
 
 // Tick interval for the retransmit/stall/heartbeat sweep. Python polled
 // transport.recv(0.005) i.e. a 5ms cadence; mirrored here.
@@ -116,6 +125,7 @@ class ReliableStream extends EventEmitter {
         this.window = options.window ?? DEFAULT_WINDOW;
         this.rtoS = options.rtoS ?? DEFAULT_RTO_S;
         this.heartbeatS = options.heartbeatS ?? DEFAULT_HEARTBEAT_S;
+        this.jobIdleHeartbeatS = options.jobIdleHeartbeatS ?? DEFAULT_JOB_IDLE_HEARTBEAT_S;
         this.maxRetries = options.maxRetries ?? MAX_RETRIES;
         this.stallTimeoutS = options.stallTimeoutS ?? DEFAULT_STALL_TIMEOUT_S;
         // Optional callback-style hooks (parity with the Python ctor args);
@@ -133,15 +143,24 @@ class ReliableStream extends EventEmitter {
         this._linkOk = false;
         this._lastRx = 0.0;
         this._lastHb = 0.0;
-        // While true (during an active job), the background heartbeat is
-        // suppressed -- interleaving FT_HB frames with pipelined job lines
-        // slows/stalls the firmware's move execution (see JobStream.upload()/
-        // _finishJob()/abort()). Ported from stream.py's _heartbeat_paused;
-        // missing here meant every JS-side job ran with heartbeats still
-        // firing every heartbeatS the whole time. Only the periodic
-        // keepalive send is gated -- the idle link-liveness check below
-        // still needs live heartbeats when nothing else is happening, so
-        // the timeout side is deliberately left ungated (matches Python).
+        // Last time we actually put ANY frame on the wire (CMD, resend, or
+        // HB) -- distinct from _lastHb, which only tracks the normal-cadence
+        // HB. Drives the job-idle keepalive below.
+        this._lastTx = 0.0;
+        // While true (during an active job), the normal-cadence background
+        // heartbeat is suppressed -- interleaving FT_HB frames with
+        // pipelined job lines slows/stalls the firmware's move execution
+        // (see JobStream.upload()/_finishJob()/abort()). Ported from
+        // stream.py's _heartbeat_paused; missing here meant every JS-side
+        // job ran with heartbeats still firing every heartbeatS the whole
+        // time. Only the *normal-cadence* keepalive send is gated by this
+        // flag -- the idle link-liveness check below still needs live
+        // heartbeats when nothing else is happening, so the timeout side is
+        // deliberately left ungated (matches Python). A SEPARATE, lower-
+        // frequency job-idle keepalive (see jobIdleHeartbeatS in _tick())
+        // fires even while this flag is true, to satisfy the firmware's own
+        // host-silence watchdog during real gaps in job traffic -- see that
+        // comment for the incident this fixes.
         this._heartbeatPaused = false;
         // rx-error-storm handling: a dead OS-level handle makes every rx
         // fail identically, forever, with no backoff -- these track that
@@ -234,6 +253,7 @@ class ReliableStream extends EventEmitter {
 
             try {
                 this.transport.send(buildFrame(FT_CMD, F_ACK, seq, body));
+                this._lastTx = now();
             } catch (exc) {
                 // Same class of transient stall _retransmitReady() already
                 // tolerates for queued resends. Killing the whole job on the
@@ -264,6 +284,7 @@ class ReliableStream extends EventEmitter {
         this._sent.set(seq, new Pending(seq, body, now0, this.rtoS, durable, now0));
         try {
             this.transport.send(buildFrame(FT_CMD, F_ACK, seq, body));
+            this._lastTx = now0;
         } catch (exc) {
             // See sendCommand()'s matching comment: a transient tx stall
             // must not kill the job here either -- leave it queued for
@@ -282,6 +303,7 @@ class ReliableStream extends EventEmitter {
         this._setLink(true);
         this._lastRx = now();
         this._lastHb = now();
+        this._lastTx = now();
         if (typeof this.transport.on === 'function') {
             this.transport.on('data', this._onData);
             this.transport.on('error', this._onTransportError);
@@ -403,8 +425,30 @@ class ReliableStream extends EventEmitter {
             this._lastRx = n2;
         }
 
-        if (!this._heartbeatPaused && this._linkOk && (n2 - this._lastHb) >= this.heartbeatS) {
+        // Normal cadence HB (idle, no job): every heartbeatS, as before.
+        //
+        // Job-idle keepalive: setHeartbeatPaused(true) (see its doc above)
+        // suppresses this normal cadence during a job to avoid interleaving
+        // FT_HB with pipelined job lines. Job traffic (OP_JOB_LINE sends)
+        // normally keeps the firmware's own host-silence watchdog fed
+        // instead (HOST_WATCHDOG_TIMEOUT_MS=5000, easycnc_protocol.c:112,
+        // engage_estop() at protocol_run_tick() ~line 2164) -- but a single
+        // slow move, or the execution-credit window (JobStream.depth)
+        // blocking new sends while waiting on EV_EXECUTED, can leave the
+        // wire genuinely silent past 5s with nothing else queued to send.
+        // Confirmed root cause of Tawfiq's multi-file false-ESTOP reports
+        // (msg11752, 2026-09-04: trips at unrelated lines in 3 unrelated
+        // files, no position/content correlation -- a pure timing bug, not
+        // hardware/EMI). Fire an HB once real tx has been idle for
+        // jobIdleHeartbeatS (default 2s, well under the firmware's 5s trip)
+        // regardless of the pause flag, so the host never actually goes
+        // silent for the firmware's whole watchdog window.
+        const idleSinceTx = n2 - this._lastTx;
+        const normalHbDue = !this._heartbeatPaused && (n2 - this._lastHb) >= this.heartbeatS;
+        const jobKeepaliveDue = this._heartbeatPaused && idleSinceTx >= this.jobIdleHeartbeatS;
+        if (this._linkOk && (normalHbDue || jobKeepaliveDue)) {
             this._lastHb = n2;
+            this._lastTx = n2;
             try {
                 this.transport.send(buildFrame(FT_HB, 0, 0, Buffer.alloc(0)));
             } catch (exc) {
@@ -436,6 +480,7 @@ class ReliableStream extends EventEmitter {
             p.rto = Math.min(p.rto * 2.0, 5.0);
             try {
                 this.transport.send(buildFrame(FT_CMD, F_ACK, seq, p.payload));
+                this._lastTx = n;
             } catch (exc) {
                 // Same class of fault as the rx-side handler above and the
                 // heartbeat send below: a dead transport must not be
@@ -605,6 +650,7 @@ class ReliableStream extends EventEmitter {
                 const [seq, payload] = resend;
                 try {
                     this.transport.send(buildFrame(FT_CMD, F_ACK, seq, payload));
+                    this._lastTx = n;
                 } catch (exc) {
                     this._log.warn(`tx error resending seq ${seq} after SEQ_GAP: ${exc.message || exc}`);
                     this._setLink(false, 'tx_error');
@@ -618,7 +664,7 @@ class ReliableStream extends EventEmitter {
 
 module.exports = {
     DEFAULT_WINDOW, DEFAULT_RTO_S, MAX_RETRIES, DEFAULT_HEARTBEAT_S,
-    DEFAULT_STALL_TIMEOUT_S,
+    DEFAULT_STALL_TIMEOUT_S, DEFAULT_JOB_IDLE_HEARTBEAT_S,
     LinkLost, RspTimeoutError,
     Pending,
     ReliableStream,

@@ -107,6 +107,10 @@ class JobStream extends EventEmitter {
         return this._active;
     }
 
+    get paused() {
+        return this._paused;
+    }
+
     get jobId() {
         return this._jobId;
     }
@@ -247,12 +251,15 @@ class JobStream extends EventEmitter {
             this._nextLine = fromLine;
             this._sentUpTo = Math.max(0, fromLine - 1);
         }
+        this._lastProgressAt = now();
+        this._stalled = false;
         this._paused = false;
         this._aborted = false;
     }
 
     pause() {
         this._paused = true;
+        this._lastProgressAt = now();
     }
 
     abort() {

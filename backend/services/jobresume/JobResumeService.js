@@ -200,30 +200,20 @@ class JobResumeService extends EventEmitter {
             modalState: cp.modalState || {},
         };
 
-        // If there's a preamble, prepend it to the G-code before loading.
+        // If there's a preamble, prepend it to the remaining G-code lines from fromLine.
         // The preamble lines run before the resume point, ensuring modal
-        // state is correct.
+        // state (Safe Z, XY position, Spindle M3, Dwell, Z lower) is correct.
         let gcodeToLoad = cp.gcodeText;
         if (preamble.length > 0) {
-            // Split the original G-code, inject preamble before the resume line,
-            // and rejoin. The preamble lines will be treated as "already executed"
-            // by the resume(fromLine) logic — they execute at the head of the
-            // re-sent stream, before the device reaches the actual resume point.
-            //
-            // Actually: we prepend the preamble to the FULL gcode text, and adjust
-            // the resume line number to account for the added lines.
-            const preambleText = preamble.join('\n');
-            gcodeToLoad = preambleText + '\n' + cp.gcodeText;
+            const origLines = String(cp.gcodeText || '').split(/\r?\n/);
+            const remainingLines = origLines.slice(Math.max(0, fromLine - 1));
+            gcodeToLoad = preamble.concat(remainingLines).join('\n');
+            ctl.command('gcode:load', cp.filename, gcodeToLoad);
+            ctl.command('gcode:startFromLine', 1);
+        } else {
+            ctl.command('gcode:load', cp.filename, gcodeToLoad);
+            ctl.command('gcode:startFromLine', fromLine);
         }
-
-        ctl.command('gcode:load', cp.filename, gcodeToLoad);
-
-        // The adjusted resume line accounts for the preamble lines we added.
-        // Lines 1..preamble.length are the preamble (must execute),
-        // Lines preamble.length+1..preamble.length+fromLine-1 are the
-        // skipped original lines (marked as executed by job.resume()).
-        const adjustedFromLine = preamble.length + fromLine;
-        ctl.command('gcode:startFromLine', preamble.length > 0 ? adjustedFromLine : fromLine);
 
         this.io.emit('job:resume:start', {
             filename: cp.filename,
