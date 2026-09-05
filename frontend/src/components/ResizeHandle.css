@@ -1,0 +1,39 @@
+/**
+ * Vertical drag handle styles. Lives between two panels in a flex/grid layout.
+ * Sits at 4 px wide; expands hover area to 8 px without taking layout space.
+ */
+.resize-handle {
+    flex: 0 0 4px;
+    width: 4px;
+    min-width: 4px;
+    background: transparent;
+    cursor: col-resize;
+    position: relative;
+    z-index: 10;
+    align-self: stretch;
+    transition: background 120ms;
+    user-select: none;
+}
+.resize-handle::before {
+    content: '';
+    position: absolute;
+    inset: 0 -2px;            /* widen the hit area without changing layout */
+}
+.resize-handle:hover {
+    background: var(--accent, #f59e0b);
+}
+.resize-handle.dragging {
+    background: var(--accent, #f59e0b);
+}
+.resize-handle.dragging::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    cursor: col-resize;
+    z-index: 9999;            /* keep cursor as col-resize while dragging */
+}
+
+/* Hide handles at very narrow widths where the target panel is hidden. */
+@media (max-width: 420px) {
+    .resize-handle { display: none; }
+}

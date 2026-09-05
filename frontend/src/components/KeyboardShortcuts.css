@@ -1,0 +1,261 @@
+/* ===== Keyboard Shortcuts — Dark Theme ===== */
+
+/* ─── Panel Shell ─── */
+.keyboard-shortcuts-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-panel, #252525);
+    border: 1px solid var(--border-ui, #333);
+    border-radius: var(--radius-md, 8px);
+    overflow: hidden;
+    font-family: var(--font-sans, Inter, system-ui, sans-serif);
+    min-width: 320px;
+    max-width: 400px;
+}
+
+.keyboard-shortcuts-panel.overlay {
+    box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.5));
+    max-height: 80vh;
+}
+
+.keyboard-shortcuts-panel.inline {
+    width: 100%;
+    max-width: 100%;
+}
+
+/* ─── Header ─── */
+.shortcuts-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg-sidebar, #1d1d1d);
+    border-bottom: 1px solid var(--border-ui, #333);
+    flex-shrink: 0;
+}
+
+.shortcuts-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-main, #ccc);
+}
+
+.shortcuts-title svg {
+    color: var(--primary-accent, #e08c40);
+}
+
+.shortcuts-close-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm, 4px);
+    color: var(--text-dim, #888);
+    cursor: pointer;
+    transition: all var(--transition-fast, 150ms ease);
+}
+
+.shortcuts-close-btn:hover {
+    border-color: var(--border-hover, #555);
+    color: var(--text-main, #ccc);
+    background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+
+/* ─── Body ─── */
+.shortcuts-body {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 65vh;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-hover, #555) transparent;
+}
+
+.shortcuts-body::-webkit-scrollbar { width: 5px; }
+.shortcuts-body::-webkit-scrollbar-track { background: transparent; }
+.shortcuts-body::-webkit-scrollbar-thumb { background: var(--border-hover, #555); border-radius: 3px; }
+
+.shortcuts-note {
+    font-size: 10.5px;
+    color: var(--text-dim, #888);
+    font-style: italic;
+    padding: 6px 8px;
+    background: var(--bg-input, #1c1c1c);
+    border-radius: var(--radius-sm, 4px);
+    border: 1px solid var(--border-subtle, rgba(255,255,255,0.06));
+    line-height: 1.5;
+}
+
+/* ─── Group ─── */
+.shortcut-group {
+    border: 1px solid var(--border-ui, #2e2e2e);
+    border-radius: var(--radius-sm, 4px);
+    overflow: hidden;
+}
+
+.shortcut-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--bg-input, #1c1c1c);
+    border: none;
+    color: var(--text-main, #ccc);
+    cursor: pointer;
+    text-align: left;
+    transition: background var(--transition-fast, 150ms ease);
+}
+
+.shortcut-group-header:hover {
+    background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+
+.shortcut-group-name {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim, #888);
+}
+
+.shortcut-group-count {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim, #888);
+    background: var(--bg-panel, #252525);
+    border-radius: var(--radius-full, 9999px);
+    padding: 1px 6px;
+    min-width: 20px;
+    text-align: center;
+}
+
+.shortcut-group-body {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+}
+
+/* ─── Row ─── */
+.shortcut-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    gap: 12px;
+    transition: background var(--transition-fast, 150ms ease);
+}
+
+.shortcut-row:hover {
+    background: var(--bg-hover, rgba(255,255,255,0.04));
+}
+
+.shortcut-desc {
+    font-size: 12px;
+    color: var(--text-main, #ccc);
+    flex: 1;
+    user-select: none;
+}
+
+.shortcut-keys {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.shortcut-plus {
+    font-size: 10px;
+    color: var(--text-dim, #888);
+    margin: 0 1px;
+}
+
+/* ─── Key Chip ─── */
+.shortcut-key-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 7px;
+    min-width: 28px;
+    background: var(--bg-sidebar, #1d1d1d);
+    border: 1px solid var(--border-hover, #555);
+    border-bottom-width: 2px;
+    border-radius: var(--radius-xs, 2px);
+    font-family: var(--font-mono, monospace);
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--text-main, #ccc);
+    user-select: none;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    white-space: nowrap;
+}
+
+/* ─── Overlay ─── */
+.shortcuts-overlay-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    backdrop-filter: blur(4px);
+    animation: backdropFadeIn 160ms ease;
+}
+
+@keyframes backdropFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.shortcuts-overlay-backdrop .keyboard-shortcuts-panel {
+    animation: panelSlideUp 180ms ease;
+}
+
+@keyframes panelSlideUp {
+    from { opacity: 0; transform: translateY(16px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ─── Quick Help FAB ─── */
+.quick-help-fab {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 1000;
+    width: 42px;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-panel, #252525);
+    border: 1.5px solid var(--primary-accent, #e08c40);
+    border-radius: 50%;
+    color: var(--primary-accent, #e08c40);
+    cursor: pointer;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4), 0 0 0 0 var(--primary-glow, rgba(224,140,64,0.3));
+    transition: all var(--transition-normal, 200ms ease);
+}
+
+.quick-help-fab:hover {
+    background: var(--primary-accent, #e08c40);
+    color: #fff;
+    transform: scale(1.08);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5), 0 0 0 6px var(--primary-glow, rgba(224,140,64,0.2));
+}
+
+.quick-help-fab:active {
+    transform: scale(0.97);
+}

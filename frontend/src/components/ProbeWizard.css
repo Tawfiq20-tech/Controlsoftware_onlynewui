@@ -1,0 +1,888 @@
+/* ===== PROBE WIZARD ===== */
+
+/* Container */
+.probe-wizard {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+/* ── Step Indicator ── */
+.pw-step-indicator {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 14px 12px 10px;
+    border-bottom: 1px solid var(--border-ui);
+    background: var(--bg-sidebar);
+    overflow: hidden;
+}
+
+.pw-step-dot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    position: relative;
+    flex: 1;
+}
+
+.pw-step-node {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--border-ui);
+    background: var(--bg-input);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-dim);
+    transition: all var(--transition-fast);
+    z-index: 1;
+    flex-shrink: 0;
+}
+
+.pw-step-dot.active .pw-step-node {
+    border-color: var(--primary-accent);
+    background: var(--primary-accent);
+    color: white;
+    box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.pw-step-dot.done .pw-step-node {
+    border-color: var(--success);
+    background: var(--success);
+    color: white;
+}
+
+.pw-step-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.pw-step-dot.active .pw-step-label {
+    color: var(--primary-accent);
+}
+
+.pw-step-dot.done .pw-step-label {
+    color: var(--success);
+}
+
+/* Connecting line between dots */
+.pw-step-line {
+    position: absolute;
+    top: 11px;
+    left: calc(50% + 12px);
+    right: calc(-50% + 12px);
+    height: 2px;
+    background: var(--border-ui);
+    transition: background var(--transition-fast);
+}
+
+.pw-step-line.done {
+    background: var(--success);
+}
+
+/* ── Body ── */
+.pw-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* ── Step content wrapper ── */
+.pw-step-content {
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.pw-step-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin: 0;
+}
+
+.pw-note {
+    color: var(--warning);
+    font-weight: 600;
+}
+
+/* ── Step 1: Touch Plate Cards ── */
+.pw-plate-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pw-plate-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: left;
+    transition: all var(--transition-fast);
+    position: relative;
+}
+
+.pw-plate-card:hover {
+    border-color: var(--border-hover);
+    background: var(--bg-hover);
+}
+
+.pw-plate-card.selected {
+    border-color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.07);
+}
+
+.pw-plate-icon {
+    font-size: 20px;
+    line-height: 1;
+    margin-bottom: 2px;
+}
+
+.pw-plate-name {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-main);
+    line-height: 1.2;
+}
+
+.pw-plate-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+    max-width: 260px;
+}
+
+.pw-plate-check {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    color: var(--primary-accent);
+}
+
+/* ── Step 2: Routine Cards ── */
+.pw-routine-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pw-routine-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 12px;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: left;
+    transition: all var(--transition-fast);
+}
+
+.pw-routine-card:hover:not(.disabled) {
+    border-color: var(--border-hover);
+    background: var(--bg-hover);
+}
+
+.pw-routine-card.selected {
+    border-color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.07);
+}
+
+.pw-routine-card.disabled {
+    opacity: 0.38;
+    cursor: not-allowed;
+}
+
+.pw-routine-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pw-routine-badge {
+    font-size: 10px;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    color: var(--primary-accent);
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+
+.pw-routine-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+    flex: 1;
+}
+
+.pw-routine-check {
+    color: var(--primary-accent);
+    flex-shrink: 0;
+}
+
+.pw-routine-lock {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: oklch(0.78 0.14 80 / 0.12);
+    border: 1px solid oklch(0.78 0.14 80 / 0.4);
+    color: var(--warning);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.pw-routine-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+
+/* ── Corner Selection ── */
+.pw-corner-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pw-corner-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 6px;
+    position: relative;
+}
+
+.pw-corner-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    transition: all var(--transition-fast);
+}
+
+.pw-corner-btn:hover {
+    border-color: var(--border-hover);
+    color: var(--text-main);
+}
+
+.pw-corner-btn.selected {
+    border-color: var(--primary-accent);
+    color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.08);
+}
+
+.pw-corner-workpiece {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 48px;
+    height: 32px;
+    background: var(--bg-panel);
+    border: 2px dashed var(--border-ui);
+    border-radius: var(--radius-xs);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.pw-corner-workpiece span {
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Step 3: Configure ── */
+.pw-config-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+}
+
+.pw-field-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 30px;
+}
+
+.pw-field-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: default;
+    user-select: none;
+}
+
+.pw-field-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.pw-number-input {
+    width: 72px;
+    padding: 5px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--primary-accent);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: right;
+    outline: none;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+    -moz-appearance: textfield;
+}
+
+.pw-number-input::-webkit-inner-spin-button,
+.pw-number-input::-webkit-outer-spin-button {
+    opacity: 0.4;
+}
+
+.pw-number-input:focus {
+    border-color: var(--primary-accent);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.pw-number-input:hover:not(:focus) {
+    border-color: var(--border-hover);
+}
+
+.pw-unit {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    width: 32px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+/* Tooltip */
+.pw-tooltip-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: default;
+}
+
+.pw-tooltip-icon {
+    color: var(--text-dim);
+    opacity: 0.5;
+    display: flex;
+    align-items: center;
+    transition: opacity var(--transition-fast);
+}
+
+.pw-tooltip-wrap:hover .pw-tooltip-icon {
+    opacity: 1;
+    color: var(--primary-accent);
+}
+
+/* G-code preview */
+.pw-gcode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: none;
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    align-self: flex-start;
+}
+
+.pw-gcode-toggle:hover {
+    border-color: var(--border-hover);
+    color: var(--text-main);
+}
+
+.pw-gcode-preview {
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    padding: 10px;
+    overflow-x: auto;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.pw-gcode-preview pre {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    white-space: pre;
+    margin: 0;
+}
+
+/* ── Step 4: Connectivity ── */
+.pw-connectivity-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    border: 1.5px solid var(--border-ui);
+    background: var(--bg-input);
+    transition: all var(--transition-fast);
+}
+
+.pw-connectivity-card.pass {
+    border-color: var(--success);
+    background: oklch(0.7 0.15 145 / 0.07);
+}
+
+.pw-connectivity-card.fail {
+    border-color: var(--danger);
+    background: oklch(0.65 0.2 15 / 0.07);
+}
+
+.pw-connectivity-card.testing {
+    border-color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.05);
+}
+
+.pw-connectivity-icon {
+    flex-shrink: 0;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 2px;
+}
+
+.pw-connectivity-card.pass .pw-connectivity-icon {
+    color: var(--success);
+}
+
+.pw-connectivity-card.fail .pw-connectivity-icon {
+    color: var(--danger);
+}
+
+.pw-connectivity-card.testing .pw-connectivity-icon {
+    color: var(--primary-accent);
+}
+
+.pw-connectivity-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.pw-connectivity-status-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.pw-connectivity-card.pass .pw-connectivity-status-label {
+    color: var(--success);
+}
+
+.pw-connectivity-card.fail .pw-connectivity-status-label {
+    color: var(--danger);
+}
+
+.pw-connectivity-message {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+
+.pw-test-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-panel);
+    border: 1.5px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    color: var(--text-main);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    letter-spacing: 0.03em;
+}
+
+.pw-test-btn:hover:not(:disabled) {
+    border-color: var(--primary-accent);
+    color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.08);
+}
+
+.pw-test-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.pw-test-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Spinner animation */
+.pw-spinner {
+    display: inline-flex;
+    animation: pw-spin 0.9s linear infinite;
+}
+
+@keyframes pw-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.pw-skip-note {
+    font-size: 10px;
+    color: var(--text-dim);
+    opacity: 0.6;
+    line-height: 1.4;
+    text-align: center;
+}
+
+/* ── Banners ── */
+.pw-warn-banner,
+.pw-error-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.pw-warn-banner {
+    background: oklch(0.78 0.14 80 / 0.1);
+    border: 1px solid oklch(0.78 0.14 80 / 0.35);
+    color: var(--warning);
+}
+
+.pw-error-banner {
+    background: oklch(0.65 0.2 15 / 0.1);
+    border: 1px solid oklch(0.65 0.2 15 / 0.35);
+    color: var(--danger);
+}
+
+/* ── Step 5: Run ── */
+.pw-summary-card {
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.pw-summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-ui);
+}
+
+.pw-summary-row:last-child {
+    border-bottom: none;
+}
+
+.pw-summary-key {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.pw-summary-val {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+}
+
+.pw-run-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 16px;
+    background: var(--success);
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--bg-main);
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.pw-run-btn:hover:not(:disabled) {
+    background: oklch(0.65 0.16 145);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px oklch(0.7 0.15 145 / 0.25);
+}
+
+.pw-run-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+.pw-run-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--bg-panel);
+    color: var(--text-dim);
+}
+
+/* Running state */
+.pw-running-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 0 10px;
+}
+
+.pw-running-spinner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: oklch(0.72 0.13 50 / 0.1);
+    border: 2px solid oklch(0.72 0.13 50 / 0.2);
+}
+
+.pw-big-spinner {
+    display: block;
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--primary-glow);
+    border-top-color: var(--primary-accent);
+    border-radius: 50%;
+    animation: pw-spin 0.8s linear infinite;
+}
+
+.pw-running-label {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.pw-running-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin: 0;
+}
+
+.pw-cancel-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    background: oklch(0.22 0.04 15);
+    border: 1.5px solid oklch(0.35 0.08 15);
+    border-radius: var(--radius-sm);
+    color: var(--danger);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    margin-top: 4px;
+}
+
+.pw-cancel-btn:hover {
+    background: oklch(0.3 0.07 15);
+    border-color: var(--danger);
+}
+
+/* Result states */
+.pw-result-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 12px 10px;
+    text-align: center;
+}
+
+.pw-result-icon {
+    flex-shrink: 0;
+}
+
+.pw-result-state.success .pw-result-icon {
+    color: var(--success);
+}
+
+.pw-result-state.error .pw-result-icon {
+    color: var(--danger);
+}
+
+.pw-result-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.pw-result-msg {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin: 0;
+    max-width: 260px;
+}
+
+.pw-restart-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-main);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    margin-top: 4px;
+}
+
+.pw-restart-btn:hover {
+    border-color: var(--primary-accent);
+    color: var(--primary-accent);
+    background: oklch(0.72 0.13 50 / 0.08);
+}
+
+/* ── Navigation Bar ── */
+.pw-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border-ui);
+    background: var(--bg-sidebar);
+    flex-shrink: 0;
+}
+
+.pw-nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.pw-nav-btn.back {
+    background: none;
+    border: 1px solid var(--border-ui);
+    color: var(--text-dim);
+}
+
+.pw-nav-btn.back:hover:not(:disabled) {
+    border-color: var(--border-hover);
+    color: var(--text-main);
+    background: var(--bg-hover);
+}
+
+.pw-nav-btn.back:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+}
+
+.pw-nav-btn.next {
+    background: var(--primary-accent);
+    border: 1px solid var(--primary-accent);
+    color: white;
+}
+
+.pw-nav-btn.next:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
+.pw-nav-btn.next:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.pw-nav-btn.next:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    background: var(--bg-panel);
+    border-color: var(--border-ui);
+    color: var(--text-dim);
+}
+
+.pw-nav-step-count {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+}
+
+/* Settings content wrapper (used by Sidebar tab) */
+.settings-content {
+    padding: var(--space-4);
+}

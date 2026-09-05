@@ -1,0 +1,606 @@
+/* ═══════════════════════════════════════════════════════
+   MachineProfiles.css — Machine Profiles panel
+   Dark theme matching the rest of the app
+   ═══════════════════════════════════════════════════════ */
+
+.machine-profiles {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-main);
+}
+
+/* ── Toolbar ─────────────────────────────────────────── */
+.mp-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border-ui);
+}
+
+.mp-toolbar-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.mp-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.mp-action-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 12px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.mp-action-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-color: var(--border-hover);
+}
+
+.mp-action-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.mp-action-btn.primary {
+    background: var(--primary-accent);
+    border-color: var(--primary-accent);
+    color: var(--bg-main);
+}
+
+.mp-action-btn.primary:hover:not(:disabled) {
+    background: var(--primary-hover);
+    border-color: var(--primary-hover);
+    color: var(--bg-main);
+}
+
+/* ── Content layout ──────────────────────────────────── */
+.mp-content {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* ── Profiles list (left column) ─────────────────────── */
+.mp-list {
+    width: 220px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border-ui);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.mp-list::-webkit-scrollbar {
+    width: 4px;
+}
+.mp-list::-webkit-scrollbar-track { background: transparent; }
+.mp-list::-webkit-scrollbar-thumb { background: var(--border-ui); border-radius: 2px; }
+
+.mp-list-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    min-width: 0;
+}
+
+.mp-list-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-ui);
+}
+
+.mp-list-item.selected {
+    background: oklch(0.25 0.05 265 / 0.4);
+    border-color: var(--primary-accent);
+}
+
+.mp-list-item.active-profile {
+    /* active profile selected by user (applied to machine) */
+}
+
+.mp-list-item-icon {
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+.mp-list-item.selected .mp-list-item-icon {
+    color: var(--primary-accent);
+}
+
+.mp-list-item-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.mp-list-item-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mp-list-item-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mp-active-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary-accent);
+    flex-shrink: 0;
+    box-shadow: 0 0 6px var(--primary-glow);
+}
+
+/* list section divider */
+.mp-list-divider {
+    height: 1px;
+    background: var(--border-ui);
+    margin: var(--space-2) 0;
+}
+
+.mp-list-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    padding: var(--space-2) var(--space-3) var(--space-1);
+}
+
+/* ── Profile detail (right column) ───────────────────── */
+.mp-detail {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-5);
+}
+
+.mp-detail::-webkit-scrollbar {
+    width: 6px;
+}
+.mp-detail::-webkit-scrollbar-track { background: var(--bg-main); }
+.mp-detail::-webkit-scrollbar-thumb { background: var(--border-ui); border-radius: 3px; }
+.mp-detail::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* profile header */
+.mp-detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: var(--space-5);
+    gap: var(--space-3);
+}
+
+.mp-detail-title-block {
+    flex: 1;
+    min-width: 0;
+}
+
+.mp-detail-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0 0 var(--space-2) 0;
+}
+
+.mp-detail-desc {
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin: 0;
+}
+
+.mp-detail-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.mp-apply-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 16px;
+    background: var(--primary-accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--bg-main);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.mp-apply-btn:hover:not(:disabled) {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+.mp-apply-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.mp-apply-btn.active-state {
+    background: oklch(0.32 0.08 145);
+    border: 1px solid oklch(0.48 0.12 145);
+    color: oklch(0.9 0.08 145);
+}
+
+.mp-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    background: transparent;
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.mp-delete-btn:hover {
+    background: oklch(0.3 0.08 15 / 0.3);
+    border-color: oklch(0.5 0.12 15);
+    color: oklch(0.8 0.08 15);
+}
+
+/* profile specs grid */
+.mp-specs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+}
+
+.mp-spec-card {
+    padding: var(--space-4);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-md);
+}
+
+.mp-spec-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: var(--space-1);
+}
+
+.mp-spec-value {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+}
+
+.mp-spec-sub {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 2px;
+}
+
+/* EEPROM settings preview */
+.mp-eeprom-section {
+    margin-bottom: var(--space-5);
+}
+
+.mp-section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 0 0 var(--space-3) 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.mp-section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-ui);
+}
+
+.mp-eeprom-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-2);
+}
+
+.mp-eeprom-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+}
+
+.mp-eeprom-key {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.mp-eeprom-val {
+    font-size: 12px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+/* ── Custom profile form ─────────────────────────────── */
+.mp-custom-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.mp-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.mp-form-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.mp-form-input {
+    padding: 8px 12px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-main);
+    font-size: 13px;
+    transition: border-color var(--transition-fast);
+}
+
+.mp-form-input:focus {
+    outline: none;
+    border-color: var(--primary-accent);
+}
+
+.mp-form-input::placeholder {
+    color: var(--text-dim);
+}
+
+.mp-form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: var(--space-3);
+}
+
+.mp-form-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.mp-form-unit {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.mp-form-textarea {
+    padding: 8px 12px;
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-main);
+    font-size: 13px;
+    resize: vertical;
+    min-height: 80px;
+    font-family: inherit;
+    line-height: 1.5;
+    transition: border-color var(--transition-fast);
+}
+
+.mp-form-textarea:focus {
+    outline: none;
+    border-color: var(--primary-accent);
+}
+
+.mp-form-save-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 20px;
+    background: var(--primary-accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--bg-main);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    align-self: flex-start;
+}
+
+.mp-form-save-btn:hover {
+    background: var(--primary-hover);
+}
+
+/* ── Apply EEPROM confirm dialog ─────────────────────── */
+.mp-apply-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mp-apply-dialog {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    max-width: 440px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.mp-apply-dialog h4 {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.mp-apply-dialog p {
+    margin: 0 0 var(--space-3) 0;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+
+.mp-apply-preview {
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    margin-bottom: var(--space-5);
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.mp-apply-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-main);
+}
+
+.mp-apply-chip-key {
+    color: var(--text-dim);
+}
+
+.mp-apply-dialog-actions {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: flex-end;
+}
+
+.mp-dialog-cancel {
+    padding: 8px 16px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    color: var(--text-main);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.mp-dialog-cancel:hover {
+    border-color: var(--border-hover);
+}
+
+.mp-dialog-apply {
+    padding: 8px 16px;
+    background: var(--primary-accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--bg-main);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.mp-dialog-apply:hover {
+    background: var(--primary-hover);
+}
+
+/* ── Empty / no selection ────────────────────────────── */
+.mp-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    color: var(--text-dim);
+    text-align: center;
+    padding: var(--space-8);
+}
+
+.mp-empty-icon {
+    opacity: 0.25;
+}
+
+.mp-empty h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-main);
+    opacity: 0.5;
+}
+
+.mp-empty p {
+    margin: 0;
+    font-size: 12px;
+    max-width: 220px;
+    line-height: 1.5;
+}

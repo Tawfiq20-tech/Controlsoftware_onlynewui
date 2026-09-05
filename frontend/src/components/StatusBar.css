@@ -1,0 +1,161 @@
+/* ===== Status Bar ===== */
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    height: 26px;
+    padding: 0 12px;
+    background: var(--bg-sidebar, #1a1a1a);
+    border-top: 1px solid var(--border-ui, #2e2e2e);
+    flex-shrink: 0;
+    overflow: hidden;
+    gap: 0;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    font-size: 10.5px;
+}
+
+.sb-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 10px;
+    white-space: nowrap;
+    color: var(--text-dim, #888);
+    height: 100%;
+}
+
+.sb-divider {
+    width: 1px;
+    height: 14px;
+    background: var(--border-ui, #2e2e2e);
+    flex-shrink: 0;
+}
+
+.sb-spacer {
+    flex: 1;
+}
+
+.sb-key {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim, #888);
+}
+
+.sb-val {
+    font-weight: 600;
+    color: var(--text-main, #ccc);
+}
+
+/* Dot */
+.sb-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.sb-dot.connected {
+    background: var(--success, oklch(0.7 0.15 145));
+    box-shadow: 0 0 5px var(--success, oklch(0.7 0.15 145));
+}
+
+.sb-dot.disconnected {
+    background: var(--text-dim, #888);
+}
+
+/* State color coding */
+.sb-state .sb-label {
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+}
+
+.state-idle     .sb-label { color: var(--text-dim, #888); }
+.state-running  .sb-label { color: var(--success, oklch(0.7 0.15 145)); }
+.state-paused   .sb-label { color: var(--warning, oklch(0.78 0.14 80)); }
+.state-alarm    .sb-label { color: var(--danger, oklch(0.65 0.2 15)); }
+.state-offline  .sb-label { color: var(--text-dim, #666); }
+
+/* Position values */
+.sb-pos-val {
+    font-family: var(--font-mono, monospace);
+    color: var(--text-dim, #888);
+    letter-spacing: 0.02em;
+}
+
+.sb-pos-val b {
+    color: var(--primary-accent, #e08c40);
+    font-weight: 700;
+}
+
+/* Alarm badge */
+.sb-alarm-badge {
+    color: var(--danger, oklch(0.65 0.2 15));
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    animation: alarmBlink 1s ease-in-out infinite;
+    gap: 8px;
+}
+
+.sb-alarm-clear {
+    background: var(--danger, oklch(0.65 0.2 15));
+    color: #fff;
+    border: none;
+    border-radius: 3px;
+    padding: 1px 8px;
+    font-size: 9px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    animation: none;
+}
+
+.sb-alarm-clear:hover {
+    background: oklch(0.55 0.22 15);
+}
+
+/* ECSS-E: Remote diagnostic mirror badge */
+.sb-remote-diag {
+    color: oklch(0.72 0.21 25);
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    gap: 6px;
+}
+
+.sb-rd-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: oklch(0.62 0.24 25);
+    box-shadow: 0 0 6px oklch(0.62 0.24 25 / 0.6);
+}
+
+.sb-rd-dot.live {
+    background: oklch(0.62 0.24 25);
+    animation: rdPulse 1.4s ease-in-out infinite;
+}
+
+.sb-rd-dot.reconnecting {
+    background: oklch(0.7 0.18 70);
+    animation: rdPulse 0.8s ease-in-out infinite;
+}
+
+@keyframes rdPulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+}
+
+@keyframes alarmBlink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.5; }
+}
+
+/* Firmware - right aligned */
+.sb-firmware {
+    margin-left: auto;
+}

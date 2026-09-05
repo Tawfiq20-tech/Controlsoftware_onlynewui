@@ -1,0 +1,144 @@
+/* ===== COOLANT CONTROL ===== */
+.coolant-control {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.coolant-control.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.coolant-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.coolant-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex: 1;
+}
+
+.coolant-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    letter-spacing: 0.06em;
+    animation: badge-pulse 2s ease-in-out infinite;
+}
+
+.coolant-badge.mist {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.coolant-badge.flood {
+    background: rgba(6, 182, 212, 0.2);
+    color: #06b6d4;
+    border: 1px solid rgba(6, 182, 212, 0.3);
+}
+
+@keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+}
+
+.coolant-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+}
+
+.coolant-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 8px 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-height: 54px;
+}
+
+.coolant-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.coolant-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.coolant-code {
+    font-size: 9px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    color: #555;
+    letter-spacing: 0.04em;
+}
+
+/* Mist active */
+.coolant-btn.mist.active {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.4);
+    color: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.2);
+}
+
+.coolant-btn.mist.active .coolant-code {
+    color: #60a5fa;
+}
+
+.coolant-btn.mist:hover:not(:disabled):not(.active) {
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+}
+
+/* Flood active */
+.coolant-btn.flood.active {
+    background: rgba(6, 182, 212, 0.15);
+    border-color: rgba(6, 182, 212, 0.4);
+    color: #06b6d4;
+    box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
+}
+
+.coolant-btn.flood.active .coolant-code {
+    color: #22d3ee;
+}
+
+.coolant-btn.flood:hover:not(:disabled):not(.active) {
+    border-color: rgba(6, 182, 212, 0.3);
+    color: #67e8f9;
+}
+
+/* Stop button */
+.coolant-btn.stop {
+    border-color: rgba(220, 38, 38, 0.2);
+    color: #888;
+}
+
+.coolant-btn.stop:hover:not(:disabled) {
+    border-color: rgba(220, 38, 38, 0.4);
+    color: #ef4444;
+    background: rgba(220, 38, 38, 0.08);
+}
+
+.coolant-btn.stop.off-active {
+    opacity: 0.4;
+}

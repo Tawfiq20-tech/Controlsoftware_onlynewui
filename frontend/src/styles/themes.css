@@ -1,0 +1,129 @@
+/*
+ * Theme system — two palettes wired through CSS variables.
+ *
+ * Switch by setting `data-theme="dark" | "light"` on <html>.
+ * Default = dark (Desert Sandstone with orange accent).
+ *
+ * Variables intentionally named by semantic role, not raw hue, so future
+ * themes can be added without touching component CSS.
+ *
+ * Three.js scenes read these vars via getComputedStyle(document.documentElement)
+ * and re-init on the 'cnc:theme' window event.
+ */
+
+:root,
+:root[data-theme='dark'] {
+    /* Original cool-dark navy + ORANGE accent — reverted per Tawfiq photo 7234 (2026-06-28).
+       Desert Sandstone warm-brown background was rejected; orange accent stays. */
+    --bg-app:        #0e1015;
+    --bg-sidebar:    #15171f;
+    --bg-panel:      #181b25;
+    --bg-elevated:   #1f2330;
+    --bg-overlay:    rgba(14, 16, 21, 0.85);
+
+    --text-main:     #e2e8f0;
+    --text-dim:      #94a3b8;
+    --text-mute:     #64748b;
+
+    --border:        rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.20);
+
+    /* Vivid peach orange — matches the "Browse for G-Code File" button */
+    --accent:        #f59e0b;
+    --accent-strong: #d97706;
+    --accent-soft:   rgba(245, 158, 11, 0.18);
+    --accent-hover:  rgba(245, 158, 11, 0.30);
+    --accent-text:   #1a1410;
+
+    --axis-x: #ef4444;
+    --axis-y: #10b981;
+    --axis-z: #3b82f6;
+
+    --status-ok:    #4ade80;
+    --status-warn:  #fde047;
+    --status-bad:   #fca5a5;
+    --status-idle:  #94a3b8;
+
+    /* Pill button gradients — START orange, PAUSE outlined, STOP red */
+    --btn-primary-bg:    linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+    --btn-primary-bd:    #d97706;
+    --btn-primary-fg:    #1a1410;
+    --btn-primary-shadow:0 4px 16px rgba(245, 158, 11, 0.40), inset 0 1px 0 rgba(255, 240, 200, 0.45);
+
+    --btn-warn-bg:       transparent;
+    --btn-warn-bd:       #f59e0b;
+    --btn-warn-fg:       #fbbf24;
+
+    --btn-danger-bg:     linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
+    --btn-danger-bd:     #991b1b;
+    --btn-danger-fg:     #fff5f5;
+
+    /* 3D scene colours (Three.js reads these as 0xRRGGBB hex) */
+    --scene-bg:      #0e1015;
+    --scene-grid:    #283040;
+    --scene-bed:     #161b25;
+    --scene-rapid:   #2dd4bf;
+    --scene-cut:     #f59e0b;
+    --scene-arc:     #fb923c;
+    --scene-cursor:  #fde047;
+}
+
+:root[data-theme='light'] {
+    /* Stack Overflow Light — Tawfiq's pick from Gallery v2 (2026-06-29, msg 7254) */
+    --bg-app:        #f8f9f9;
+    --bg-sidebar:    #ffffff;
+    --bg-panel:      #f1f2f3;
+    --bg-elevated:   #ffffff;
+    --bg-overlay:    #f8f9f9f0;
+
+    --text-main:     #232629;
+    --text-dim:      #6a737c;
+    --text-mute:     #6a737c;
+
+    --border:        #d6d9dc;
+    --border-strong: #d6d9dc;
+
+    --accent:        #f48024;
+    --accent-strong: #f48024;
+    --accent-soft:   #f4802422;
+    --accent-hover:  #f4802433;
+    --accent-text:   #ffffff;
+
+    --axis-x: #d63a3a;
+    --axis-y: #2c9854;
+    --axis-z: #2b6fbf;
+
+    --status-ok:    #16a34a;
+    --status-warn:  #ca8a04;
+    --status-bad:   #b91c1c;
+    --status-idle:  #6a737c;
+
+    --btn-primary-bg:    #f48024;
+    --btn-primary-bd:    #f48024;
+    --btn-primary-fg:    #ffffff;
+    --btn-primary-shadow:0 2px 8px #f4802440, inset 0 1px 0 rgba(255, 255, 255, 0.15);
+
+    --btn-warn-bg:       transparent;
+    --btn-warn-bd:       #f48024;
+    --btn-warn-fg:       #f48024;
+
+    --btn-danger-bg:     #b91c1c;
+    --btn-danger-bd:     #7f1d1d;
+    --btn-danger-fg:     #ffffff;
+
+    --scene-bg:      #ebedee;
+    --scene-grid:    #c8cccd;
+    --scene-bed:     #f1f2f3;
+    --scene-rapid:   #6a737c;
+    --scene-cut:     #f48024;
+    --scene-arc:     #f48024;
+    --scene-cursor:  #d63a3a;
+}
+
+/* Smooth transitions on theme switch (skip for things that animate often) */
+body, .app, .settings-root, .settings-sidebar, .settings-content,
+.wa-block, .wa-list-item, .settings-card,
+.v3d-canvas-wrap, .v3d-toolbar, .v3d-stats,
+.v3d-playback-bar, .v3d-carve-bar, .v3d-sim-launcher {
+    transition: background 240ms ease, color 240ms ease, border-color 240ms ease;
+}

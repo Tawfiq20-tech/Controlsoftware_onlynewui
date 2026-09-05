@@ -1,0 +1,74 @@
+/* ===== FEED OVERRIDE CONTROL ===== */
+.feed-override-control {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.feed-override-control.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.feed-override-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.feed-override-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex: 1;
+}
+
+.feed-override-pct {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary-accent, #3b82f6);
+}
+
+.feed-override-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto 1fr 1fr;
+    gap: 6px;
+}
+
+.feed-override-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-height: 32px;
+}
+
+.feed-override-btn:hover:not(:disabled) {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.feed-override-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.feed-override-btn.reset {
+    color: #666;
+}
+
+.feed-override-btn.reset:hover:not(:disabled) {
+    color: #ccc;
+}

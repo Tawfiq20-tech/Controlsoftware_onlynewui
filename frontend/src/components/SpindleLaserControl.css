@@ -1,0 +1,404 @@
+/* ===== SPINDLE / LASER CONTROL ===== */
+.slc-control {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.slc-control.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Mode toggle */
+.slc-mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.slc-mode-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #666;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    letter-spacing: 0.03em;
+}
+
+.slc-mode-btn:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.slc-mode-btn.active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.slc-mode-btn.laser-mode.active {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.15);
+}
+
+/* Warning */
+.slc-warning {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: 6px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+    color: #d97706;
+    align-items: flex-start;
+}
+
+.slc-warning svg {
+    color: #f59e0b;
+    flex-shrink: 0;
+}
+
+.slc-warn-actions {
+    display: flex;
+    gap: 6px;
+    width: 100%;
+}
+
+.slc-warn-btn {
+    flex: 1;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.slc-warn-btn.confirm {
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #f59e0b;
+}
+
+.slc-warn-btn.confirm:hover {
+    background: rgba(245, 158, 11, 0.3);
+}
+
+.slc-warn-btn.cancel {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #888;
+}
+
+.slc-warn-btn.cancel:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ccc;
+}
+
+/* Running badge */
+.slc-running-badge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 10px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.slc-running-badge.spindle {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+    color: #22c55e;
+}
+
+.slc-running-badge.laser {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: #ef4444;
+}
+
+.slc-running-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: running-pulse 1s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+@keyframes running-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.75); }
+}
+
+/* Field */
+.slc-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.slc-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.slc-rpm-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.slc-num-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #fff;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 6px 10px;
+    text-align: right;
+    transition: border-color 0.15s;
+    -moz-appearance: textfield;
+}
+
+.slc-num-input.small {
+    font-size: 13px;
+    max-width: 80px;
+    flex: 0 0 80px;
+}
+
+.slc-num-input::-webkit-outer-spin-button,
+.slc-num-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.slc-num-input:focus {
+    outline: none;
+    border-color: rgba(74, 144, 226, 0.5);
+    background: rgba(74, 144, 226, 0.08);
+}
+
+.slc-unit {
+    font-size: 12px;
+    color: #666;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Slider */
+.slc-slider {
+    width: 100%;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    outline: none;
+}
+
+.slc-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #4a90e2;
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.3);
+}
+
+.slc-slider.laser::-webkit-slider-thumb {
+    background: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3);
+}
+
+.slc-range-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #555;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+/* Spindle buttons */
+.slc-spindle-btns {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+}
+
+.slc-spin-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 8px 4px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-height: 54px;
+}
+
+.slc-spin-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.slc-code {
+    font-size: 9px;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    color: #555;
+    letter-spacing: 0.04em;
+}
+
+.slc-spin-btn.cw:not(:disabled):hover,
+.slc-spin-btn.cw.running {
+    border-color: rgba(34, 197, 94, 0.4);
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.1);
+}
+
+.slc-spin-btn.ccw:not(:disabled):hover,
+.slc-spin-btn.ccw.running {
+    border-color: rgba(74, 144, 226, 0.4);
+    color: #4a90e2;
+    background: rgba(74, 144, 226, 0.1);
+}
+
+.slc-spin-btn.stop:not(:disabled):hover {
+    border-color: rgba(220, 38, 38, 0.4);
+    color: #ef4444;
+    background: rgba(220, 38, 38, 0.08);
+}
+
+/* Laser section */
+.slc-laser {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.slc-laser-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 11px;
+    color: #ef4444;
+    font-weight: 500;
+}
+
+.slc-laser-btns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.slc-laser-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    color: #888;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.slc-laser-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.slc-laser-btn.on:not(:disabled):hover,
+.slc-laser-btn.on.running {
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.15);
+}
+
+.slc-laser-btn.off:not(:disabled):hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ccc;
+}
+
+/* Test fire */
+.slc-test-fire {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.slc-testfire-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.slc-testfire-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.slc-testfire-btn:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.5);
+    transform: translateY(-1px);
+}
+
+.slc-testfire-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}

@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slicer Pro - Custom Theme</title>
+    <meta name="description" content="Slicer Pro - Professional 3D Printing Slicer Interface">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        /* ========================================
+           CSS CUSTOM PROPERTIES (Unchanged theme)
+           ======================================== */
+        :root {
+            --primary-accent: oklch(0.7214 0.1337 49.9802);
+            --primary-hover: oklch(0.6716 0.1368 48.5130);
+
+            --bg-main: oklch(0.1797 0.0043 308.1928);
+            --bg-sidebar: oklch(0.1822 0 0);
+            --bg-panel: oklch(0.2520 0 0);
+            --bg-input: oklch(0.1797 0.0043 308.1928);
+
+            --border-ui: oklch(0.2520 0 0);
+            --text-main: oklch(0.8109 0 0);
+            --text-dim: oklch(0.6268 0 0);
+
+            --radius-lg: 0.75rem;
+            --radius-md: 0.5rem;
+            --radius-sm: 0.25rem;
+            --font-mono: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+
+            /* Spacing tokens for uniform layout */
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 12px;
+            --space-lg: 16px;
+            --space-xl: 20px;
+            --space-2xl: 24px;
+
+            /* Transition tokens */
+            --transition-fast: 150ms ease;
+            --transition-normal: 200ms ease;
+        }
+
+        /* ========================================
+           GLOBAL RESET & BASE
+           ======================================== */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .font-mono-custom {
+            font-family: var(--font-mono);
+        }
+
+        /* ========================================
+           CUSTOM SCROLLBAR
+           ======================================== */
+        ::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-sidebar);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: oklch(0.3211 0 0);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: oklch(0.4 0 0);
+        }
+
+        /* ========================================
+           HEADER
+           ======================================== */
+        .app-header {
+            height: 48px;
+            background-color: var(--bg-sidebar);
+            border-bottom: 1px solid var(--border-ui);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 var(--space-2xl);
+            z-index: 50;
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 32px;
+            height: 100%;
+        }
+
+        .home-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 6px 4px;
+            border-radius: var(--radius-sm);
+            transition: background var(--transition-fast);
+        }
+
+        .home-btn:hover {
+            background: oklch(0.25 0 0 / 0.5);
+        }
+
+        .home-btn i {
+            transition: color var(--transition-fast);
+        }
+
+        .home-btn:hover .home-icon {
+            color: var(--text-main) !important;
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            display: flex;
+            align-items: stretch;
+            height: 100%;
+        }
+
+        .nav-tab {
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: color var(--transition-fast), background var(--transition-fast);
+            position: relative;
+            user-select: none;
+            letter-spacing: 0.01em;
+        }
+
+        .nav-tab:hover:not(.active-tab) {
+            color: var(--text-main);
+            background: oklch(0.22 0 0 / 0.5);
+        }
+
+        .nav-tab.active-tab {
+            background-color: var(--primary-accent);
+            color: var(--bg-main) !important;
+            font-weight: 700;
+        }
+
+        /* Header Action Buttons */
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-accent);
+            color: var(--bg-main);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 7px 20px;
+            border-radius: 9999px;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background var(--transition-normal), transform var(--transition-fast), box-shadow var(--transition-normal);
+            box-shadow: 0 2px 12px oklch(0.72 0.13 50 / 0.15);
+            will-change: transform;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 20px oklch(0.72 0.13 50 / 0.25);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+            box-shadow: 0 1px 8px oklch(0.72 0.13 50 / 0.12);
+        }
+
+        .btn-secondary {
+            background-color: var(--bg-panel);
+            color: var(--text-main);
+            font-size: 11px;
+            font-weight: 700;
+            padding: 7px 20px;
+            border-radius: 9999px;
+            border: 1px solid var(--border-ui);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background var(--transition-normal), transform var(--transition-fast), border-color var(--transition-normal);
+            will-change: transform;
+        }
+
+        .btn-secondary:hover {
+            background-color: oklch(0.32 0 0);
+            transform: translateY(-1px);
+            border-color: oklch(0.35 0 0);
+        }
+
+        .btn-secondary:active {
+            transform: translateY(0);
+        }
+
+        /* ========================================
+           MAIN LAYOUT
+           ======================================== */
+        .app-main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            height: calc(100vh - 48px);
+        }
+
+        /* ========================================
+           SIDEBAR
+           ======================================== */
+        .sidebar {
+            width: 340px;
+            min-width: 340px;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-ui);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-scroll {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        /* Sidebar Sections */
+        .sidebar-section {
+            border-bottom: 1px solid var(--border-ui);
+            padding: var(--space-lg);
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-xs);
+        }
+
+        .section-label {
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            letter-spacing: 0.1em;
+            line-height: 1;
+        }
+
+        .section-action-icon {
+            font-size: 11px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: var(--radius-sm);
+            transition: color var(--transition-fast), background var(--transition-fast);
+            line-height: 1;
+        }
+
+        .section-action-icon:hover {
+            color: var(--text-main);
+            background: oklch(0.3 0 0 / 0.4);
+        }
+
+        /* Select Dropdown */
+        .select-custom {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-ui);
+            color: var(--text-main);
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-family: 'Inter', system-ui, sans-serif;
+            border-radius: var(--radius-md);
+            margin-top: 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color var(--transition-fast);
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px;
+        }
+
+        .select-custom:hover {
+            border-color: oklch(0.35 0 0);
+        }
+
+        .select-custom:focus {
+            border-color: var(--primary-accent);
+            box-shadow: 0 0 0 1px var(--primary-accent);
+        }
+
+        /* Filament card */
+        .filament-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-input);
+            padding: 10px 12px;
+            border: 1px solid var(--border-ui);
+            border-radius: var(--radius-md);
+            margin-top: var(--space-sm);
+            cursor: pointer;
+            transition: border-color var(--transition-fast), background var(--transition-fast);
+        }
+
+        .filament-card:hover {
+            border-color: oklch(0.35 0 0);
+            background: oklch(0.2 0 0);
+        }
+
+        .filament-dot {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background-color: var(--primary-accent);
+            box-shadow: 0 0 6px oklch(0.72 0.13 50 / 0.3);
+            flex-shrink: 0;
+        }
+
+        .filament-name {
+            font-size: 12px;
+            font-weight: 600;
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .filament-edit-icon {
+            font-size: 10px;
+            color: var(--text-dim);
+            opacity: 0;
+            transition: opacity var(--transition-fast);
+            flex-shrink: 0;
+            padding: 2px;
+        }
+
+        .filament-card:hover .filament-edit-icon {
+            opacity: 1;
+        }
+
+        /* Filament action icons */
+        .filament-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .filament-actions i {
+            font-size: 10px;
+            color: var(--text-dim);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: var(--radius-sm);
+            transition: color var(--transition-fast), background var(--transition-fast);
+            line-height: 1;
+        }
+
+        .filament-actions i:hover {
+            background: oklch(0.3 0 0 / 0.4);
+        }
+
+        .filament-actions i.fa-plus:hover {
+            color: var(--text-main);
+        }
+
+        .filament-actions i.fa-trash-can:hover {
+            color: oklch(0.65 0.2 15);
+        }
+
+        /* Process Header */
+        .process-header {
+            padding: var(--space-lg) var(--space-lg) 0 var(--space-lg);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Toggle Switch */
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toggle-label {
+            font-size: 9px;
+            color: var(--text-dim);
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            line-height: 1;
+        }
+
+        .toggle-switch {
+            width: 32px;
+            height: 18px;
+            background: oklch(0.72 0.13 50 / 0.2);
+            border-radius: 9999px;
+            position: relative;
+            cursor: pointer;
+            border: 1px solid oklch(0.72 0.13 50 / 0.3);
+            transition: background var(--transition-fast);
+            flex-shrink: 0;
+        }
+
+        .toggle-switch:hover {
+            background: oklch(0.72 0.13 50 / 0.3);
+        }
+
+        .toggle-knob {
+            position: absolute;
+            right: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 12px;
+            height: 12px;
+            background: var(--primary-accent);
+            border-radius: 50%;
+            box-shadow: 0 1px 6px oklch(0.72 0.13 50 / 0.4);
+            transition: right var(--transition-fast);
+        }
+
+        .toggle-switch[data-state="off"] .toggle-knob {
+            right: calc(100% - 14px);
+        }
+
+        /* Process select wrapper */
+        .process-select-wrap {
+            padding: 0 var(--space-lg);
+            margin-top: var(--space-md);
+        }
+
+        /* Settings Tabs */
+        .settings-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-ui);
+            margin-top: var(--space-lg);
+            padding: 0 var(--space-sm);
+        }
+
+        .settings-tab-btn {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 10px 14px;
+            color: var(--text-dim);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: color var(--transition-fast), border-color var(--transition-fast);
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        .settings-tab-btn.active {
+            color: var(--primary-accent);
+            border-bottom-color: var(--primary-accent);
+        }
+
+        .settings-tab-btn:hover:not(.active) {
+            color: var(--text-main);
+        }
+
+        /* Settings Content */
+        .settings-content {
+            padding: var(--space-xl);
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .settings-group {
+            margin-bottom: var(--space-xl);
+        }
+
+        .settings-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-group-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-dim);
+            margin-bottom: var(--space-md);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            line-height: 1;
+        }
+
+        .settings-group-label i {
+            font-size: 11px;
+            width: 14px;
+            text-align: center;
+        }
+
+        /* Input Groups */
+        .input-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-sm);
+            font-size: 13px;
+            min-height: 32px;
+        }
+
+        .input-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .input-label {
+            color: var(--text-main);
+            font-size: 13px;
+            line-height: 1.2;
+        }
+
+        .input-value-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .slicer-input {
+            background: var(--bg-input);
+            border: 1px solid var(--border-ui);
+            color: var(--primary-accent);
+            padding: 5px 8px;
+            width: 72px;
+            text-align: right;
+            border-radius: var(--radius-sm);
+            outline: none;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+            line-height: 1.2;
+        }
+
+        .slicer-input:focus {
+            border-color: var(--primary-accent);
+            box-shadow: 0 0 0 1px var(--primary-accent);
+        }
+
+        .slicer-input:hover:not(:focus) {
+            border-color: oklch(0.35 0 0);
+        }
+
+        .input-unit {
+            font-size: 10px;
+            color: var(--text-dim);
+            font-weight: 700;
+            width: 24px;
+            text-align: left;
+            line-height: 1;
+        }
+
+        /* ========================================
+           3D VIEWPORT
+           ======================================== */
+        .viewport-container {
+            flex: 1;
+            background: radial-gradient(circle at center, oklch(0.22 0 0) 0%, oklch(0.12 0 0) 100%);
+            position: relative;
+            perspective: 1500px;
+            overflow: hidden;
+            /* Prevent click lag */
+            touch-action: none;
+        }
+
+        /* Build Plate */
+        .build-plate {
+            width: 520px;
+            height: 520px;
+            background-color: oklch(0.15 0 0);
+            background-image:
+                linear-gradient(to right, oklch(0.2 0 0) 1px, transparent 1px),
+                linear-gradient(to bottom, oklch(0.2 0 0) 1px, transparent 1px);
+            background-size: 20px 20px;
+            border: 2px solid oklch(0.25 0 0);
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -40%) rotateX(60deg) rotateZ(-35deg);
+            box-shadow: 0 50px 120px rgba(0, 0, 0, 0.9);
+            will-change: transform;
+        }
+
+        .plate-label {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%) rotate(90deg);
+            color: oklch(0.2 0 0);
+            font-size: 28px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .plate-number {
+            position: absolute;
+            bottom: 16px;
+            right: 24px;
+            color: var(--primary-accent);
+            font-weight: 900;
+            font-size: 30px;
+            opacity: 0.2;
+            user-select: none;
+            pointer-events: none;
+        }
+
+        /* Preview mesh */
+        .preview-mesh {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            pointer-events: none;
+            transform: translate(-50%, -50%) rotateX(-90deg) rotateY(45deg);
+        }
+
+        .preview-mesh-cube {
+            width: 112px;
+            height: 112px;
+            background: linear-gradient(135deg, oklch(0.72 0.13 50), oklch(0.85 0.1 60));
+            opacity: 0.7;
+            border: 1px solid var(--primary-accent);
+            box-shadow: 0 0 50px oklch(0.72 0.13 50 / 0.2);
+        }
+
+        /* Top Toolbar */
+        .top-toolbar {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: oklch(0.1822 0 0 / 0.88);
+            padding: 10px 20px;
+            border-radius: var(--radius-lg);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid var(--border-ui);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+        }
+
+        .tool-icon {
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 6px 8px;
+            border-radius: var(--radius-sm);
+            transition: color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .tool-icon:hover {
+            color: var(--primary-accent);
+            background: oklch(0.72 0.13 50 / 0.1);
+            transform: translateY(-1px);
+        }
+
+        .tool-icon:active {
+            transform: translateY(0);
+        }
+
+        .toolbar-divider {
+            width: 1px;
+            height: 20px;
+            background: var(--border-ui);
+            margin: 0 6px;
+            flex-shrink: 0;
+        }
+
+        /* Right Floating Toolbar */
+        .right-toolbar {
+            position: absolute;
+            right: 24px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 10;
+        }
+
+        .right-tool-btn {
+            width: 40px;
+            height: 40px;
+            background: oklch(0.25 0 0 / 0.9);
+            border: 1px solid var(--border-ui);
+            border-radius: var(--radius-lg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: var(--text-dim);
+            transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast), border-color var(--transition-fast);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+
+        .right-tool-btn:hover {
+            background: var(--primary-accent);
+            color: var(--bg-main);
+            border-color: var(--primary-accent);
+            transform: translateX(-2px);
+        }
+
+        .right-tool-btn:active {
+            transform: translateX(0);
+        }
+
+        .right-tool-btn i {
+            font-size: 13px;
+            line-height: 1;
+        }
+
+        /* Coordinate Axis */
+        .coord-axis {
+            position: absolute;
+            bottom: 24px;
+            left: 24px;
+            display: flex;
+            gap: 12px;
+            opacity: 0.6;
+            transition: opacity var(--transition-normal);
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        .coord-axis:hover {
+            opacity: 1;
+        }
+
+        .axis-indicator {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .axis-bar {
+            width: 3px;
+            height: 36px;
+            border-radius: 999px;
+        }
+
+        .axis-label {
+            font-size: 9px;
+            font-weight: 900;
+            margin-top: 3px;
+            line-height: 1;
+        }
+
+        /* ========================================
+           UTILITY
+           ======================================== */
+        .gap-uniform {
+            gap: var(--space-sm);
+        }
+
+        /* Prevent text selection during drag */
+        .dragging {
+            user-select: none !important;
+            -webkit-user-select: none !important;
+        }
+
+        .dragging * {
+            user-select: none !important;
+            -webkit-user-select: none !important;
+        }
+    </style>
+</head>
+
+<body style="display: flex; flex-direction: column;">
+
+    <!-- ==========================================
+         TOP NAVIGATION HEADER
+         ========================================== -->
+    <header class="app-header" id="app-header">
+        <div class="header-left">
+            <div class="home-btn" role="button" tabindex="0" aria-label="Home menu">
+                <i class="fa-solid fa-house home-icon" style="font-size: 13px; color: var(--text-dim);"></i>
+                <i class="fa-solid fa-chevron-down" style="font-size: 8px; color: var(--text-dim);"></i>
+            </div>
+            <nav class="nav-tabs" role="tablist">
+                <div class="nav-tab active-tab" role="tab" aria-selected="true">Prepare</div>
+                <div class="nav-tab" role="tab" aria-selected="false">Preview</div>
+                <div class="nav-tab" role="tab" aria-selected="false">Device</div>
+                <div class="nav-tab" role="tab" aria-selected="false">Project</div>
+            </nav>
+        </div>
+
+        <div class="header-actions">
+            <button class="btn-primary" id="slice-btn">
+                <i class="fa-solid fa-bolt"></i>
+                Slice plate
+            </button>
+            <button class="btn-secondary" id="print-btn">
+                Print plate
+            </button>
+        </div>
+    </header>
+
+    <!-- ==========================================
+         MAIN CONTENT AREA
+         ========================================== -->
+    <main class="app-main">
+
+        <!-- ======================================
+             LEFT SIDEBAR
+             ====================================== -->
+        <aside class="sidebar">
+            <div class="sidebar-scroll">
+
+                <!-- Printer Selection -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-label">Printer</span>
+                        <i class="fa-solid fa-gear section-action-icon" title="Printer Settings"></i>
+                    </div>
+                    <select class="select-custom" id="printer-select" aria-label="Printer selection">
+                        <option>Bambu Lab X1 Carbon 0.4 nozzle</option>
+                        <option>Bambu Lab P1S 0.4 nozzle</option>
+                        <option>Custom CoreXY 0.4 nozzle</option>
+                    </select>
+
+                    <div style="margin-top: var(--space-lg);">
+                        <span class="section-label">Plate type</span>
+                        <select class="select-custom" id="plate-select" aria-label="Plate type selection">
+                            <option>Textured PEI Plate</option>
+                            <option>Cool Plate / PLA Plate</option>
+                            <option>Engineering Plate</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Filament Selection -->
+                <div class="sidebar-section">
+                    <div class="section-header">
+                        <span class="section-label">Filament</span>
+                        <div class="filament-actions">
+                            <i class="fa-solid fa-plus" title="Add filament"></i>
+                            <i class="fa-solid fa-trash-can" title="Remove filament"></i>
+                        </div>
+                    </div>
+                    <div class="filament-card" role="button" tabindex="0">
+                        <div class="filament-dot"></div>
+                        <span class="filament-name">Bambu PLA Basic Black</span>
+                        <i class="fa-solid fa-pen-to-square filament-edit-icon"></i>
+                    </div>
+                </div>
+
+                <!-- Process Settings -->
+                <div style="display: flex; flex-direction: column; flex: 1;">
+
+                    <div class="process-header">
+                        <span class="section-label">Process</span>
+                        <div class="toggle-row">
+                            <span class="toggle-label">ADVANCED</span>
+                            <div class="toggle-switch" id="advanced-toggle" role="switch" aria-checked="true"
+                                tabindex="0">
+                                <div class="toggle-knob"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="process-select-wrap">
+                        <select class="select-custom" id="process-select" aria-label="Process profile selection">
+                            <option>0.16mm Optimal @BBL X1C</option>
+                            <option>0.20mm Standard @BBL X1C</option>
+                            <option>0.08mm Extra Fine @BBL X1C</option>
+                        </select>
+                    </div>
+
+                    <!-- Settings Tabs -->
+                    <div class="settings-tabs" role="tablist">
+                        <div class="settings-tab-btn active" role="tab" aria-selected="true">Quality</div>
+                        <div class="settings-tab-btn" role="tab" aria-selected="false">Strength</div>
+                        <div class="settings-tab-btn" role="tab" aria-selected="false">Speed</div>
+                        <div class="settings-tab-btn" role="tab" aria-selected="false">Support</div>
+                    </div>
+
+                    <!-- Settings Content -->
+                    <div class="settings-content">
+                        <!-- Layer Height Group -->
+                        <div class="settings-group">
+                            <div class="settings-group-label">
+                                <i class="fa-solid fa-layer-group"></i>
+                                Layer height
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">Layer height</span>
+                                <div class="input-value-group">
+                                    <input type="text" class="slicer-input" value="0.16"
+                                        aria-label="Layer height value">
+                                    <span class="input-unit">mm</span>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">First layer height</span>
+                                <div class="input-value-group">
+                                    <input type="text" class="slicer-input" value="0.20"
+                                        aria-label="First layer height value">
+                                    <span class="input-unit">mm</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Line Width Group -->
+                        <div class="settings-group">
+                            <div class="settings-group-label">
+                                <i class="fa-solid fa-arrows-left-right"></i>
+                                Line width
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">Default</span>
+                                <div class="input-value-group">
+                                    <input type="text" class="slicer-input" value="0.42"
+                                        aria-label="Default line width">
+                                    <span class="input-unit">mm</span>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-label">Outer wall</span>
+                                <div class="input-value-group">
+                                    <input type="text" class="slicer-input" value="0.42"
+                                        aria-label="Outer wall line width">
+                                    <span class="input-unit">mm</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ======================================
+             MAIN VIEWPORT
+             ====================================== -->
+        <section class="viewport-container" id="viewport">
+
+            <!-- 3D Top Toolbar -->
+            <div class="top-toolbar" id="top-toolbar">
+                <i class="fa-solid fa-plus tool-icon" title="Add Part"></i>
+                <i class="fa-solid fa-border-all tool-icon" title="Auto Layout"></i>
+                <div class="toolbar-divider"></div>
+                <i class="fa-solid fa-up-down-left-right tool-icon" title="Move"></i>
+                <i class="fa-solid fa-rotate tool-icon" title="Rotate"></i>
+                <i class="fa-solid fa-maximize tool-icon" title="Scale"></i>
+                <i class="fa-solid fa-scissors tool-icon" title="Cut"></i>
+                <i class="fa-solid fa-palette tool-icon" title="Paint"></i>
+            </div>
+
+            <!-- Right Floating Toolbar -->
+            <div class="right-toolbar">
+                <div class="right-tool-btn" title="3D View" role="button" tabindex="0">
+                    <i class="fa-solid fa-cube"></i>
+                </div>
+                <div class="right-tool-btn" title="Camera" role="button" tabindex="0">
+                    <i class="fa-solid fa-video"></i>
+                </div>
+                <div class="right-tool-btn" title="Center View" role="button" tabindex="0">
+                    <i class="fa-solid fa-crosshairs"></i>
+                </div>
+            </div>
+
+            <!-- Build Plate -->
+            <div class="build-plate" id="plate">
+                <div class="plate-label">Custom Slicer</div>
+
+                <!-- Coordinate Axis (inside plate for perspective) -->
+                <div class="coord-axis">
+                    <div class="axis-indicator">
+                        <div class="axis-bar" style="background: #3b82f6;"></div>
+                        <span class="axis-label" style="color: #3b82f6;">Z</span>
+                    </div>
+                    <div class="axis-indicator" style="transform: rotate(-45deg);">
+                        <div class="axis-bar" style="background: #f43f5e;"></div>
+                        <span class="axis-label" style="color: #f43f5e;">X</span>
+                    </div>
+                    <div class="axis-indicator" style="transform: rotate(45deg);">
+                        <div class="axis-bar" style="background: #10b981;"></div>
+                        <span class="axis-label" style="color: #10b981;">Y</span>
+                    </div>
+                </div>
+
+                <!-- Preview Mesh Placeholder -->
+                <div class="preview-mesh">
+                    <div class="preview-mesh-cube"></div>
+                </div>
+
+                <div class="plate-number">01</div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ==========================================
+         JAVASCRIPT
+         ========================================== -->
+    <script>
+        // ========================================
+        // Viewport Drag Rotation (lag-free)
+        // ========================================
+        const viewport = document.getElementById('viewport');
+        const plate = document.getElementById('plate');
+        const topToolbar = document.getElementById('top-toolbar');
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let rotationX = 60;
+        let rotationZ = -35;
+        let rafId = null;
+        let pendingDeltaX = 0;
+        let pendingDeltaY = 0;
+
+        function updatePlateTransform() {
+            plate.style.transform = `translate(-50%, -40%) rotateX(${rotationX}deg) rotateZ(${rotationZ}deg)`;
+            rafId = null;
+        }
+
+        viewport.addEventListener('pointerdown', (e) => {
+            // Don't capture if clicking on toolbar or sidebar elements
+            if (e.target.closest('#top-toolbar') || e.target.closest('.right-toolbar') || e.target.closest('aside')) return;
+
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            document.body.classList.add('dragging');
+            viewport.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        }, { passive: false });
+
+        viewport.addEventListener('pointermove', (e) => {
+            if (!isDragging) return;
+
+            const deltaX = e.clientX - startX;
+            const deltaY = e.clientY - startY;
+
+            rotationZ += deltaX * 0.5;
+            rotationX -= deltaY * 0.5;
+            rotationX = Math.max(15, Math.min(85, rotationX));
+
+            startX = e.clientX;
+            startY = e.clientY;
+
+            // Use requestAnimationFrame for smooth, lag-free rendering
+            if (!rafId) {
+                rafId = requestAnimationFrame(updatePlateTransform);
+            }
+        });
+
+        viewport.addEventListener('pointerup', (e) => {
+            if (isDragging) {
+                isDragging = false;
+                document.body.classList.remove('dragging');
+                viewport.releasePointerCapture(e.pointerId);
+            }
+        });
+
+        viewport.addEventListener('pointercancel', (e) => {
+            isDragging = false;
+            document.body.classList.remove('dragging');
+        });
+
+        // ========================================
+        // Settings Tabs
+        // ========================================
+        const settingsTabBtns = document.querySelectorAll('.settings-tab-btn');
+        settingsTabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                settingsTabBtns.forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-selected', 'false');
+                });
+                btn.classList.add('active');
+                btn.setAttribute('aria-selected', 'true');
+            });
+        });
+
+        // ========================================
+        // Navigation Tabs
+        // ========================================
+        const navTabs = document.querySelectorAll('.nav-tab');
+        navTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                navTabs.forEach(t => {
+                    t.classList.remove('active-tab');
+                    t.setAttribute('aria-selected', 'false');
+                });
+                tab.classList.add('active-tab');
+                tab.setAttribute('aria-selected', 'true');
+            });
+        });
+
+        // ========================================
+        // Toggle Switch
+        // ========================================
+        const toggleSwitch = document.getElementById('advanced-toggle');
+        toggleSwitch.addEventListener('click', () => {
+            const isOn = toggleSwitch.getAttribute('data-state') !== 'off';
+            toggleSwitch.setAttribute('data-state', isOn ? 'off' : 'on');
+            toggleSwitch.setAttribute('aria-checked', isOn ? 'false' : 'true');
+        });
+
+        // Keyboard support for toggle
+        toggleSwitch.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleSwitch.click();
+            }
+        });
+    </script>
+</body>
+
+</html>

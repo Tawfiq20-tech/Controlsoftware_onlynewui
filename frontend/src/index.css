@@ -1,0 +1,213 @@
+/* ===== SLICER PRO — DESIGN SYSTEM ===== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
+
+/* ===== TAILWIND CSS DIRECTIVES ===== */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    /* ---- Theme Colors (Slicer Dark) ---- */
+    --primary-accent: oklch(0.7214 0.1337 49.9802);
+    --primary-hover: oklch(0.6716 0.1368 48.5130);
+    --primary-glow: oklch(0.72 0.13 50 / 0.15);
+    --primary-glow-strong: oklch(0.72 0.13 50 / 0.25);
+
+    --bg-main: oklch(0.1797 0.0043 308.1928);
+    --bg-sidebar: oklch(0.1822 0 0);
+    --bg-panel: oklch(0.2520 0 0);
+    --bg-input: oklch(0.1797 0.0043 308.1928);
+    --bg-hover: oklch(0.22 0 0 / 0.5);
+    --bg-elevated: oklch(0.25 0 0 / 0.9);
+
+    --border-ui: oklch(0.2520 0 0);
+    --border-hover: oklch(0.35 0 0);
+    --border-subtle: oklch(0.3 0 0 / 0.4);
+
+    --text-main: oklch(0.8109 0 0);
+    --text-dim: oklch(0.6268 0 0);
+    --text-bright: oklch(0.95 0 0);
+
+    --danger: oklch(0.65 0.2 15);
+    --success: oklch(0.7 0.15 145);
+    --warning: oklch(0.78 0.14 80);
+    --info: oklch(0.7 0.12 240);
+
+    /* ---- Radius ---- */
+    --radius-xs: 2px;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-full: 9999px;
+
+    /* ---- Spacing ---- */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* ---- Fonts ---- */
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+    /* ---- Transitions ---- */
+    --transition-fast: 150ms ease;
+    --transition-normal: 200ms ease;
+    --transition-slow: 300ms ease;
+
+    /* ---- Shadows ---- */
+    --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.5);
+    --shadow-glow: 0 2px 12px var(--primary-glow);
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    background: var(--bg-main);
+    color: var(--text-main);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-weight: 400;
+    overflow: hidden;
+    height: 100vh;
+}
+
+#root {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ===== SCROLLBAR ===== */
+::-webkit-scrollbar {
+    width: 5px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-sidebar);
+}
+
+::-webkit-scrollbar-thumb {
+    background: oklch(0.32 0 0);
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.4 0 0);
+}
+
+/* ===== ANIMATIONS ===== */
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+@keyframes ping {
+
+    75%,
+    100% {
+        transform: scale(2);
+        opacity: 0;
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.animate-pulse {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.animate-ping {
+    animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.animate-fade {
+    animation: fadeIn 0.2s ease forwards;
+}
+
+/* ===== GENERIC UTILITIES ===== */
+.font-mono {
+    font-family: var(--font-mono);
+}
+
+.section-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+    line-height: 1;
+}
+
+/* Prevent text selection during drag */
+.dragging,
+.dragging * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+
+/* ===== VIEWPORT CONTAINER ===== */
+.viewport-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--bg-main);
+    overflow: hidden;
+}
+
+/* ===== SIDEBAR STYLES ===== */
+.sidebar {
+    width: 280px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-ui);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+}

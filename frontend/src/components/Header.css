@@ -1,0 +1,334 @@
+/* ===== SLICER HEADER ===== */
+.header {
+    height: 48px;
+    background-color: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-ui);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--space-6);
+    z-index: 50;
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* Left side */
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+    height: 100%;
+}
+
+.home-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+    border: none;
+    background: none;
+    color: var(--text-dim);
+}
+
+.header-home-wrap {
+    position: relative;
+}
+
+.home-btn:hover,
+.home-btn.active {
+    background: var(--bg-hover);
+    color: var(--text-main);
+}
+
+/* Navigation Tabs */
+.nav-tabs {
+    display: flex;
+    align-items: stretch;
+    height: 100%;
+}
+
+.nav-tab {
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: color var(--transition-fast), background var(--transition-fast);
+    position: relative;
+    user-select: none;
+    letter-spacing: 0.01em;
+    border: none;
+    background: none;
+}
+
+.nav-tab:hover:not(.active):not(.nav-tab-locked) {
+    color: var(--text-main);
+    background: var(--bg-hover);
+}
+
+/* Locked while carving (Tawfiq msg 7283 / 7296). */
+.nav-tab-locked {
+    color: var(--text-mute, #64748b) !important;
+    cursor: not-allowed !important;
+    opacity: 0.4;
+}
+.nav-tab-locked:hover { color: var(--text-mute, #64748b) !important; background: transparent !important; }
+
+.nav-tab.active {
+    background-color: var(--primary-accent);
+    color: var(--bg-main) !important;
+    font-weight: 700;
+}
+
+/* Status indicator */
+.header-center {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+.machine-status-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 14px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid var(--border-ui);
+    background: var(--bg-panel);
+}
+
+.status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.idle {
+    background: var(--text-dim);
+}
+
+.status-dot.running {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+}
+
+.status-dot.paused {
+    background: var(--warning);
+}
+
+.status-dot.alarm {
+    background: var(--danger);
+    box-shadow: 0 0 6px var(--danger);
+}
+
+.status-dot.disconnected {
+    background: oklch(0.4 0 0);
+}
+
+.metric-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+}
+
+.metric-inline .metric-val {
+    color: var(--primary-accent);
+    font-weight: 600;
+}
+
+/* Right side */
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.btn-primary {
+    background-color: var(--primary-accent);
+    color: var(--bg-main);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 7px 20px;
+    border-radius: var(--radius-full);
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background var(--transition-normal), transform var(--transition-fast), box-shadow var(--transition-normal);
+    box-shadow: var(--shadow-glow);
+    will-change: transform;
+    font-family: var(--font-sans);
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px var(--primary-glow-strong);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+}
+
+.btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-secondary {
+    background-color: var(--bg-panel);
+    color: var(--text-main);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 7px 20px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-ui);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background var(--transition-normal), transform var(--transition-fast), border-color var(--transition-normal);
+    will-change: transform;
+    font-family: var(--font-sans);
+}
+
+.btn-secondary:hover {
+    background-color: oklch(0.32 0 0);
+    transform: translateY(-1px);
+    border-color: var(--border-hover);
+}
+
+.btn-secondary:active {
+    transform: translateY(0);
+}
+
+.btn-secondary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.btn-danger {
+    background: oklch(0.35 0.1 15);
+    color: oklch(0.9 0.05 15);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 7px 16px;
+    border-radius: var(--radius-full);
+    border: 1px solid oklch(0.45 0.12 15);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background var(--transition-fast), transform var(--transition-fast);
+    font-family: var(--font-sans);
+}
+
+.btn-danger:hover {
+    background: oklch(0.4 0.14 15);
+    transform: translateY(-1px);
+}
+
+.btn-danger:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.connection-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-ui);
+    background: var(--bg-panel);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    font-family: var(--font-sans);
+}
+
+.connection-btn:hover {
+    border-color: var(--border-hover);
+    background: oklch(0.3 0 0);
+    transform: translateY(-1px);
+}
+
+.connection-btn.connected {
+    border-color: oklch(0.55 0.12 145);
+    background: oklch(0.25 0.05 145 / 0.3);
+    color: oklch(0.8 0.1 145);
+}
+
+.connection-btn.connecting {
+    border-color: oklch(0.55 0.12 55);
+    background: oklch(0.25 0.05 55 / 0.3);
+    color: oklch(0.8 0.1 55);
+    animation: pulse-connecting 1.5s ease-in-out infinite;
+}
+
+.connection-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.status-dot.connecting {
+    background: oklch(0.7 0.15 55);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.status-dot.initializing {
+    background: var(--info);
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-connecting {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+@keyframes pulse-dot {
+    0%, 100% {
+        box-shadow: 0 0 0 rgba(255, 200, 0, 0);
+    }
+    50% {
+        box-shadow: 0 0 8px rgba(255, 200, 0, 0.6);
+    }
+}
+/* Onefinity brand logo (Tawfiq msg 7389 + bumped per msg 7396 — 50% bigger). */
+.header-brand-logo {
+    height: 36px;
+    width: auto;
+    display: block;
+    margin-right: 8px;
+    flex-shrink: 0;
+    background: white;
+    padding: 3px 6px;
+    border-radius: 4px;
+}
+@media (max-width: 700px) {
+    .header-brand-logo { height: 28px; }
+}

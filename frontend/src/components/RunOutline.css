@@ -1,0 +1,309 @@
+/* ===== RUN OUTLINE MODAL ===== */
+.ro-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.ro-modal {
+    background: #1a1a1e;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    width: 420px;
+    max-width: calc(100vw - 32px);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+.ro-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+}
+
+.ro-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.ro-title svg {
+    color: #a78bfa;
+}
+
+.ro-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: rgba(255, 255, 255, 0.07);
+    color: #888;
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+}
+
+.ro-close:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.ro-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.ro-no-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    border-radius: 8px;
+    color: #d97706;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+/* Bounding box info */
+.ro-bbox {
+    background: rgba(167, 139, 250, 0.06);
+    border: 1px solid rgba(167, 139, 250, 0.15);
+    border-radius: 8px;
+    padding: 12px;
+}
+
+.ro-bbox-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #a78bfa;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 10px;
+}
+
+.ro-bbox-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.ro-bbox-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ro-bbox-label {
+    font-size: 10px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.ro-bbox-val {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+/* Field */
+.ro-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.ro-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* Mode selection */
+.ro-mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.ro-mode-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #666;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: left;
+}
+
+.ro-mode-btn:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.ro-mode-btn.active {
+    border-color: rgba(167, 139, 250, 0.4);
+    background: rgba(167, 139, 250, 0.1);
+    color: #a78bfa;
+}
+
+.ro-mode-btn svg {
+    flex-shrink: 0;
+}
+
+.ro-mode-name {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.ro-mode-desc {
+    font-size: 10px;
+    color: #666;
+    margin-top: 1px;
+}
+
+.ro-mode-btn.active .ro-mode-desc {
+    color: #8b6fe0;
+}
+
+/* Input row */
+.ro-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ro-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #fff;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 7px 10px;
+    transition: border-color 0.15s;
+    -moz-appearance: textfield;
+}
+
+.ro-input::-webkit-outer-spin-button,
+.ro-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.ro-input:focus {
+    outline: none;
+    border-color: rgba(167, 139, 250, 0.5);
+    background: rgba(167, 139, 250, 0.08);
+}
+
+.ro-unit {
+    font-size: 12px;
+    color: #666;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Info bar */
+.ro-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #666;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ro-info svg {
+    color: #888;
+    flex-shrink: 0;
+}
+
+/* Footer */
+.ro-footer {
+    display: flex;
+    gap: 10px;
+    padding: 16px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+.ro-btn-cancel {
+    padding: 8px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: #aaa;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ro-btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.ro-btn-run {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    border: none;
+    background: #a78bfa;
+    color: white;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ro-btn-run:hover:not(:disabled) {
+    background: #8b5cf6;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(167, 139, 250, 0.3);
+}
+
+.ro-btn-run:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}

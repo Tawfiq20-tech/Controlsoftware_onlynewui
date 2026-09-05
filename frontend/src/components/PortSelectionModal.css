@@ -1,0 +1,230 @@
+/* Port Selection Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-lg);
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--border-ui);
+}
+
+.modal-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    color: var(--text-main);
+}
+
+.modal-title h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-close:hover {
+    background: var(--bg-hover);
+    color: var(--text-main);
+}
+
+.modal-body {
+    padding: var(--space-6);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.modal-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-8);
+    gap: var(--space-4);
+    color: var(--text-dim);
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border-ui);
+    border-top-color: var(--primary-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.modal-error {
+    padding: var(--space-4);
+    background: oklch(0.35 0.08 15 / 0.3);
+    border: 1px solid oklch(0.45 0.1 15);
+    border-radius: var(--radius-md);
+    color: oklch(0.8 0.05 15);
+    font-size: 13px;
+}
+
+.port-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.port-list-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-bottom: var(--space-2);
+}
+
+.port-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    text-align: left;
+}
+
+.port-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--primary-accent);
+    transform: translateY(-1px);
+}
+
+.port-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: var(--bg-main);
+    border-radius: var(--radius-sm);
+    color: var(--primary-accent);
+    flex-shrink: 0;
+}
+
+.port-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.port-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 2px;
+}
+
+.port-details {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+}
+
+.btn-add-port {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    background: var(--primary-accent);
+    color: var(--bg-main);
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    margin-top: var(--space-2);
+}
+
+.btn-add-port:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px var(--primary-glow-strong);
+}
+
+.modal-info {
+    padding: var(--space-4);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+}
+
+.modal-info strong {
+    color: var(--text-main);
+    font-weight: 600;
+}

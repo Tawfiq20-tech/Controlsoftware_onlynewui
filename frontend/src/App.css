@@ -1,0 +1,50 @@
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    /* 48px header + 26px status bar */
+    height: calc(100vh - 74px);
+}
+
+.viewport-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0d1b2a;
+}
+
+/* Responsive (Tawfiq msg 7324–7331 — vertical preview v2 approved).
+   Sidebar stays on the LEFT at all widths; only its width slims down as
+   the viewport shrinks. Viewer always sits beside it (no column-stack).
+   At < 420 px the sidebar collapses entirely so the viewer gets the full
+   screen — operator on a true phone can rotate landscape instead. */
+@media (max-width: 1024px) {
+    .app { height: 100vh; height: 100dvh; }
+    .app-main { height: calc(100vh - 48px); height: calc(100dvh - 48px); }
+}
+@media (max-width: 420px) {
+    .sidebar { display: none !important; }
+}
+
+@media (max-width: 480px) {
+    .app-main {
+        height: calc(100vh - 44px);
+        height: calc(100dvh - 44px);
+    }
+    
+    .viewport-container {
+        min-height: 50vh;
+    }
+    
+    .sidebar {
+        max-height: 50vh;
+    }
+}

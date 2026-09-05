@@ -1,0 +1,127 @@
+.ecss-banner-stack {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 12px;
+    background: transparent;
+    pointer-events: none;
+}
+
+.ecss-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #f5f5f5;
+}
+
+.ecss-banner--critical {
+    background: linear-gradient(180deg, rgba(180, 30, 30, 0.95), rgba(120, 20, 20, 0.95));
+    border-color: rgba(255, 90, 90, 0.5);
+}
+
+.ecss-banner--warning {
+    background: linear-gradient(180deg, rgba(180, 130, 20, 0.95), rgba(120, 80, 10, 0.95));
+    border-color: rgba(255, 200, 90, 0.5);
+}
+
+.ecss-banner--block {
+    background: linear-gradient(180deg, rgba(60, 60, 80, 0.96), rgba(40, 40, 60, 0.96));
+    border-color: rgba(140, 140, 220, 0.45);
+}
+
+.ecss-banner__icon {
+    font-size: 22px;
+    flex: 0 0 auto;
+    line-height: 1;
+}
+
+.ecss-banner__body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.ecss-banner__body strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.ecss-banner__detail {
+    opacity: 0.92;
+    font-size: 12.5px;
+}
+
+.ecss-banner__list {
+    margin: 4px 0 0 0;
+    padding-left: 18px;
+}
+
+.ecss-banner__list li {
+    margin-bottom: 2px;
+}
+
+.ecss-banner__dismiss {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 6px;
+    opacity: 0.75;
+    transition: opacity 120ms ease;
+    flex: 0 0 auto;
+}
+
+.ecss-banner__dismiss:hover {
+    opacity: 1;
+}
+
+.ecss-banner code {
+    background: rgba(0, 0, 0, 0.35);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', 'SFMono-Regular', monospace;
+    font-size: 11.5px;
+}
+
+.ecss-banner__override {
+    margin-top: 8px;
+    background: rgba(220, 150, 30, 0.18);
+    border: 1px solid rgba(255, 180, 70, 0.55);
+    color: #ffd58a;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.ecss-banner__override:hover {
+    background: rgba(220, 150, 30, 0.30);
+    border-color: rgba(255, 200, 100, 0.75);
+}
+
+.ecss-banner__badge {
+    margin-left: 10px;
+    padding: 2px 7px;
+    background: rgba(255, 180, 70, 0.22);
+    border: 1px solid rgba(255, 180, 70, 0.55);
+    border-radius: 4px;
+    color: #ffd58a;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
