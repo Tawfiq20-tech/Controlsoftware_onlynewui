@@ -59,6 +59,20 @@ function defaultLogger() {
 // O(1) no-op.
 const TICK_MS = 10;
 
+// Firmware's job line numbers are a wire-level uint16_t -- confirmed
+// 2026-09-05 while diagnosing a stalled 465,862-line job: codec.js's
+// buildJobLine/parseEvExecuted both truncate to 16 bits, and firmware
+// itself stores line_no as uint16_t (QueuedMove.line_no, rsp_last_executed_line,
+// rsp_send_executed() in easycnc_protocol.c) -- it's not a host-only limit.
+// Once a single job's line numbers exceed 65,535 they wrap and collide with
+// an earlier line number already in this._executed, permanently capping its
+// size and wedging the execution-credit gate in _tick()/_sendNextBatch()
+// below, which times out as a false "no progress" stall. Splitting any long
+// file into sequential JOB_START/JOB_END chunks, each well under that
+// ceiling, sidesteps the wire-format limit entirely -- no firmware change,
+// no protocol version bump, each chunk is just an ordinary job like before.
+const MAX_LINES_PER_CHUNK = 60000;
+
 class JobStream extends EventEmitter {
     constructor(stream, options = {}) {
         super();
@@ -67,6 +81,17 @@ class JobStream extends EventEmitter {
         this._depth = Math.max(1, options.depth ?? 8); // device planner capacity (execution credits)
 
         this._lines = [];
+        // Chunking state (see MAX_LINES_PER_CHUNK above). this._lines holds
+        // only the CURRENT chunk; this._allLines is the whole file. Every
+        // other field below (_sentUpTo, _executed, _sentLines, _nextLine,
+        // _jobId) is chunk-local and gets reset by _advanceChunk()/resume()
+        // -- callers that need a whole-file-relative number (progress,
+        // nextLineToRun, plannerState) add _chunkStartLine/_completedBeforeChunk.
+        this._allLines = [];
+        this._totalLineCount = 0;
+        this._chunkStartLine = 0;
+        this._completedBeforeChunk = 0;
+        this._baseJobId = 0;
         this._jobId = 0;
         this._sentUpTo = 0;          // next line index to transmit
         this._executed = new Set();  // line numbers that completed (EV_EXECUTED)
@@ -124,7 +149,7 @@ class JobStream extends EventEmitter {
     }
 
     get progress() {
-        return [this._executed.size, this._lines.length];
+        return [this._completedBeforeChunk + this._executed.size, this._totalLineCount];
     }
 
     get failReason() {
@@ -140,9 +165,20 @@ class JobStream extends EventEmitter {
         return { ...this._lastConfirmedPos };
     }
 
-    /** First not-yet-executed line (for resume). */
+    // Offset of the current chunk's line 1 within the whole file. Firmware's
+    // own telemetry (EV_STATUS's last_executed_line) is chunk-local -- it
+    // resets to 0 on every OP_JOB_START (easycnc_protocol.c
+    // rsp_handle_job_start(), rsp_last_executed_line = 0) -- so any caller
+    // combining that raw telemetry value with a whole-file line number (e.g.
+    // to compute a resume point) must add this offset first, exactly like
+    // nextLineToRun() does internally.
+    get chunkStartLine() {
+        return this._chunkStartLine;
+    }
+
+    /** First not-yet-executed line (for resume), absolute across all chunks. */
     nextLineToRun() {
-        return this._nextLine;
+        return this._chunkStartLine + this._nextLine;
     }
 
     /**
@@ -155,12 +191,13 @@ class JobStream extends EventEmitter {
      * @returns {{ lastExecuted: number, firstUnconfirmed: number, inPlannerCount: number }}
      */
     plannerState() {
-        const lastExecuted = this._nextLine - 1;
+        const lastExecuted = this._chunkStartLine + this._nextLine - 1;
         // Find the earliest line that was sent but NOT executed.
-        let firstUnconfirmed = this._nextLine;
+        let firstUnconfirmed = this._chunkStartLine + this._nextLine;
         for (const ln of this._sentLines) {
-            if (!this._executed.has(ln) && ln < firstUnconfirmed) {
-                firstUnconfirmed = ln;
+            const abs = this._chunkStartLine + ln;
+            if (!this._executed.has(ln) && abs < firstUnconfirmed) {
+                firstUnconfirmed = abs;
             }
         }
         // Count lines in the planner (sent but not executed).
@@ -193,8 +230,13 @@ class JobStream extends EventEmitter {
         // Python version via trace: a leftover job1 sender sent a JOB_LINE
         // carrying job2's id+gcode before job2's own JOB_START went out).
         this._generation += 1;
-        this._lines = clean;
-        this._jobId = jobId !== null && jobId !== undefined ? jobId : (Math.floor(Date.now() / 1000) & 0xFFFF);
+        this._allLines = clean;
+        this._totalLineCount = clean.length;
+        this._chunkStartLine = 0;
+        this._completedBeforeChunk = 0;
+        this._lines = clean.length > MAX_LINES_PER_CHUNK ? clean.slice(0, MAX_LINES_PER_CHUNK) : clean;
+        this._baseJobId = jobId !== null && jobId !== undefined ? jobId : (Math.floor(Date.now() / 1000) & 0xFFFF);
+        this._jobId = this._baseJobId;
         this._sentUpTo = 0;
         this._executed = new Set();
         this._acked = new Set();
@@ -235,21 +277,38 @@ class JobStream extends EventEmitter {
         this._runSenderLoop(gen);
     }
 
-    /** Resume from the given line (0 = next un-executed). */
+    /** Resume from the given line (0 = next un-executed), absolute across all chunks. */
     resume(fromLine = 0) {
         if (!this._active) return;
         if (fromLine > 0) {
-            // Lines before fromLine are being deliberately skipped (already
-            // ran in an earlier stopped attempt), not just left unsent --
-            // _tick()'s completion check is `_executed.size >= _lines.length`,
-            // so without marking them here that size can never reach the
-            // total and a genuinely-finished job spins until STALL_ABORT_S
-            // (90s) and reports a false "no progress" failure instead of
-            // finishing cleanly. See RSPController.js's gcode:stop/gcode:start
-            // resume-from-stop feature for the caller.
-            for (let ln = 1; ln < fromLine; ln++) this._executed.add(ln);
-            this._nextLine = fromLine;
-            this._sentUpTo = Math.max(0, fromLine - 1);
+            // fromLine is absolute across the whole file (see nextLineToRun()),
+            // not just the current chunk -- a checkpoint resume can land
+            // several chunks past upload()'s default chunk 0, e.g. line
+            // 200,000 of a 465,862-line file split into 60,000-line chunks.
+            // Re-derive which chunk that falls in and re-slice _allLines
+            // directly instead of streaming/skipping through earlier chunks.
+            const chunkIdx = Math.floor((fromLine - 1) / MAX_LINES_PER_CHUNK);
+            this._chunkStartLine = chunkIdx * MAX_LINES_PER_CHUNK;
+            this._completedBeforeChunk = this._chunkStartLine;
+            this._lines = this._allLines.slice(this._chunkStartLine, this._chunkStartLine + MAX_LINES_PER_CHUNK);
+            this._jobId = (this._baseJobId + chunkIdx) & 0xFFFF;
+            const localFromLine = fromLine - this._chunkStartLine; // 1-based, within this chunk
+            // Lines before localFromLine are being deliberately skipped
+            // (already ran in an earlier stopped attempt), not just left
+            // unsent -- _tick()'s completion check is
+            // `_executed.size >= _lines.length`, so without marking them
+            // here that size can never reach the total and a genuinely-
+            // finished chunk spins until STALL_ABORT_S (90s) and reports a
+            // false "no progress" failure instead of finishing cleanly. See
+            // RSPController.js's gcode:stop/gcode:start resume-from-stop
+            // feature for the caller.
+            this._executed = new Set();
+            for (let ln = 1; ln < localFromLine; ln++) this._executed.add(ln);
+            this._nextLine = localFromLine;
+            this._sentUpTo = Math.max(0, localFromLine - 1);
+            this._sentLines = new Set();
+            this._jobDone = false;
+            this._reconciledUpto = 0;
         }
         this._lastProgressAt = now();
         this._stalled = false;
@@ -464,11 +523,52 @@ class JobStream extends EventEmitter {
         }
     }
 
+    /**
+     * Reposition onto the next chunk of _allLines after the current chunk's
+     * JOB_END. Returns false once _allLines is exhausted (real end of file).
+     */
+    _advanceChunk() {
+        const nextStart = this._chunkStartLine + this._lines.length;
+        if (nextStart >= this._allLines.length) return false;
+        this._completedBeforeChunk = nextStart;
+        this._chunkStartLine = nextStart;
+        this._lines = this._allLines.slice(nextStart, nextStart + MAX_LINES_PER_CHUNK);
+        const chunkIdx = Math.floor(this._chunkStartLine / MAX_LINES_PER_CHUNK);
+        this._jobId = (this._baseJobId + chunkIdx) & 0xFFFF;
+        this._sentUpTo = 0;
+        this._executed = new Set();
+        this._acked = new Set();
+        this._sentLines = new Set();
+        this._nextLine = 1;
+        this._jobDone = false;
+        this._reconciledUpto = 0;
+        return true;
+    }
+
     async _finishJob() {
         try {
             await this.stream.sendCommand(defs.OP_JOB_END, codec.buildJobEnd(this._jobId));
         } catch (exc) {
             this._log.warn(`job end failed: ${exc.message || exc}`);
+        }
+        // More of the file left past this chunk (see MAX_LINES_PER_CHUNK) --
+        // start the next chunk's own JOB_START/tick loop instead of
+        // declaring the whole job done. Failures here go through the same
+        // _onSenderError() path _runSenderLoop() uses for chunk 0.
+        if (this._advanceChunk()) {
+            const gen = this._generation;
+            try {
+                await this._sendJobStart();
+            } catch (exc) {
+                this._onSenderError(gen, exc);
+                return;
+            }
+            if (gen !== this._generation || this._aborted) return;
+            this._lastProgressAt = now();
+            this._stalled = false;
+            this._tickHandle = setInterval(() => this._tick(gen), TICK_MS);
+            if (typeof this._tickHandle.unref === 'function') this._tickHandle.unref();
+            return;
         }
         try {
             this.stream.setHeartbeatPaused(false);
@@ -511,10 +611,17 @@ class JobStream extends EventEmitter {
         this._lastConfirmedPos = { x: parsed.x, y: parsed.y, z: parsed.z };
         this._lastProgressAt = now();
         this._stalled = false;
+        // executed/total/lineNo must be whole-file-absolute, not chunk-local
+        // -- RSPController._bindJobListeners() forwards these straight
+        // through as sender:status's progress-bar (total/sent) and
+        // current-line highlight (received/lineNo) fields. Emitting the
+        // chunk-local this._executed.size/this._lines.length/parsed.lineNo
+        // here would reset the progress bar to 0% and jump the highlighted
+        // line backward at every MAX_LINES_PER_CHUNK boundary.
         this.emit('progress', {
-            executed: this._executed.size,
-            total: this._lines.length,
-            lineNo: parsed.lineNo,
+            executed: this._completedBeforeChunk + this._executed.size,
+            total: this._totalLineCount,
+            lineNo: this._chunkStartLine + parsed.lineNo,
             pos: this._lastConfirmedPos,
         });
     }

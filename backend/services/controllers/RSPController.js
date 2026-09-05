@@ -429,7 +429,16 @@ class RSPController extends EventEmitter {
                 
                 // If a job was running, capture the resume line immediately and pause!
                 if (this.job && this.job.active) {
-                    const stopLine = dict.last_executed_line ? (dict.last_executed_line + 1) : this.job.nextLineToRun();
+                    // dict.last_executed_line is firmware's own telemetry
+                    // counter, which is chunk-local (resets to 0 on every
+                    // OP_JOB_START -- see job.js chunkStartLine's doc) once a
+                    // file is split into >60,000-line chunks. Add
+                    // chunkStartLine to land on the correct whole-file
+                    // resume line instead of jumping back to an early line
+                    // in the current chunk.
+                    const stopLine = dict.last_executed_line
+                        ? (this.job.chunkStartLine + dict.last_executed_line + 1)
+                        : this.job.nextLineToRun();
                     if (stopLine > 1) {
                         this._resumeLine = stopLine;
                         this._resumeGcode = this._loadedGcode;
