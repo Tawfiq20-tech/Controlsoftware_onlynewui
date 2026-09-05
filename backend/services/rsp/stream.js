@@ -469,7 +469,18 @@ class ReliableStream extends EventEmitter {
             if (!p) continue;
             p.retries += 1;
             if (p.retries > this.maxRetries) {
+                const op = p.payload[0];
+                const opName = defs.OP_NAMES[op] || `OP_0x${op.toString(16).padStart(2, '0')}`;
                 this._log.warn(`seq ${seq} retries exhausted`);
+                // job-63998 stall investigation (2026-09-04): this used to be
+                // logger-only, so a durable frame (e.g. OP_JOB_LINE) that
+                // never got ACKed silently vanished from the pipeline with no
+                // trace in the ndjson session log Tawfiq sends us -- we could
+                // see the freeze in telemetry but not WHY. Surface it as a
+                // 'console' event (same channel CNCEngine.sessionLogger.
+                // logConsole() already captures) so the next repro pins the
+                // exact seq/op instead of another round of inference.
+                this.emit('console', `⚠️ RSP: seq ${seq} (${opName}) got no ACK after ${this.maxRetries} retries -- giving up.`);
                 if (p.durable) {
                     this._setLink(false, 'stall');
                 }
@@ -657,6 +668,10 @@ class ReliableStream extends EventEmitter {
                 }
             }
         } else {
+            // job-63998 stall investigation (2026-09-04): real rejection
+            // (not flow-control/reorder chatter) -- same visibility gap as
+            // the retry-exhaustion path above, same fix.
+            this.emit('console', `⚠️ RSP: seq ${f.seq} (${opName}) rejected -- ${reasonName}.`);
             this._sent.delete(f.seq);
         }
     }
