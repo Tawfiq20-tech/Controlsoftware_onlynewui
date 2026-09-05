@@ -15,10 +15,21 @@
  * R-format and helical (Z-changing) arcs are NOT handled -- throws
  * instead of silently mis-converting. Every arc-bearing CAM export seen
  * on this project (Vectric, Carveco) uses IJ-form XY-plane arcs only.
+ *
+ * Tracks the G0/G1/G2/G3 modal motion word across lines: valid G-code lets
+ * a CAM post chain several arc segments without repeating "G2"/"G3" on
+ * every line (the motion mode carries over from the previous block, same
+ * as it does for G1). A line with no motion word but an I/J token while
+ * the last motion word was G2/G3 is such a continuation and must still be
+ * tessellated -- firmware's line_has_arc() (easycnc_protocol.c:384) scans
+ * the whole line for a literal G2/G3 token, so it only ever catches an
+ * EXPLICIT arc word; a continuation line with none would sail through
+ * unconverted into firmware and get queued as a wrong-shape straight cut
+ * instead of being rejected -- worse than a NAK, a silent wrong carve.
  */
 
 const MAX_SEG_DEG = 3.0;
-const ARC_LINE_RE = /^(?:N\d+\s*)?G0?([23])(?!\d)/i;
+const MOTION_LINE_RE = /^(?:N\d+\s*)?G0?([0123])(?!\d)/i;
 const TOKEN_RE = /([XYZIJKF])\s*(-?\d*\.?\d+)/gi;
 
 function parseTokens(line) {
@@ -65,10 +76,17 @@ function linearizeArcs(gcodeText) {
     let curY = 0;
     let arcCount = 0;
     let segmentCount = 0;
+    let motionMode = null; // last explicit G0/G1/G2/G3 word seen, '0'|'1'|'2'|'3'
 
     for (const line of lines) {
-        const m = ARC_LINE_RE.exec(line);
-        if (!m) {
+        const m = MOTION_LINE_RE.exec(line);
+        const explicitMotion = m ? m[1] : null;
+        const isArc = explicitMotion === '2' || explicitMotion === '3'
+            || (explicitMotion === null && (motionMode === '2' || motionMode === '3') && /[IJ]\s*-?[0-9.]/i.test(line));
+
+        if (explicitMotion !== null) motionMode = explicitMotion;
+
+        if (!isArc) {
             const toks = parseTokens(line);
             if (toks.X !== undefined) curX = toks.X;
             if (toks.Y !== undefined) curY = toks.Y;
@@ -84,7 +102,7 @@ function linearizeArcs(gcodeText) {
             throw new Error(`Helical (Z-changing) arc not supported by linearizeArcs: ${line.trim()}`);
         }
 
-        const clockwise = m[1] === '2';
+        const clockwise = motionMode === '2';
         const ex = toks.X !== undefined ? toks.X : curX;
         const ey = toks.Y !== undefined ? toks.Y : curY;
         const i = toks.I || 0;
