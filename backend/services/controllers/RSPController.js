@@ -36,6 +36,7 @@ const defs = require('../rsp/defs');
 const codec = require('../rsp/codec');
 const { ReliableStream, LinkLost } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
+const linearizeArcs = require('../../lib/linearizeArcs');
 
 // Power-cut survival: durable checkpoint persistence is now handled
 // entirely by JobResumeService (services/jobresume/), which owns the
@@ -215,6 +216,11 @@ class RSPController extends EventEmitter {
         this.stream.on('status', (dict) => this._onTelemetry(dict));
         this.stream.on('link', (ok) => this._onLinkChange(ok));
         this.stream.on('event', (f) => this._onStreamEvent(f));
+        // job-63998 stall investigation (2026-09-04): stream.js now surfaces
+        // retry-exhaustion/NAK-rejection diagnostics via 'console' so they
+        // land in the ndjson session log -- without this bridge they'd only
+        // ever reach the Node logger, invisible in what Tawfiq sends us.
+        this.stream.on('console', (msg) => this.emit('console', msg));
 
         this.job = new JobStream(this.stream, {
             logger: {
@@ -674,7 +680,25 @@ class RSPController extends EventEmitter {
                     this.job.abort();
                 }
                 this._loadedName = name || '';
-                this._loadedGcode = incoming;
+                // Firmware (easycnc_protocol.c, GcodeMove struct) has no
+                // arc-center field and rejects G2/G3 outright. Linearize
+                // here so ANY file the user loads just runs -- this only
+                // rewrites the in-memory copy sent to firmware, never the
+                // user's original file on disk.
+                try {
+                    const { text, arcCount, segmentCount } = linearizeArcs(incoming);
+                    this._loadedGcode = text;
+                    if (arcCount > 0) {
+                        logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
+                        this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
+                    }
+                } catch (err) {
+                    logger.warn(`[RSP] gcode:load arc linearization failed: ${err.message}`);
+                    this.emit('console', `⚠️ Could not load "${this._loadedName}": ${err.message}`);
+                    this._loadedGcode = '';
+                    this._loadedName = '';
+                    break;
+                }
                 // Power-cut recovery is now handled by JobResumeService,
                 // which intercepts at a higher level. Here we just treat
                 // every load as a fresh start for the volatile in-session
