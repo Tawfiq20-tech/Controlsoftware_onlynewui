@@ -323,11 +323,11 @@ export default function Sidebar() {
     };
 
 
-    // Axis colors
+    // Axis colors (tactical industrial grade)
     const AXIS_COLORS = {
-        x: 'oklch(0.7 0.16 15)',
-        y: 'oklch(0.7 0.15 145)',
-        z: 'oklch(0.7 0.12 240)',
+        x: '#ef4444',
+        y: '#10b981',
+        z: '#0284c7',
     };
 
     return (

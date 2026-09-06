@@ -61,21 +61,6 @@ export default function StatusBar() {
                 <span className="sb-val">{appPreferences.units}</span>
             </div>
 
-            {/* Position readout */}
-            {connected && (
-                <>
-                    <div className="sb-divider" />
-                    <div className="sb-item sb-position" title="Current work position">
-                        <span className="sb-key">Pos</span>
-                        <span className="sb-val sb-pos-val">
-                            X<b>{position.x.toFixed(2)}</b>&nbsp;
-                            Y<b>{position.y.toFixed(2)}</b>&nbsp;
-                            Z<b>{position.z.toFixed(2)}</b>
-                        </span>
-                    </div>
-                </>
-            )}
-
             {/* Alarm badge + clear button */}
             {machineState === 'alarm' && (
                 <>

@@ -3,7 +3,7 @@
     flex: 1;
     position: relative;
     overflow: hidden;
-    background: radial-gradient(circle at center, oklch(0.22 0 0) 0%, oklch(0.12 0 0) 100%);
+    background: radial-gradient(circle at center, #161c27 0%, #0c0f14 100%);
     touch-action: none;
 }
 
@@ -18,7 +18,7 @@
     top: 16px;
     left: 50%;
     transform: translateX(-50%);
-    background: oklch(0.1822 0 0 / 0.88);
+    background: rgba(18, 23, 33, 0.88);
     padding: 8px 16px;
     border-radius: var(--radius-lg);
     display: flex;
@@ -47,7 +47,7 @@
 
 .toolbar-btn:hover {
     color: var(--primary-accent);
-    background: oklch(0.72 0.13 50 / 0.1);
+    background: rgba(245, 158, 11, 0.1);
     transform: translateY(-1px);
 }
 
@@ -57,7 +57,7 @@
 
 .toolbar-btn.active {
     color: var(--primary-accent);
-    background: oklch(0.72 0.13 50 / 0.15);
+    background: rgba(245, 158, 11, 0.15);
 }
 
 .toolbar-divider {
@@ -124,7 +124,7 @@
     align-items: center;
     gap: 12px;
     padding: 32px;
-    background: oklch(0.18 0 0 / 0.7);
+    background: rgba(18, 23, 33, 0.7);
     border: 1px solid var(--border-ui);
     border-radius: var(--radius-lg);
     backdrop-filter: blur(12px);
@@ -149,7 +149,7 @@
 
 .visualizer-empty-hint {
     font-size: 11px;
-    color: oklch(0.5 0 0);
+    color: #6b7280;
 }
 
 /* ---- Bottom Status Bar ---- */
@@ -158,7 +158,7 @@
     bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
-    background: oklch(0.18 0 0 / 0.85);
+    background: rgba(18, 23, 33, 0.85);
     border: 1px solid var(--border-ui);
     border-radius: var(--radius-md);
     padding: 6px 16px;

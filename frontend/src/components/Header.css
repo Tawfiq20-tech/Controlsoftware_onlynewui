@@ -132,7 +132,7 @@
 }
 
 .status-dot.disconnected {
-    background: oklch(0.4 0 0);
+    background: #4b5563;
 }
 
 .metric-inline {
@@ -208,7 +208,7 @@
 }
 
 .btn-secondary:hover {
-    background-color: oklch(0.32 0 0);
+    background-color: #222b3d;
     transform: translateY(-1px);
     border-color: var(--border-hover);
 }
@@ -224,13 +224,13 @@
 }
 
 .btn-danger {
-    background: oklch(0.35 0.1 15);
-    color: oklch(0.9 0.05 15);
+    background: #7f1d1d;
+    color: #fecaca;
     font-size: 11px;
     font-weight: 700;
     padding: 7px 16px;
     border-radius: var(--radius-full);
-    border: 1px solid oklch(0.45 0.12 15);
+    border: 1px solid #b91c1c;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -240,7 +240,8 @@
 }
 
 .btn-danger:hover {
-    background: oklch(0.4 0.14 15);
+    background: #991b1b;
+    border-color: #dc2626;
     transform: translateY(-1px);
 }
 
@@ -268,20 +269,20 @@
 
 .connection-btn:hover {
     border-color: var(--border-hover);
-    background: oklch(0.3 0 0);
+    background: #222b3d;
     transform: translateY(-1px);
 }
 
 .connection-btn.connected {
-    border-color: oklch(0.55 0.12 145);
-    background: oklch(0.25 0.05 145 / 0.3);
-    color: oklch(0.8 0.1 145);
+    border-color: #059669;
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
 }
 
 .connection-btn.connecting {
-    border-color: oklch(0.55 0.12 55);
-    background: oklch(0.25 0.05 55 / 0.3);
-    color: oklch(0.8 0.1 55);
+    border-color: #d97706;
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
     animation: pulse-connecting 1.5s ease-in-out infinite;
 }
 
@@ -292,7 +293,7 @@
 }
 
 .status-dot.connecting {
-    background: oklch(0.7 0.15 55);
+    background: #f59e0b;
     animation: pulse-dot 1.5s ease-in-out infinite;
 }
 

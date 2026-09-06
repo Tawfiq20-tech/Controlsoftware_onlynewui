@@ -52,9 +52,9 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
 
     const getAxisColor = (axis: 'x' | 'y' | 'z'): string => {
         const colors = {
-            x: '#ff4444', // Red for X
-            y: '#44ff44', // Green for Y
-            z: '#4444ff'  // Blue for Z
+            x: '#ef4444', // Industrial Red for X
+            y: '#10b981', // Industrial Emerald for Y
+            z: '#0284c7'  // Industrial Cyan for Z
         };
         return colors[axis];
     };

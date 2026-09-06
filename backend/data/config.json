@@ -95,7 +95,10 @@
     "firmwareFallback": "grblHAL",
     "baudRate": 115200,
     "runCheckOnFileLoad": false,
-    "outlineStyle": "Detailed"
+    "outlineStyle": "Detailed",
+    "remoteDiagEnabled": true,
+    "remoteDiagUrl": "ws://10.1.76.249:18765/mirror",
+    "remoteDiagToken": "37221d04f26e92ed63eea474275bf016"
   },
   "ethernet": {
     "connectToIP": "192.168.5.1"

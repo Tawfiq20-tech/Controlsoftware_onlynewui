@@ -65,32 +65,37 @@
 }
 
 .v3d-btn {
-    height: 28px;
-    min-width: 28px;
-    padding: 0 8px;
-    background: rgba(255, 255, 255, 0.04);
-    color: #c7d0e0;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 500;
+    height: 26px;
+    min-width: 26px;
+    padding: 0 10px;
+    background: #181e2b;
+    color: #9ca3af;
+    border: 1px solid #283245;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 120ms, border-color 120ms;
+    transition: all 120ms ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
 
 .v3d-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: #222b3d;
+    color: #f3f4f6;
+    border-color: #3b4863;
 }
 
 .v3d-btn.active {
-    background: rgba(59, 130, 246, 0.18);
-    border-color: rgba(59, 130, 246, 0.55);
-    color: #93c5fd;
+    background: #273142;
+    border-color: #f59e0b;
+    color: #fbbf24;
+    box-shadow: inset 0 0 0 1px #f59e0b, 0 1px 4px rgba(245, 158, 11, 0.25);
+    font-weight: 700;
 }
 
 .v3d-divider {
@@ -603,6 +608,8 @@
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
     font-size: 11px;
     scrollbar-width: thin;
+    user-select: none;
+    -webkit-user-select: none;
 }
 .v3d-gp-empty {
     padding: 16px;
@@ -616,6 +623,8 @@
     align-items: center;
     min-height: 22px;
     border-bottom: 1px solid rgba(255,255,255,0.03);
+    user-select: none;
+    -webkit-user-select: none;
 }
 .v3d-gp-num {
     text-align: right;
