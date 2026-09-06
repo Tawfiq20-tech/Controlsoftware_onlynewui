@@ -1,0 +1,325 @@
+{"question": "What are the main tabs in the control software?", "answer": "The top header bar has 6 tabs: Prepare, Carve, Device, Project, Library, and Settings."}
+{"question": "What's the difference between the Prepare and Carve tabs?", "answer": "Both show the same layout (Sidebar + 3D toolpath viewer). Prepare is for jogging, probing, and setup before a run; Carve is the tab you use while a job is actually running."}
+{"question": "What does the Device tab show?", "answer": "The Device tab shows the connection panel: pick your USB port, connect/disconnect, live position readout, firmware config, and machine profiles."}
+{"question": "What does the Project tab show?", "answer": "The Project tab shows your job run history (previously run files) -- it is not where you load a new G-code file."}
+{"question": "What does the Library tab show?", "answer": "The Library tab shows Custom Library (your saved G-code files), a link to the FILEFINITY community forum, and a Documentation placeholder."}
+{"question": "What does the Settings tab show?", "answer": "The Settings tab has 4 groups: General (Appearance, Notifications), Hardware (Cameras, Watch folder), CNC (Surfacing, Probing, Tools), and Activity (Job history)."}
+{"question": "Can I switch tabs while a job is running?", "answer": "No -- while a job is running or paused, all tabs except Carve are locked."}
+{"question": "Where do I go to load and run a G-code file end to end?", "answer": "Start on Prepare: connect (Device tab), home, load your file via Sidebar File Management, jog/probe to set your origin, then switch to Carve and press Space to start."}
+{"question": "How do I connect to my CNC machine?", "answer": "Go to the Device tab, open the 'Select a device...' dropdown under CNC Controller, pick your serial port, set the baud rate if needed, and click Connect."}
+{"question": "Where do I select my USB port?", "answer": "Device tab -> CNC Controller section -> the 'Select a device...' dropdown lists available serial ports."}
+{"question": "What baud rate should I use?", "answer": "The default is 115200. Some controllers (RTS/Buildbotics) use 230400 -- pick from the Baud Rate dropdown in the Device tab."}
+{"question": "How do I know if my machine is connected?", "answer": "A status pill on the Device tab (and in the bottom StatusBar) shows Not Connected, Connecting..., Connected to X, or Connection Error."}
+{"question": "Why isn't my machine reconnecting automatically?", "answer": "The app auto-reconnects to the last-used device on startup in most cases, but if the port changed or the machine was power-cycled you'll need to reselect it manually in the Device tab and click Connect."}
+{"question": "How do I disconnect from the machine?", "answer": "Go to the Device tab and click the Disconnect button (same button as Connect, it toggles)."}
+{"question": "What does Flow Control do on the connect screen?", "answer": "It's a serial port setting (Device tab, next to Baud Rate) -- leave it at the default unless your controller documentation says otherwise."}
+{"question": "Where do I see my machine's live position?", "answer": "Device tab -> Position (DRO) section, or the Sidebar's Position tab, or the bottom StatusBar (when connected)."}
+{"question": "Where do I check my firmware version?", "answer": "Device tab -> Firmware section-tab, or the right side of the bottom StatusBar when connected."}
+{"question": "Can I edit GRBL settings from the app?", "answer": "Yes -- Device tab -> Firmware section-tab has a full $$ settings editor: Read $$, search/filter, inline edit-and-save per setting, bulk write, import/export JSON, and Restore Defaults."}
+{"question": "How do I read all my controller's current settings?", "answer": "Device tab -> Firmware -> click 'Read $$'. It collects all settings from the controller over about 3 seconds and displays them grouped by category."}
+{"question": "How do I change a single GRBL setting like $110?", "answer": "Device tab -> Firmware, find the setting (use the search box), click Edit, enter the new value, and Save -- it sends $110=value to the controller."}
+{"question": "How do I restore my controller to factory GRBL defaults?", "answer": "Device tab -> Firmware -> Restore Defaults. It writes all stock GRBL values and asks for confirmation first."}
+{"question": "Can I export my firmware settings to a file?", "answer": "Yes, Device tab -> Firmware has Import and Export buttons for saving/loading your $$ settings as JSON."}
+{"question": "Does the Firmware tab let me flash new firmware onto my controller?", "answer": "No -- it's a configuration editor for existing GRBL $-settings, not a firmware flasher. There's no update/flash-firmware button."}
+{"question": "Where do I switch between machine profiles?", "answer": "Device tab -> Profiles section-tab, or the Machine Information section of the Home menu dropdown."}
+{"question": "What's stored in a Machine Profile?", "answer": "Work area (X/Y/Z), max feed rate per axis, acceleration per axis, steps/mm per axis, spindle max RPM, and a derived set of GRBL EEPROM values."}
+{"question": "Are there preset machine profiles I can start from?", "answer": "Yes -- 5 built-in profiles: Generic 3018, Shapeoko 3, X-Carve 750mm, OpenBuilds LEAD 1010, and Onefinity Woodworker."}
+{"question": "How do I jog the machine?", "answer": "Go to Prepare or Carve, click the Jog sub-tab in the Sidebar, and use the circular jog dial (X+/X-/Y+/Y- and diagonals) or the separate Z+/Z- buttons."}
+{"question": "Where is the jog dial?", "answer": "Sidebar -> Jog sub-tab. It's a circular 8-direction dial with a center STOP button, plus separate Z+/Z- buttons."}
+{"question": "How do I change my jog step size?", "answer": "In the Jog sub-tab, pick a step-size button: 0.1, 1, 10, 50, or 100 mm."}
+{"question": "Can I jog with the keyboard?", "answer": "Yes -- Arrow keys jog X/Y, Page Up/Page Down jog Z. Hold a key down for more than 350ms to get continuous jogging."}
+{"question": "How do I set jog step size from the keyboard?", "answer": "Press 1, 2, 3, or 4 to set the step to 0.1, 1, 10, or 100 mm respectively."}
+{"question": "What does the center button on the jog dial do?", "answer": "It's an emergency STOP button for jogging -- press it to immediately halt any in-progress jog move."}
+{"question": "How do I jog diagonally?", "answer": "The jog dial has 4 diagonal buttons between the main X/Y directions in addition to X+/X-/Y+/Y-."}
+{"question": "Why won't my jog buttons work?", "answer": "Check that the machine is connected (Device tab) and not in an alarm state -- alarm banners on the Jog tab show per-motor Reset buttons if that's blocking you."}
+{"question": "Can I jog while a job is paused?", "answer": "Jogging controls are available on the Jog sub-tab regardless of tab; check machine state -- most controllers allow limited jogging while paused, but always confirm your Z clearance first."}
+{"question": "How do I switch between mm and inches for jogging?", "answer": "Note: the current DRO/jog display is hardcoded to millimeters -- there's no unit toggle in the UI at this time."}
+{"question": "What are the Coordinate System buttons in the Jog tab for?", "answer": "They switch which axes/plane you're jogging: Z, XYZ, XY, X, or Y only."}
+{"question": "How fast does the machine jog?", "answer": "Jog speed is set by the Speed preset buttons in the Jog sub-tab, alongside the step-size buttons."}
+{"question": "Where do I find speed presets for jogging?", "answer": "Sidebar -> Jog sub-tab, next to the step-size (0.1/1/10/50/100mm) buttons."}
+{"question": "Is there a jog dead-man switch or hold-to-move behavior?", "answer": "Continuous jog via keyboard requires holding the arrow/PageUp/PageDown key for more than 350ms; releasing the key stops the move."}
+{"question": "Can I jog from a game controller or joystick?", "answer": "There's a Joystick Control section-tab in the Device panel. A separate SectionGamepad settings page also exists in the code but isn't currently wired into the Settings tab list -- use the Device panel's Joystick section instead."}
+{"question": "How do I stop a jog move immediately?", "answer": "Click the center STOP button on the jog dial, or press Escape."}
+{"question": "Do keyboard jog shortcuts work while I'm typing in a text field?", "answer": "No -- all keyboard shortcuts (jog, home, zero, etc.) are automatically disabled while a text input, textarea, or dropdown is focused."}
+{"question": "What's the largest jog step available?", "answer": "100 mm is the largest preset step-size button in the Jog sub-tab."}
+{"question": "Can I type a custom jog distance?", "answer": "The Jog sub-tab offers fixed presets (0.1/1/10/50/100mm) -- there's no free-text custom distance field."}
+{"question": "Where do I jog the machine to check my spoilboard corners?", "answer": "Use the Jog sub-tab dial (or arrow keys) to move to each corner, checking your work position in the Position tab/StatusBar as you go."}
+{"question": "How do I probe my Z zero?", "answer": "Click the Probe button (crosshair icon) in the Sidebar, choose 'Z Probe' on the Type step, jog near your touch plate, enter your bit diameter, then click Start."}
+{"question": "Where is the Probe button?", "answer": "In the Sidebar, between the Jog and Controls sub-tabs -- look for the crosshair icon labeled Probe."}
+{"question": "What's the difference between Z Probe and XYZ Probe?", "answer": "Z Probe sets only your Z zero using a single touch-off. XYZ Probe touches a corner block on 3 sides to set X, Y, and Z zero together."}
+{"question": "How does the probing wizard work?", "answer": "It's a 3-step wizard: Step 1 pick TYPE (Z or XYZ probe), Step 2 JOG + BIT (position the bit and enter its diameter), Step 3 PROBE (click Start, watch live status, confirm OK)."}
+{"question": "What do I need to enter before probing?", "answer": "Your bit/tool diameter, entered on the JOG + BIT step of the probing wizard -- this is used to offset the touch-off correctly."}
+{"question": "What is the Finalize step in XYZ probing?", "answer": "After an XYZ probe completes, you physically remove the probe/corner block from the machine, then click Finalize to confirm the machine can safely move again."}
+{"question": "Can I skip straight to jogging when I open the probe wizard from a Sidebar tile?", "answer": "Yes -- opening the wizard from the Sidebar's preset Probe tile pre-selects the probe type and skips straight to the JOG + BIT step."}
+{"question": "What happens if my probe doesn't touch during the cycle?", "answer": "The probe cycle will report a failure/timeout in the wizard's status; you'll need to re-jog closer to the touch plate and retry."}
+{"question": "Do I need a touch plate to probe?", "answer": "For Z Probe, yes -- a conductive touch plate placed under the bit is the standard setup. For XYZ Probe, a corner reference block is used instead."}
+{"question": "Where do I configure default probing settings?", "answer": "Settings tab -> CNC -> Probing section -- it lists probe strategies as cards and lets you pick the active work coordinate system (G54-G59)."}
+{"question": "Can I choose which work coordinate system (G54-G59) my probe result goes to?", "answer": "Yes, in Settings -> CNC -> Probing you can select the active WCS before running a probe strategy from that page."}
+{"question": "Where do I see my last probe result?", "answer": "Settings -> CNC -> Probing shows the last result for the probe strategy you ran."}
+{"question": "What probe types does the software support?", "answer": "Z Probe (single-axis Z touch-off) and XYZ Probe (3-side corner-block probing for X, Y, and Z)."}
+{"question": "Why is my XYZ probe origin wrong after probing?", "answer": "Double-check your bit diameter entry on the JOG + BIT step and that the corner block orientation matches what the wizard expects; also check the SafetyBanner for a WCS health-check warning if the offset looks abnormally large."}
+{"question": "Can I re-probe if I'm not happy with the result?", "answer": "Yes -- reopen the Probe wizard from the Sidebar and run the cycle again; it will overwrite the previous zero."}
+{"question": "Is there a way to run probing without the full wizard?", "answer": "Settings -> CNC -> Probing lets you click a probe-strategy card directly and run it from there, outside the full guided wizard."}
+{"question": "What icon represents the Probe feature?", "answer": "A crosshair icon, both on the Sidebar Probe button and internally in App.tsx's probing state."}
+{"question": "Does probing home the machine first?", "answer": "No, probing and homing are separate operations -- home the machine (Home button) before probing so your machine coordinates are known."}
+{"question": "Can I cancel a probe cycle mid-way?", "answer": "Yes, the probing wizard's PROBE step shows live status with a way to stop the cycle; you can also press Escape as a stop shortcut."}
+{"question": "What's the bit diameter field used for in probing?", "answer": "It offsets the touch-off point by half the bit's radius so the calculated zero accounts for the tool's actual center, not just where the outer edge touched."}
+{"question": "How do I load a G-code file?", "answer": "In the Sidebar's File Management section (top of Prepare/Carve), drag and drop your file onto the drop zone, or click 'Browse for G-Code File'."}
+{"question": "What G-code file types are supported?", "answer": ".nc, .gcode, .txt, .ngc, .cnc, and .tap files are all accepted by the file picker."}
+{"question": "Can I drag and drop my G-code file?", "answer": "Yes -- the File Management drop zone at the top of the Sidebar accepts drag-and-drop directly."}
+{"question": "Where do I see my loaded file's info?", "answer": "Once loaded, the File Management section shows the file name, size, and line count."}
+{"question": "How do I reload the current file?", "answer": "Click 'Reload Current' in the File Management section -- it appears once a file is already loaded."}
+{"question": "Is the Project tab where I load a new file?", "answer": "No -- Project only shows history of files you've already run. Load new files from the Sidebar's File Management section instead."}
+{"question": "Can I load a file from a saved library instead of my computer?", "answer": "Yes -- go to the Library tab -> Custom Library, find your saved file, and click Load on its row."}
+{"question": "How do I keep a copy of my G-code file for later without re-uploading from my computer?", "answer": "Use the Library tab's Custom Library -> Add file button; saved files persist on the backend and survive browser clears."}
+{"question": "What's the keyboard shortcut to open a file?", "answer": "Ctrl+O opens the file picker (same as clicking Browse for G-Code File)."}
+{"question": "Why won't my G-code file load?", "answer": "Check the file extension is one of .nc/.gcode/.txt/.ngc/.cnc/.tap; if it's a valid file that still fails, it may contain unsupported G-code commands the parser can't handle."}
+{"question": "Does loading a file automatically show it in the 3D viewer?", "answer": "Yes -- once loaded, the toolpath renders in the 3D viewer on the Prepare/Carve tab."}
+{"question": "Where does a newly loaded file show up afterward?", "answer": "It's automatically added to the Project tab's job history once loaded."}
+{"question": "Can I watch a folder for new G-code files automatically?", "answer": "Yes -- Settings -> Hardware -> Watch folder lets you enable a folder path and comma-separated extensions; the app will list files that appear there live."}
+{"question": "How large a G-code file can I load?", "answer": "There's no hard-coded size limit documented in the UI, but very large files will take longer to parse and render in the 3D viewer."}
+{"question": "How do I start my job?", "answer": "Press the Space key once your file is loaded and you're on the Carve tab -- there's currently no dedicated on-screen Start button."}
+{"question": "How do I pause a running job?", "answer": "Press Space while the job is running to pause it; press Space again to resume."}
+{"question": "How do I stop a job?", "answer": "Press Escape to stop the currently running job."}
+{"question": "Is there a Start/Pause/Stop button panel?", "answer": "Not currently active in this build -- the on-screen job-control bar component exists in the code but isn't mounted anywhere in the app yet. Use the Space (start/pause/resume) and Escape (stop) keyboard shortcuts."}
+{"question": "Why can't I find a Start button for my job?", "answer": "There isn't one wired up right now -- use the Space key to start/pause/resume and Escape to stop. This is a known gap, not something you're missing."}
+{"question": "Can I resume a job after pausing?", "answer": "Yes, press Space again while paused to resume from where it stopped."}
+{"question": "What happens if I press Escape during a job?", "answer": "It stops the job immediately."}
+{"question": "Do I need to be on the Carve tab to run a job?", "answer": "The Carve tab is where you typically run jobs, and other tabs get locked once a job starts running or is paused."}
+{"question": "Can I switch tabs mid-job?", "answer": "No -- while running or paused, only the Carve tab stays accessible; other tabs are locked until the job finishes or is stopped."}
+{"question": "How do I control coolant during a job?", "answer": "Sidebar -> Controls sub-tab has Mist/Flood/Stop buttons (M7/M8/M9)."}
+{"question": "How do I control the spindle or laser during a job?", "answer": "Sidebar -> Controls sub-tab: Spindle mode has CW/CCW/Stop (M3/M4/M5) and an RPM slider; Laser mode has power % and a test-fire button."}
+{"question": "How do I override my feed rate while running?", "answer": "Sidebar -> Controls sub-tab has a feed-rate override slider you can adjust live during a job."}
+{"question": "How do I home my machine?", "answer": "Click the Home icon/dropdown in the top header bar next to the logo, or go to Sidebar -> Position tab and click HOME ALL."}
+{"question": "Can I home just one axis?", "answer": "Yes -- the Sidebar's Position tab has a per-axis Home button in each axis row, in addition to the HOME ALL button."}
+{"question": "What's the keyboard shortcut to home the machine?", "answer": "Press the Home key on your keyboard to home all axes."}
+{"question": "What order do the axes home in?", "answer": "The homing overlay shows the sequence as Z first, then X, then Y."}
+{"question": "What does the homing screen show while it's running?", "answer": "A full-screen overlay showing per-axis progress with spinner/check/fail icons, and an Abort button."}
+{"question": "How do I cancel homing mid-way?", "answer": "Click the Abort button on the full-screen homing overlay."}
+{"question": "Does the homing overlay close automatically?", "answer": "Yes, it auto-dismisses after about 90 seconds of no activity if it wasn't manually closed."}
+{"question": "Why did homing fail on one axis?", "answer": "The homing overlay marks the failed axis with a fail icon -- check that axis's limit switch wiring and that nothing is physically blocking that axis's travel."}
+{"question": "Is there a home option in the Home menu dropdown besides Home All?", "answer": "The Home menu dropdown (header icon) is actually for Machine Information, Device Info, and Ethernet settings -- individual axis homing is done from the Sidebar's Position/Jog tabs, not from that dropdown."}
+{"question": "Do I need to home before probing?", "answer": "Yes, it's strongly recommended -- home first so your machine coordinates are known and accurate before you probe or zero your work origin."}
+{"question": "How do I zero my work coordinates?", "answer": "Go to Sidebar -> Position tab and click ZERO ALL, or use the per-axis Zero button in each row of the position table."}
+{"question": "What's the keyboard shortcut to zero all axes?", "answer": "Ctrl+Z zeros all axes at the current position."}
+{"question": "Can I zero just one axis?", "answer": "Yes -- each axis row in the Sidebar's Position tab has its own Zero button."}
+{"question": "Where do I set my work origin?", "answer": "Sidebar -> Position tab -- move to the desired point (by jogging or probing) and click ZERO ALL or a per-axis Zero button to set that point as origin."}
+{"question": "What's the difference between Work Position and Machine Position?", "answer": "Machine Position is absolute, relative to the machine's home switches. Work Position is relative to your zeroed origin (G54 etc.) -- both are shown side by side in the Position tab and DRO."}
+{"question": "Does zeroing affect Machine Position or Work Position?", "answer": "Zeroing sets your Work Position offset (the active WCS) to zero at the current point; Machine Position is unaffected."}
+{"question": "Can I manually type in a coordinate value instead of zeroing at the current point?", "answer": "The standalone Digital Readout component has click-to-edit work-position fields, but note this path is currently a stub in this build and doesn't push the value to the controller -- use the Sidebar Position tab's Zero buttons for reliable behavior instead."}
+{"question": "What work coordinate systems (WCS) are supported?", "answer": "G54 through G59, selectable from a WCS dropdown in places like Settings -> CNC -> Probing and the Digital Readout component."}
+{"question": "Why does my Zero All button on the Device panel's DRO not do anything?", "answer": "That specific Zero All/Zero XY/Zero Z button set on the Device panel's DRO view is currently non-functional in this build -- use the Sidebar's Position tab ZERO ALL button instead, which is the working path."}
+{"question": "How do I confirm my zero was set correctly?", "answer": "After zeroing, check the Work Position values in the Position tab or StatusBar -- they should read 0 (or very close to it) on the axes you zeroed."}
+{"question": "What do I do if my machine shows an alarm?", "answer": "A full-screen popup appears with Clear Alarm and Clear Limit buttons; click Clear Alarm to unlock the controller."}
+{"question": "How do I clear a limit switch trip?", "answer": "In the alarm popup, click Clear Limit, or jog off the switch first if the popup requires it, then Clear Alarm."}
+{"question": "What does Reset Motors do?", "answer": "It appears in the alarm popup specifically for motor errors, and resets the affected motor driver(s) -- check the Details dropdown to see which axis/motor tripped."}
+{"question": "Where else can I clear an alarm besides the popup?", "answer": "The bottom StatusBar shows an ALARM badge with its own inline Clear button, and the Sidebar's Position/Jog tabs show inline alarm banners with per-motor Reset buttons."}
+{"question": "What does the ALARM badge in the status bar do?", "answer": "It appears when the machine is in an alarm state and has a Clear button to unlock it, same effect as the full-screen popup."}
+{"question": "How do I see which specific axis or motor caused the alarm?", "answer": "Click Details on the alarm popup -- it shows which axis/motor tripped along with a per-motor Reset button."}
+{"question": "My machine won't move and there's no visible error -- what should I check?", "answer": "Check the StatusBar for an ALARM badge and the Sidebar for inline alarm banners -- the machine may be locked out even if no full-screen popup appeared."}
+{"question": "What is the Z runaway abort warning?", "answer": "A critical SafetyBanner warning (marked with a stop icon) shown when the Z-axis watchdog detects an unexpected Z drop during a stream and aborts it; it reports the drop distance, time window, and threshold. It auto-dismisses after 60 seconds."}
+{"question": "What does 'WCS health check failed' mean?", "answer": "A SafetyBanner warning shown when your G54 (or other) offset exceeds a safety threshold, suggesting possible NVRAM corruption. The recommended fix is: home, re-zero, then power-cycle the controller."}
+{"question": "What is a 'Pre-flight BLOCKED' message?", "answer": "A SafetyBanner alert shown when toolpath validation finds moves that go out of your machine's bounds before a job even starts. It lists the top 3 issues and, if the offset looks large (over 50mm), warns your WCS may be corrupt."}
+{"question": "Can I override a Pre-flight BLOCKED warning?", "answer": "Yes -- there's an 'Arm override' button that lets the next Start proceed anyway, one time only. Use it carefully and only if you're confident the bounds check is a false positive."}
+{"question": "Why does my alarm keep coming back after I clear it?", "answer": "This usually means the underlying trigger (a limit switch still engaged, a real mechanical block, or a wiring fault) hasn't been resolved -- clearing the alarm doesn't fix the root cause."}
+{"question": "What's the difference between an alarm and a motor error?", "answer": "Alarms are general GRBL lockout states (limits, e-stop, etc.) cleared with Clear Alarm/$X. Motor errors are driver-level faults on a specific axis, cleared with the Reset Motors option shown in the alarm popup's Details view."}
+{"question": "Does the app warn me before letting me run a job with a bad origin?", "answer": "Yes -- the Pre-flight BLOCKED SafetyBanner runs a toolpath validation and blocks the run if it detects out-of-bounds moves, which often indicates a bad/corrupt work origin."}
+{"question": "How urgent is the Z runaway abort warning?", "answer": "Very -- it's flagged critical (🛑) because it means the Z axis moved further/faster than expected during a cut; stop and physically inspect the machine before resuming."}
+{"question": "Where do I see connection errors?", "answer": "The status pill on the Device tab and the connection dot in the StatusBar both show Connection Error if the serial link drops or fails."}
+{"question": "How do I turn on coolant?", "answer": "Sidebar -> Controls sub-tab has Mist and Flood buttons (M7/M8 respectively)."}
+{"question": "How do I turn off coolant?", "answer": "Click the Stop button (M9) in the Coolant section of the Sidebar's Controls tab."}
+{"question": "What's the difference between Mist and Flood coolant?", "answer": "Mist sends M7 (air/mist coolant), Flood sends M8 (flood coolant) -- pick whichever your setup uses."}
+{"question": "Where is the coolant control?", "answer": "Sidebar -> Controls sub-tab, in the Coolant section alongside Spindle/Laser and Feed override."}
+{"question": "Can I run mist and flood coolant at the same time?", "answer": "The UI exposes separate Mist/Flood/Stop buttons; whether both can be active depends on your controller/machine wiring, not the UI itself."}
+{"question": "Does stopping a job also stop coolant?", "answer": "Coolant is controlled independently via M-codes from the Controls tab; always verify coolant/spindle state manually after stopping a job."}
+{"question": "Is there a coolant status indicator?", "answer": "The Coolant section's Mist/Flood/Stop buttons reflect the current commanded state, but check your controller's own status if in doubt."}
+{"question": "How do I turn on my spindle?", "answer": "Sidebar -> Controls tab, Spindle/Laser section -> click CW (M3) or CCW (M4), and set your RPM with the slider."}
+{"question": "How do I stop the spindle?", "answer": "Click the Stop button (M5) in the Spindle/Laser section of the Controls tab."}
+{"question": "How do I set spindle RPM?", "answer": "Use the RPM slider in the Spindle/Laser section of the Sidebar's Controls tab."}
+{"question": "How do I switch to laser mode?", "answer": "The Spindle/Laser section of the Controls tab has a Laser mode with a power % control and a test-fire button, separate from spindle CW/CCW/RPM controls."}
+{"question": "What does test-fire do in laser mode?", "answer": "It fires the laser briefly at the set power % so you can check alignment/focus without running a full job."}
+{"question": "Can I run the spindle in reverse?", "answer": "Yes -- CCW (M4) runs it in reverse; CW (M3) is the normal direction."}
+{"question": "Where do I set max spindle RPM for my machine?", "answer": "That's a per-profile setting -- Device tab -> Profiles, each Machine Profile stores a spindleMaxRpm value."}
+{"question": "Is spindle RPM control available during a running job?", "answer": "Yes, the Spindle/Laser section in the Controls tab is available live, including during a job."}
+{"question": "How do I know if my spindle or laser is currently on?", "answer": "The CW/CCW/Stop (or laser power) buttons reflect the last commanded state in the Controls tab -- always visually confirm on the machine too before approaching it."}
+{"question": "Can I set laser power without firing it?", "answer": "Yes -- adjust the power % control; it only fires when you press test-fire or when a job issues a laser-on command."}
+{"question": "How do I override my feed rate during a job?", "answer": "Sidebar -> Controls tab has a feed-rate override slider you can adjust while a job is running."}
+{"question": "Where is the feed override control?", "answer": "In the Controls sub-tab of the Sidebar, alongside Coolant and Spindle/Laser controls."}
+{"question": "Does feed override change my G-code file?", "answer": "No, it's a live multiplier sent to the controller -- your original G-code file is unchanged."}
+{"question": "Can I reset feed override back to 100%?", "answer": "Yes, move the feed-override slider back to its 100% position in the Controls tab."}
+{"question": "Is feed override available before I start a job, or only during?", "answer": "The slider is present in the Controls tab regardless of job state, but it has the most effect while a job is actively running."}
+{"question": "What's a safe way to slow down mid-cut if something looks wrong?", "answer": "Reduce the feed-override slider in the Controls tab rather than stopping abruptly, if a graceful slowdown is safer for your situation; use Escape to stop if it's not."}
+{"question": "Where do I see the 3D toolpath of my G-code?", "answer": "It's shown automatically in the main viewport whenever you're on the Prepare or Carve tab -- there's no separate toggle for it."}
+{"question": "How do I open the 3D viewer?", "answer": "You don't need to -- it's the default main view on Prepare and Carve once a file is loaded."}
+{"question": "Can I rotate/pan/zoom the 3D view?", "answer": "Yes, the 3D viewer supports standard orbit-style camera controls (rotate, pan, zoom) with your mouse."}
+{"question": "Does the 3D view show the current job progress?", "answer": "It renders your loaded toolpath; live progress indication depends on the current build's wiring to job-state events."}
+{"question": "Why don't I see my toolpath in the 3D view?", "answer": "Make sure a G-code file is actually loaded via the Sidebar's File Management section -- the viewer only shows a path once a file has been parsed."}
+{"question": "Is there a 2D toolpath preview as an alternative to the 3D view?", "answer": "No -- there was an earlier 2D/alternate 3D viewer component built at one point, but it isn't reachable in the current running app. The 3D viewer on Prepare/Carve is the only toolpath view available."}
+{"question": "Can I measure distances in the 3D viewer?", "answer": "There's no dedicated measurement tool in the 3D viewer at this time -- use the Position/DRO readouts while jogging to check real distances."}
+{"question": "Where is the camera view?", "answer": "A collapsible camera panel sits at the bottom of the left Sidebar on the Prepare and Carve tabs."}
+{"question": "How do I add a camera?", "answer": "Go to Settings -> Hardware -> Cameras, and add your camera's connection details there."}
+{"question": "What camera types are supported?", "answer": "Three types: mjpeg-url (proxy an existing MJPEG stream URL), rtsp (an RTSP camera, transcoded via ffmpeg), and v4l2 (a USB camera plugged into the machine running the backend)."}
+{"question": "How do I expand or fullscreen the camera view?", "answer": "Click the camera panel header to expand/collapse it in the Sidebar, or use the fullscreen button to open it as a full-screen overlay."}
+{"question": "Why does my camera panel say 'No signal'?", "answer": "It means the configured camera isn't currently streaming -- check the camera's last error message shown in the panel, and verify its URL/device path in Settings -> Cameras."}
+{"question": "Can I have more than one camera?", "answer": "Yes -- if more than one camera is configured, a selector dropdown appears in the camera panel's footer to switch between them."}
+{"question": "How do I close the fullscreen camera view?", "answer": "Click the X button in the fullscreen overlay's top bar, press Escape, or click outside the video area."}
+{"question": "Does the camera view record video?", "answer": "No, it's a read-only live display only -- there's no recording feature in the UI."}
+{"question": "Where do I remove a camera I no longer need?", "answer": "Settings -> Hardware -> Cameras -- find it in the list and delete it from there."}
+{"question": "Why is there a REC indicator on the camera panel?", "answer": "It's a visual indicator that the stream is actively receiving frames (shown when the feed is loading successfully), not an actual video recording feature."}
+{"question": "Can I use my phone as an IP camera for this?", "answer": "Yes, if your phone app can serve an MJPEG stream URL, add it as an mjpeg-url camera type in Settings -> Cameras."}
+{"question": "What's the timestamp overlay on the camera view?", "answer": "It's a live clock overlay shown on the video feed, useful for confirming the stream is live and not frozen."}
+{"question": "How do I create a macro?", "answer": "Sidebar -> Macros sub-tab -> Add Macro, then fill in a Macro Name and the G-code Commands (one command per line)."}
+{"question": "How do I run a saved macro?", "answer": "Click the Run (▶) button next to the macro in the Sidebar's Macros tab -- it sends each line to the controller with a short delay between commands."}
+{"question": "How do I edit a macro?", "answer": "Click the Edit (✎) icon next to the macro in the Macros tab."}
+{"question": "How do I delete a macro?", "answer": "Click the Delete (🗑) icon next to the macro in the Macros tab."}
+{"question": "Are there built-in preset macros?", "answer": "No -- the Macros tab starts empty ('No macros created yet'); you create your own from scratch."}
+{"question": "Will my macros still be there if I reload the page?", "answer": "No -- macros are currently stored only in memory for the session, not saved to a file or the backend, so they're lost on page reload. Recreate important macros or keep a copy of the G-code elsewhere."}
+{"question": "Can a macro run while the machine is disconnected?", "answer": "No -- the Run button is disabled if the machine isn't connected."}
+{"question": "Can I give a macro an icon or category?", "answer": "No, macros only have a Name field and a G-code Commands textarea -- no icon or category field exists."}
+{"question": "What kind of commands can I put in a macro?", "answer": "Any G-code/M-code commands, one per line -- for example a tool-change sequence, a park position, or a spindle warm-up routine."}
+{"question": "Is there a limit to how many macros I can create?", "answer": "No documented limit in the UI -- practically limited by available memory since they're stored client-side only."}
+{"question": "Can macros take parameters/variables?", "answer": "No, macros are static G-code text -- there's no variable/parameter substitution feature."}
+{"question": "How fast does a macro run through its commands?", "answer": "Each line is sent with a roughly 100ms stagger between commands."}
+{"question": "Where would I put a 'go to tool-change position' macro?", "answer": "Create it once in the Macros tab (e.g. name it 'Tool Change', add the G-code to move to your safe change position), then just click Run whenever you need it."}
+{"question": "Can I reorder my macros?", "answer": "There's no drag-to-reorder feature in the current Macros tab -- they display in creation order."}
+{"question": "Do macros show up in the console log when run?", "answer": "Yes, macro command output/log lines appear in the shared Console log along with every other action in the app."}
+{"question": "How do I send a raw G-code command manually?", "answer": "Sidebar -> Console sub-tab, type your command in the input field, and press Enter or click Send."}
+{"question": "Where is the console?", "answer": "Sidebar -> Console sub-tab -- it's a single-line command input with a scrolling output log above it."}
+{"question": "Does the console show command history I can scroll through with arrow keys?", "answer": "No -- there's no up-arrow command-history recall implemented; you have to retype commands."}
+{"question": "What do the different colors in the console log mean?", "answer": "Console lines are color-coded by type: info, success, warning, error, and system, each with its own icon."}
+{"question": "Does the console only show commands I type, or everything?", "answer": "Everything -- jog moves, zeroing, homing, macro runs, file loads, and EEPROM writes all log to the same console output, not just manually typed commands."}
+{"question": "Can I collapse the console log?", "answer": "Yes, the console's header is collapsible and shows a line count when collapsed."}
+{"question": "Does the console auto-scroll?", "answer": "Yes, it auto-scrolls to show the latest output as new lines arrive."}
+{"question": "Can I clear the console log?", "answer": "Check the console header controls in the Console sub-tab for a clear option alongside the collapse toggle."}
+{"question": "What's the console useful for that the rest of the UI doesn't cover?", "answer": "Sending one-off G-code/M-code commands that don't have a dedicated button, like custom $-settings queries or specific G-code test moves."}
+{"question": "What is the Library tab for?", "answer": "It has three sections: Custom Library (your saved G-code files), FILEFINITY (a link to the Onefinity community forum), and Documentation (placeholder, coming soon)."}
+{"question": "How do I save a file to my Custom Library?", "answer": "Go to Library -> Custom Library and click 'Add file' to upload a G-code file that will persist on the backend."}
+{"question": "How is Custom Library different from just loading a file from my computer?", "answer": "Custom Library files are saved server-side and persist even if you clear your browser -- useful for files you run repeatedly."}
+{"question": "How do I load a file from my Custom Library?", "answer": "Find it in the Custom Library table and click Load on its row -- it parses the file and loads it into the visualizer/sender, same as loading fresh."}
+{"question": "How do I delete a file from my Custom Library?", "answer": "Click the trash/delete icon on that file's row in the Custom Library table."}
+{"question": "What info does the Custom Library table show per file?", "answer": "Name, filename, date saved, and file size."}
+{"question": "What is FILEFINITY?", "answer": "It's a link that opens the Onefinity community forum in a new browser tab -- it's external content, not part of this app."}
+{"question": "Is the Documentation section in the Library tab usable yet?", "answer": "No, it's a placeholder marked 'Coming soon' with no link destination yet."}
+{"question": "Can I organize my Custom Library into folders?", "answer": "No, it's a flat table of files -- there's no folder/category structure currently."}
+{"question": "Does loading from the Custom Library also add the file to my Project history?", "answer": "Yes -- loading any file, including from the Custom Library, automatically adds an entry to the Project tab's job history."}
+{"question": "Where do I see my past jobs?", "answer": "The Project tab shows a job history list, saved locally in your browser."}
+{"question": "What info is shown for each past job?", "answer": "Filename, how long ago it last ran, a status badge, line count, duration, and file size."}
+{"question": "Is my job history saved if I close the browser?", "answer": "Yes, it's persisted to your browser's local storage under the key 'cncProjects', so it survives closing and reopening the app."}
+{"question": "Can I re-run a job from history?", "answer": "There's a 'Run Again' option in the row menu, but note it currently only logs to the console and isn't wired to actually restart the job in this build -- reload the file fresh from File Management or the Library instead."}
+{"question": "Does the status badge on a job (completed/failed/running) update automatically?", "answer": "Not reliably in this build -- job status isn't fully wired to real job events yet, so entries often stay showing 'pending' regardless of actual outcome."}
+{"question": "How do I delete a job history entry?", "answer": "Use the Delete option in that entry's '⋮' menu or its detail panel."}
+{"question": "Can I export my job history?", "answer": "No export option is currently available for Project history."}
+{"question": "How do I see more detail about a specific past job?", "answer": "Click 'View Details' in that job's '⋮' menu to open a detail side panel."}
+{"question": "How do I create a custom machine profile?", "answer": "Device tab -> Profiles -> fill out the full profile form (work area, max feed, acceleration, steps/mm, spindle max RPM) and save."}
+{"question": "How do I switch which profile is active?", "answer": "Device tab -> Profiles, select the profile you want, and click 'Use Profile'."}
+{"question": "Can I delete a machine profile?", "answer": "Yes for custom profiles you created -- the 5 built-in profiles (Generic 3018, Shapeoko 3, X-Carve 750mm, OpenBuilds LEAD 1010, Onefinity Woodworker) can't be deleted."}
+{"question": "How do I share a machine profile with someone else?", "answer": "Export it as JSON from the Profiles section, then they can Import it on their own install."}
+{"question": "What does 'Apply to Controller EEPROM' do?", "answer": "It writes every setting in the active profile's derived EEPROM map as $id=value commands to your connected controller -- it asks for confirmation first since this changes your machine's actual firmware settings."}
+{"question": "Which GRBL settings does a profile control?", "answer": "$100-102 (steps/mm), $110-112 (max feed), $120-122 (acceleration), $130-132 (max travel), $30 (spindle max RPM), $22 (homing enable), and $20 (soft limits)."}
+{"question": "Do I need to reconnect after applying a profile to EEPROM?", "answer": "Not necessarily, but it's good practice to verify your settings with Device -> Firmware -> Read $$ after applying a profile."}
+{"question": "What profile should I use for a Onefinity Woodworker?", "answer": "Select the built-in 'Onefinity Woodworker' profile from Device -> Profiles and click Use Profile."}
+{"question": "Can I have multiple custom profiles for different machines?", "answer": "Yes, create as many custom profiles as you need and switch between them from the Profiles section."}
+{"question": "Is switching profiles instant or does it require a machine restart?", "answer": "Selecting a profile updates the app/store state immediately; if you also click 'Apply to Controller EEPROM', that writes to the physical controller, which is a separate step."}
+{"question": "How do I switch between light and dark theme?", "answer": "Settings -> General -> Appearance -- pick between the default dark 'Carbon Orange' theme and the 'Stack Overflow Light' theme."}
+{"question": "Does my theme choice get remembered?", "answer": "Yes, it's saved to your browser's local storage and applied automatically on future visits."}
+{"question": "Does the theme change apply immediately?", "answer": "Yes, it live-applies as soon as you pick it -- no save/reload button needed."}
+{"question": "What's the default theme?", "answer": "The 'Carbon Orange' dark theme is the default."}
+{"question": "Are there more than 2 themes?", "answer": "Currently just the two: Carbon Orange (dark) and Stack Overflow Light (light)."}
+{"question": "How do I set up job notifications on my phone?", "answer": "Settings -> General -> Notifications -- pair via QR code (WhatsApp) or set up the Telegram bot, add your phone number in E.164 format, and enable the events you want."}
+{"question": "What events can trigger a notification?", "answer": "Job start, job end, job error, and alarm events can each be toggled independently."}
+{"question": "Can I limit how often notifications are sent?", "answer": "Yes, there's a throttle-interval setting to prevent notification spam."}
+{"question": "Can notifications include my machine's current position?", "answer": "Yes, there's an 'include position' toggle in the Notifications settings."}
+{"question": "How do I test that notifications are working?", "answer": "Settings -> Notifications has send-test buttons to verify your WhatsApp/Telegram setup before relying on it."}
+{"question": "Can I use Telegram slash commands to control the machine?", "answer": "Yes, the Notifications settings include a slash-command bot configuration, with a bot-eye webcam picker so remote commands can show you a live camera view."}
+{"question": "How do I add multiple recipients for notifications?", "answer": "The recipient list in Settings -> Notifications accepts multiple phone numbers in E.164 format."}
+{"question": "What format should I enter my phone number in for WhatsApp notifications?", "answer": "E.164 format, e.g. +1XXXXXXXXXX."}
+{"question": "Do notifications work for both WhatsApp and Telegram?", "answer": "Yes, the same Notifications settings page covers both channels."}
+{"question": "Can I turn off all notifications quickly?", "answer": "Yes, toggle off the individual event switches (job:start/end/error/alarm) in Settings -> Notifications, or remove the recipient/bot pairing."}
+{"question": "What does the Watch folder setting do?", "answer": "It monitors a folder on disk for new G-code files and lists them live in Settings -> Hardware -> Watch folder."}
+{"question": "How do I enable folder watching?", "answer": "Settings -> Hardware -> Watch folder -- toggle it on and enter the folder path."}
+{"question": "Can I limit which file types the watch folder picks up?", "answer": "Yes, enter a comma-separated list of extensions in the Watch folder settings."}
+{"question": "Where do watched files show up?", "answer": "They appear as a live file listing directly within the Watch folder settings section."}
+{"question": "Do I still need to click Load for a watched file?", "answer": "Yes, the watch folder just surfaces new files for convenience -- you still load them like any other file."}
+{"question": "Does the watch folder work if the app is running on a different machine than the folder?", "answer": "No, the watched path must be accessible to the backend process serving the app, since it's a server-side folder scan."}
+{"question": "How do I surface my spoilboard?", "answer": "Settings -> CNC -> Surfacing -- it wraps the surfacing tool where you set your area and generate a facing toolpath."}
+{"question": "Where is the surfacing tool?", "answer": "Settings tab -> CNC -> Surfacing section."}
+{"question": "Can I set a custom surfacing area?", "answer": "Yes, the Surfacing section lets you define the area to be faced."}
+{"question": "Does surfacing generate G-code I need to load separately, or does it run directly?", "answer": "The Surfacing tool generates the facing toolpath within that section -- check the section for its own run/generate controls once you've set your area."}
+{"question": "What settings does the surfacing tool expose?", "answer": "It's the existing SurfacingTool wrapped into Settings -> CNC -> Surfacing -- covers your facing area and related toolpath parameters."}
+{"question": "Is surfacing available without loading a separate G-code file?", "answer": "Yes, it's a built-in tool that generates its own toolpath rather than requiring you to load a pre-made file."}
+{"question": "How do I set my default probing strategy?", "answer": "Settings -> CNC -> Probing lists probe strategies as cards -- click one to select/run it as your active strategy."}
+{"question": "Can I choose the WCS my probe writes to from Settings?", "answer": "Yes, Settings -> CNC -> Probing has a WCS (G54-G59) picker."}
+{"question": "Where do I see if my last probe succeeded?", "answer": "Settings -> CNC -> Probing shows the last result for whichever strategy you ran."}
+{"question": "Is the Probing section in Settings the same as the Probe wizard in the Sidebar?", "answer": "They're related but distinct entry points -- the Sidebar's Probe button opens the full guided wizard; Settings -> CNC -> Probing lets you run a strategy directly from a card without the wizard steps."}
+{"question": "Can I add a custom probing strategy?", "answer": "The Probing settings section presents strategies as selectable cards; check that section directly for whether custom strategies can be added versus only built-in ones."}
+{"question": "Why would I use Settings -> Probing instead of the Sidebar wizard?", "answer": "It's faster if you already know your setup and just want to pick a strategy and WCS and run it, skipping the guided jog/bit-diameter steps."}
+{"question": "How do I add a tool to my tool library?", "answer": "Settings -> CNC -> Tools -- click Add and fill in number, name, diameter, flutes, stickout, material/coating, and default feeds."}
+{"question": "What info does each tool entry store?", "answer": "Tool number, name, diameter, flute count, stickout length, material/coating, default feed rate, plunge rate, RPM, stepdown, stepover, and notes."}
+{"question": "Can I edit a tool after adding it?", "answer": "Yes, each tool in the Tools section can be edited or deleted."}
+{"question": "Why would I set default feed/plunge/RPM per tool?", "answer": "So that when you select that tool elsewhere in the workflow, its known-good cutting parameters are readily available instead of you having to remember them."}
+{"question": "Can I add notes to a tool?", "answer": "Yes, there's a notes field per tool entry in Settings -> CNC -> Tools."}
+{"question": "Does the tool library affect my actual G-code output?", "answer": "The Tools section is a reference library of your bits and their parameters -- check whether your specific workflow (e.g. surfacing) pulls from it directly, but it's primarily there for your own reference/consistency."}
+{"question": "How do I delete a tool from the library?", "answer": "Find it in Settings -> CNC -> Tools and use its delete action."}
+{"question": "What's stepdown and stepover used for?", "answer": "They're cutting parameters stored per-tool: stepdown is how deep each pass cuts, stepover is how much each pass overlaps the previous one sideways."}
+{"question": "Where do I see a permanent record of jobs I've run, not just the browser-local one?", "answer": "Settings -> Activity -> Job history -- these are backend-persisted records, unlike the Project tab's browser-local list."}
+{"question": "What does a Job history entry in Settings show?", "answer": "An outcome pill (ok/fail/aborted), filename, controller, line count, duration, and start/end timestamps -- plus error text if it failed."}
+{"question": "Is there a summary of all my jobs?", "answer": "Yes, Settings -> Activity -> Job history has a stats bar: total jobs, ok count, fail count, aborted count, and total runtime."}
+{"question": "How do I delete a job history record?", "answer": "Use the per-row delete option, or 'Clear all' to wipe the entire backend job history."}
+{"question": "What's the difference between Project tab history and Settings Activity job history?", "answer": "Project tab history is stored in your browser's local storage and less reliably tracks status; Settings -> Activity -> Job history is backend-persisted and includes richer detail like error text and exact timestamps."}
+{"question": "What's always visible in the bottom status bar?", "answer": "Connection status, machine state (IDLE/RUNNING/PAUSED/ALARM/OFFLINE), active WCS, units, live work position when connected, and firmware type/version."}
+{"question": "Where do I check the machine's current state at a glance?", "answer": "The bottom StatusBar's state badge (IDLE/RUNNING/PAUSED/ALARM/OFFLINE) is always visible."}
+{"question": "Does the status bar show job progress percentage?", "answer": "No, job progress % isn't shown in the StatusBar in this build."}
+{"question": "What does REMOTE DIAG mean in the status bar?", "answer": "It's a badge that appears when a remote diagnostic mirror session is active."}
+{"question": "Where do I see my active work coordinate system at a glance?", "answer": "The StatusBar shows the active WCS (e.g. G54) at all times."}
+{"question": "Does the status bar show units in mm or inches?", "answer": "It shows whichever unit is set in app preferences, though note the DRO/jog display elsewhere is currently hardcoded to mm."}
+{"question": "What does the Digital Readout show?", "answer": "Work Position and Machine Position per axis (X/Y/Z), color-coded, with an optional A-axis row shown only if your firmware reports a connected rotary axis."}
+{"question": "Can I type a coordinate directly into the DRO?", "answer": "The standalone Digital Readout component supports click-to-edit on Work Position values, but note the actual G10 command that would push that value to the controller is currently a stub -- it doesn't take effect yet in this build."}
+{"question": "Is there a units toggle on the DRO?", "answer": "No, both DRO implementations are currently hardcoded to millimeters."}
+{"question": "Where's the reliable place to zero axes if the standalone DRO's buttons don't work?", "answer": "Use the Sidebar's Position tab -- its Zero All and per-axis Zero buttons are the working, wired-up path."}
+{"question": "What's shown in the inline Position tab DRO versus the standalone Digital Readout component?", "answer": "They show similar info (Work + Machine Position per axis), but the Sidebar's Position tab version has fully working Zero/Home buttons, while the standalone Digital Readout component's Zero buttons are currently disabled stubs."}
+{"question": "How do I switch my active WCS from the DRO?", "answer": "The standalone Digital Readout component has a WCS selector dropdown (G54-G59)."}
+{"question": "Does the DRO show connection status?", "answer": "Yes, the standalone Digital Readout component has a connection-status footer."}
+{"question": "Why do my typed DRO values not seem to move my zero point?", "answer": "That specific click-to-edit-and-push-to-controller path is a known stub in this build -- use jogging + the Sidebar Position tab's Zero buttons to set your origin instead."}
+{"question": "What's in the Home menu dropdown at the top of the app?", "answer": "Three sections: Machine Information (profile picker), Device Info (connected port/manufacturer/vendor ID/baud rate, read-only), and Ethernet (connect-to-IP field)."}
+{"question": "Can I switch machine profiles from the Home menu?", "answer": "Yes, the Machine Information section has a profile picker wired to the same Machine Profiles used in the Device tab."}
+{"question": "How do I connect to my controller over Ethernet?", "answer": "Home menu dropdown -> Ethernet section -> enter the IP (default 192.168.5.1) and connect."}
+{"question": "Where do I see my connected port's vendor ID?", "answer": "Home menu dropdown -> Device Info section (read-only, shows 'Not connected' if offline)."}
+{"question": "Is there a keyboard for typing the Ethernet IP on a touchscreen?", "answer": "Yes, there's an on-screen-keyboard launch button next to the Ethernet IP field."}
+{"question": "Does the Home menu let me home individual axes?", "answer": "No -- despite the name, that dropdown is for machine info/device info/Ethernet settings, not axis homing. Use the Sidebar's Position/Jog tabs or the header Home button for actual homing."}
+{"question": "Why were Probe settings removed from the Home menu?", "answer": "That was a deliberate design change -- probe settings now live in the dedicated Probe wizard and Settings -> CNC -> Probing instead."}
+{"question": "What voltage/work-area info shows in Machine Information?", "answer": "If your selected profile includes voltage or work-area data, it displays there; not all profiles include every field."}
+{"question": "When does the on-screen keyboard appear?", "answer": "Only when you tap its keyboard-icon button next to a supported text field -- currently that's the Home menu's Ethernet IP field."}
+{"question": "Is the on-screen keyboard always available on every text field?", "answer": "No, it's opt-in per input and currently only wired to the Ethernet IP field in the Home menu."}
+{"question": "How do I close the on-screen keyboard?", "answer": "Click its Close button, or click anywhere outside the keyboard."}
+{"question": "What layout does the on-screen keyboard use?", "answer": "A numeric row plus a QWERTY-style row layout (rows 1/2/3) -- no full symbol/alphabet keyboard."}
+{"question": "What keyboard shortcuts are available?", "answer": "Arrow keys jog Y/X, Page Up/Down jogs Z, 1-4 set jog step size, Space starts/pauses/resumes a job, Escape stops it, Home key homes all axes, Ctrl+O opens a file, and Ctrl+Z zeros all axes."}
+{"question": "Where can I see the full list of shortcuts in the app?", "answer": "Click the floating quick-help button (usually bottom corner) to open the Keyboard Shortcuts help panel, grouped by Jog/Step/Job/Machine/File."}
+{"question": "Do shortcuts work if I'm typing into a field?", "answer": "No, all shortcuts are automatically disabled while any text input, textarea, or dropdown is focused, to prevent accidental machine moves."}
+{"question": "What key opens a file?", "answer": "Ctrl+O."}
+{"question": "What key zeros all axes?", "answer": "Ctrl+Z."}
+{"question": "What key homes the machine?", "answer": "The Home key on your keyboard."}
+{"question": "What key pauses my job?", "answer": "Space -- it also starts the job if idle, and resumes it if already paused."}
+{"question": "What key stops my job?", "answer": "Escape."}
+{"question": "How do I jog Z with the keyboard?", "answer": "Page Up moves Z+, Page Down moves Z-."}
+{"question": "How do I change jog step size with the keyboard?", "answer": "Press 1 for 0.1mm, 2 for 1mm, 3 for 10mm, or 4 for 100mm."}
+{"question": "Is there a shortcut to toggle the keyboard shortcuts help panel itself?", "answer": "Not currently implemented as a keybinding -- open it via the floating quick-help button click instead."}
+{"question": "Does holding an arrow key move continuously or just one step?", "answer": "Holding it down for more than 350ms triggers continuous jogging, repeating roughly every 120ms, until released."}
+{"question": "What is the SafetyBanner and when do I see it?", "answer": "It's a sticky warning banner area above the main view -- it shows nothing when everything is healthy, and stacks up to 3 different warning types when triggered."}
+{"question": "What are the 3 types of safety warnings I might see?", "answer": "Z runaway abort (critical), WCS health check failed (warning), and Pre-flight BLOCKED (blocks the run entirely)."}
+{"question": "How do I dismiss a SafetyBanner warning?", "answer": "The Z runaway warning auto-dismisses after 60 seconds; the WCS health-check warning has a manual dismiss option; Pre-flight BLOCKED requires either fixing the underlying issue or using the one-time Arm override."}
+{"question": "What should I do after a WCS health check warning?", "answer": "Home the machine, re-zero your work origin, then power-cycle the controller, as recommended by the warning itself."}
+{"question": "What triggers a Pre-flight BLOCKED warning?", "answer": "Toolpath validation detects moves that would go outside your machine's bounds before the job even starts."}
+{"question": "Is Arm override safe to use?", "answer": "Use it only if you're confident the block is a false positive -- it bypasses the bounds check for the very next Start only, then reverts to normal checking."}
+{"question": "How large does a WCS offset error need to be to trigger the corrupt-NVRAM warning?", "answer": "The Pre-flight check flags it as probably corrupt if the offset magnitude is over 50mm, in addition to the general WCS health-check threshold warning."}
+{"question": "Why did my job abort itself mid-cut with no error from me?", "answer": "Check for a Z runaway abort SafetyBanner -- the Z-axis watchdog auto-aborts the stream if it detects an unexpected Z drop beyond its threshold, and reports the drop distance/time-window."}
+{"question": "Nothing happens when I click Connect -- what should I check first?", "answer": "Confirm you selected the correct port from the dropdown, that the baud rate matches your controller, and that no other program (like a separate terminal) is already holding that serial port open."}
+{"question": "My machine is connected but won't jog or run -- what's blocking it?", "answer": "Check for an ALARM badge in the StatusBar or an alarm popup -- most controllers refuse motion commands while in an alarm/locked state until you clear it."}
+{"question": "I loaded a file but the 3D view is empty -- why?", "answer": "Confirm the file actually finished loading (check File Management shows a filename/size/line count) and that it's one of the supported extensions (.nc/.gcode/.txt/.ngc/.cnc/.tap)."}
+{"question": "How do I report a bug or missing feature in the software?", "answer": "This is a fast-moving internal build -- flag it to the EasyCNC team directly rather than looking for an in-app bug-report form, since none exists yet."}
+{"question": "Are there features in the code that aren't actually usable yet?", "answer": "Yes, a few: the on-screen job Start/Pause/Stop button bar isn't mounted (use Space/Escape instead), the standalone Digital Readout's Zero buttons and typed-coordinate push are stub-only, Project history's 'Run Again' only logs to console, and macros aren't persisted across reloads."}
+{"question": "Is there a way to run the app fully offline?", "answer": "The frontend and backend both run locally (backend on port 4000 by default) -- external links like FILEFINITY require internet, but core machine control does not."}
+{"question": "What port does the backend run on by default?", "answer": "Port 4000 (or the PORT environment variable if set)."}
+{"question": "Does the app support touchscreens?", "answer": "Partial support exists via the On-Screen Keyboard for specific fields (currently the Home menu's Ethernet IP field), but it's not a fully touch-optimized UI throughout."}
+{"question": "Can multiple people control the machine from different browsers at once?", "answer": "The backend broadcasts state over a shared socket connection, so multiple open tabs/browsers can view live status, but simultaneous conflicting control commands from multiple users isn't specifically guarded against -- treat one operator at a time as the safe assumption."}
+{"question": "Where should I look first if something in the UI seems broken or unresponsive?", "answer": "Check the Console sub-tab's log for error-colored lines, check for an active SafetyBanner or ALARM badge, and confirm the Device tab still shows Connected."}
+{"question": "What should a new user do their very first time using this software?", "answer": "Connect (Device tab), home the machine (Home button), load a test G-code file (Sidebar File Management), jog to a safe point and probe/zero your origin, then switch to Carve and press Space to start."}

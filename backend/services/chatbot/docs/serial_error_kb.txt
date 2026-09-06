@@ -1,0 +1,1129 @@
+EASYCNC SERIAL MONITOR / CONSOLE ERROR KNOWLEDGE BASE
+For the RAG assistant: match a keyword or phrase from what the user reports
+seeing in the serial monitor, console log, or on-screen alarm banner against
+the KEY lines below, then answer using that entry's MEANS + FIX (+ NAV where
+given, for where to click in the app).
+
+Sourcing (verified 2026-09-03):
+- Sections A-D: exact strings copied from Tawfiq123456/control_software_main
+  backend source (services/controllers/RTSController.js, RSPController.js,
+  services/rsp/defs.js, services/CNCEngine.js, services/probing/ProbingService.js).
+- Section E: standard OS/USB-serial connection errors, generic across platforms.
+- Sections F-G: standard public GRBL v1.1 error/ALARM code spec (applies when
+  EasyCNC's generic GRBL-fallback controller path is active, e.g. a 3rd-party
+  GRBL board, not the primary RTS/RSP protocols).
+- Sections H-I: file-loading behavior confirmed from source, and general CNC
+  wiring/mechanical troubleshooting (root causes behind the alarms above).
+- Sections L-M: exact strings from services/socketHandlers.js, index.js,
+  SerialConnection.js, SerialService.js, library/LibraryService.js,
+  monitor/FSMonitor.js, taskrunner/TaskRunner.js, telegram/TelegramBotService.js,
+  whatsapp/WhatsAppService.js.
+Total entries: 200
+======================================================================
+
+
+######################################################################
+# A. EasyCNC — RTS protocol (primary controller)
+######################################################################
+
+--- Entry 1 ---
+KEY: ALARM: Machine locked (code N). Press Reset to clear.
+MEANS: Board reported its stateByte as an alarm state (limit trip, e-stop, or a fault the firmware latched).
+FIX: Go to Device tab or the alarm popup and click Clear Alarm. If it re-triggers immediately, a limit switch is still physically pressed or a motor ALM line is stuck low — check wiring before clearing again.
+NAV: Alarm popup / Sidebar > Position > Clear Alarm
+
+--- Entry 2 ---
+KEY: MOTOR ERROR: Closed-loop position error detected! Position: X=.. Y=.. Z=..
+MEANS: The board's closed-loop control detected the commanded position and actual encoder/step position have diverged past tolerance on one or more motors.
+FIX: Press Reset to clear, then check the motor's coupling/belt for slipping and the driver's current setting — an undersized current limit causes missed steps under load, which looks identical to this.
+NAV: Alarm popup > Reset, or Sidebar > Position > per-motor Reset
+
+--- Entry 3 ---
+KEY: HOMING TIMEOUT on <axis> — limit switch not triggered. Check wiring.
+MEANS: During the homing cycle, that axis moved its full search distance without the limit switch ever reporting triggered.
+FIX: Check the switch's physical wiring (signal + GND), confirm it isn't wired to the wrong axis's input, and jog the axis manually toward the switch to confirm it changes state (Sidebar > Jog, watch the alarm banner).
+NAV: Sidebar > Jog (to test) then Home icon in header to retry
+
+--- Entry 4 ---
+KEY: Homing cancelled by E-STOP
+MEANS: The E-stop was pressed (or the E-stop input tripped) while a homing cycle was in progress.
+FIX: Clear the E-stop physically, press Reset in the app, then re-run Home.
+NAV: Home icon in top header
+
+--- Entry 5 ---
+KEY: *** EMERGENCY STOP — all motion halted ***
+MEANS: Software or hardware e-stop fired; RTS abort frame (01 05 00 03 FF) was sent, all motion stopped immediately.
+FIX: Confirm the physical e-stop button is released, then use the E-STOP clear button in the job bar or alarm popup before resuming.
+NAV: JobControlBar E-STOP button / alarm popup
+
+--- Entry 6 ---
+KEY: E-STOP clear sent...
+MEANS: Host sent the command to clear a latched e-stop condition on the board.
+FIX: Wait for the board to report a ready/idle state; if it stays in alarm, the physical e-stop switch itself may still be pressed or wired normally-closed and broken open.
+
+--- Entry 7 ---
+KEY: Limit error cleared — machine ready
+MEANS: A previously-tripped limit switch alarm has been successfully cleared and the board reports ready.
+FIX: No action needed — this is a confirmation, not an error. If it re-alarms right after jogging, the switch may be mis-adjusted (triggering too early in travel).
+
+--- Entry 8 ---
+KEY: Motor errors: <list> / All motor errors cleared
+MEANS: One or more of X/Y1/Y2/Z motors reported an ALM (fault) line; the second variant is the all-clear confirmation after Reset.
+FIX: Reset the specific motor(s) named. If the same motor keeps faulting, check its driver's fault output wiring and that its current/microstep DIP switches match firmware expectations.
+NAV: Sidebar > Position, per-motor Reset button
+
+--- Entry 9 ---
+KEY: Config: <parameter> = <value>
+MEANS: Board acknowledged a firmware configuration parameter was read or set (e.g. steps/mm, max travel).
+FIX: Informational only — confirm the value matches what you expect for that axis; a wrong value here (like max_travel=0) is a known cause of ECSS pre-flight false positives.
+NAV: Settings > CNC
+
+--- Entry 10 ---
+KEY: Connection stale — no response for Nms / Connection appears dead — 10+ missed polls
+MEANS: The host has been polling the board's status but hasn't received a reply for many consecutive polls — the USB/serial link has effectively gone silent.
+FIX: Check the USB cable and port; reconnect from the Device tab. If it happens repeatedly, try a different USB port/cable or a shorter, better-shielded cable (common on machines near a VFD or spindle).
+NAV: Device tab > Disconnect then Connect
+
+--- Entry 11 ---
+KEY: Bad frame end byte at length N
+MEANS: A received RTS frame from the board didn't end with the expected terminator byte — usually a corrupted/partial USB packet.
+FIX: Usually self-heals on the next frame. If it repeats constantly, it points to electrical noise on the USB line (route it away from stepper/spindle wiring) or a marginal USB cable.
+
+--- Entry 12 ---
+KEY: Short status frame: N bytes
+MEANS: A status frame from the board arrived shorter than the protocol expects — likely a dropped/truncated USB packet.
+FIX: Same cause/fix as 'Bad frame end byte' — check cable/EMI. Isolated occurrences are harmless; the next poll recovers.
+
+--- Entry 13 ---
+KEY: JSON parse error: <message>
+MEANS: A frame that was expected to carry a JSON payload from the board failed to parse.
+FIX: Usually transient corruption on the wire (see cable/EMI notes above). If constant, confirm firmware and host protocol versions match.
+
+--- Entry 14 ---
+KEY: ack-timeout on line N after 500ms
+MEANS: The host sent a G-code line and never got the expected 'ok'/ack from the board within the timeout window.
+FIX: One-off: harmless, the line gets retried/backed off automatically. Frequent: the board's planner may be overloaded or the USB link is dropping bytes — try a lower feed rate or check the cable.
+
+--- Entry 15 ---
+KEY: Unknown command: "<cmd>"
+MEANS: The host sent a command string the firmware doesn't recognise (usually only during development or after a frontend/firmware version mismatch).
+FIX: Confirm frontend and firmware build versions are the pair they were tested together on; report to the dev team if it appears during normal use.
+
+--- Entry 16 ---
+KEY: Invalid home axis: <axis>
+MEANS: The Home command was issued with an axis identifier the firmware doesn't recognise (should only be X/Y/Z/ALL).
+FIX: This indicates a UI/host bug, not a hardware fault — retry Home from the standard button rather than a custom script.
+
+--- Entry 17 ---
+KEY: No homing vector for axis <axis> — using fallback
+MEANS: The firmware's per-axis homing direction/vector table has no entry for this axis; it fell back to a default.
+FIX: Check Settings > CNC machine profile for that axis's homing direction is actually configured; an unset direction can home into the wrong end of travel.
+NAV: Settings > CNC
+
+--- Entry 18 ---
+KEY: motion complete TIMEOUT (Nms) during <phase> — proceeding
+MEANS: During homing, the board didn't confirm 'motion complete' for a phase (seek/backoff/precise) within the timeout, so the host moved on anyway.
+FIX: Usually harmless if homing still finishes correctly. If the axis ends up in the wrong place, it points to a motion-complete detection issue at that travel speed — reduce homing feed rate in Settings > CNC.
+
+--- Entry 19 ---
+KEY: bulk-push: N retries on line M — giving up, advancing to avoid stall
+MEANS: During a fast bulk G-code push, one line failed to get acknowledged after repeated retries; the host skipped it to avoid stalling the whole job.
+FIX: That line was NOT executed — stop the job and inspect the file around that line number; this usually means the board briefly missed a packet under heavy load.
+
+--- Entry 20 ---
+KEY: bulk-push ack-timeout on line N after 100ms — advancing
+MEANS: Same as above but a single miss, not exhausted retries — one bulk-push line's ack didn't arrive in time so the host moved on.
+FIX: Usually self-healing; watch for the line count in the progress bar matching the file's total at the end of the job.
+
+--- Entry 21 ---
+KEY: Resuming stream after board exited Hold
+MEANS: The board's own Hold state (feed-hold) cleared and the host is now sending G-code again automatically.
+FIX: Informational — confirms pause/resume worked correctly.
+
+--- Entry 22 ---
+KEY: START pressed but no G-code is loaded on the controller — re-upload the file.
+MEANS: Start was pressed but the backend has no G-code content associated with the current session (can happen after a reconnect).
+FIX: Reload the file from the Sidebar's File Management section, then press Start again.
+NAV: Sidebar > File Management > Browse for G-Code File
+
+--- Entry 23 ---
+KEY: START pressed but a job is already running.
+MEANS: Start was pressed while the backend already considers a job active — a double-click or stale UI state.
+FIX: No action needed if the job is actually running; if the UI looks stuck, refresh the page/reconnect.
+
+--- Entry 24 ---
+KEY: _startJob called but no G-code loaded — START is a no-op. Did file:load fire?
+MEANS: Backend-side log confirming the same no-file condition as above, useful for debugging a silent Start.
+FIX: Same fix — reload the file before starting.
+
+
+######################################################################
+# B. EasyCNC — RSP protocol
+######################################################################
+
+--- Entry 25 ---
+KEY: Recovered a job that was running before the last restart. Press START to resume from line N...
+MEANS: On file load, the backend found a saved resume checkpoint (data/rsp_resume_state.json) matching this file's hash from before a backend restart or crash.
+FIX: If you want to actually resume, press Start — it will skip to that line. If you want to start over, load a fresh copy of the file or edit+resave it (changes the hash) before pressing Start.
+NAV: Sidebar > File Management, then JobControlBar Start
+
+--- Entry 26 ---
+KEY: Resuming from line N (where it was stopped).
+MEANS: Start was pressed after a deliberate Stop on the same loaded file; RSP protocol is resuming from the exact next-unexecuted line rather than restarting at line 1.
+FIX: Confirm the bit is positioned correctly for that line before starting — the resume does not automatically re-home or re-probe.
+
+--- Entry 27 ---
+KEY: Stopped at line N. Press START to resume from here, or load a new file to restart.
+MEANS: Stop was pressed; the RSP job engine checkpointed the exact resume point.
+FIX: Informational. Press Start to continue from N, or load a different file to discard the checkpoint.
+
+--- Entry 28 ---
+KEY: link down mid-job — waiting up to 15s for it to recover before aborting
+MEANS: The RSP link's heartbeat has gone silent for >3s during an active job; the host is giving the USB link 15 seconds to self-heal before treating it as a real failure.
+FIX: Usually resolves on its own if it was a transient USB blip. If it consistently aborts after 15s, check the cable/port — the link is not recovering.
+
+--- Entry 29 ---
+KEY: link recovered after N.Ns, resuming job
+MEANS: The RSP link came back within the 15-second grace window and the job continued automatically.
+FIX: No action needed — confirms the self-heal worked.
+
+--- Entry 30 ---
+KEY: execution stalled at N/M for Ns — giving up
+MEANS: No forward execution progress (no EV_EXECUTED, no EV_JOB_DONE) was seen for 90 continuous seconds; the host gave up on the job.
+FIX: Check the board is powered and not wedged (try a status query/reset). If moves are just legitimately slow (deep cuts, small stepovers), this threshold was widened once already (2026-08-27) — report if it's still firing on real, alive jobs.
+
+--- Entry 31 ---
+KEY: job stream interrupted: <exception message>
+MEANS: The RSP job's sender loop hit an unrecoverable error (usually LinkLost after the 15s grace window expired).
+FIX: Reconnect from the Device tab; if a resume checkpoint exists, the next file load will offer to resume from where it stopped.
+NAV: Device tab
+
+--- Entry 32 ---
+KEY: job end failed: <message>
+MEANS: The final OP_JOB_END handshake with the board didn't complete cleanly after the job's last line executed.
+FIX: The job likely still finished — check the part. This is a protocol-teardown message, not evidence the job itself failed.
+
+
+######################################################################
+# B. EasyCNC — RSP protocol status codes (device-reported)
+######################################################################
+
+--- Entry 33 ---
+KEY: ST_ERR_INTERNAL (0x01)
+MEANS: Device-side internal firmware error.
+FIX: Power-cycle the board; if it recurs, capture the exact command sequence and report it — this indicates a firmware bug, not a wiring issue.
+
+--- Entry 34 ---
+KEY: ST_ERR_BUSY (0x02)
+MEANS: Device is busy and can't accept the command right now.
+FIX: Wait and retry; the host protocol normally retries this automatically. Persistent busy usually means the planner is backed up — reduce feed or check for a stall.
+
+--- Entry 35 ---
+KEY: ST_ERR_STATE (0x03)
+MEANS: Command isn't allowed in the board's current machine state (e.g. trying to jog while a job is running).
+FIX: Bring the machine to the right state first (stop the job, clear the alarm) then retry the command.
+
+--- Entry 36 ---
+KEY: ST_ERR_JOB (0x04)
+MEANS: job_id mismatch, or the command referenced a job that isn't currently active on the device.
+FIX: Usually a stale/leftover message from a previous job — safe to ignore if a new job is running correctly. If it blocks a real job, reload the file and restart.
+
+--- Entry 37 ---
+KEY: ST_ERR_SEQ_GAP (0x05)
+MEANS: The device detected an out-of-window sequence number; frames were lost or arrived out of order.
+FIX: The host automatically resends from the gap. Frequent occurrences point to a noisy/marginal USB link.
+
+--- Entry 38 ---
+KEY: ST_ERR_CRC (0x06)
+MEANS: A received frame failed its CRC32 check — corrupted in transit.
+FIX: Same cause as SEQ_GAP — check USB cable routing away from motor/spindle wiring; the frame gets retransmitted automatically.
+
+--- Entry 39 ---
+KEY: ST_ERR_BUFFER (0x07)
+MEANS: The device's motion planner buffer is full (flow-control backpressure, not a fault).
+FIX: Normal under high feed rates — the host's windowed pipelining backs off and retries. Not an error to act on unless the job stalls entirely.
+
+--- Entry 40 ---
+KEY: ST_ERR_CMD (0x08)
+MEANS: Unknown command or malformed payload sent to the device.
+FIX: Indicates a host/firmware version mismatch — confirm both are the matched pair; report if seen during normal operation.
+
+--- Entry 41 ---
+KEY: ST_ERR_ESTOP (0x09)
+MEANS: E-stop is latched on the device; it refuses to execute anything until cleared.
+FIX: Physically release the e-stop, then send the clear/reset command from the app.
+
+--- Entry 42 ---
+KEY: ST_ERR_FAULT (0x0A)
+MEANS: An axis fault (ALM line asserted) is preventing the command.
+FIX: Check that axis's driver fault output and wiring; Reset the specific motor from Sidebar > Position.
+
+
+######################################################################
+# C. EasyCNC — ECSS safety system messages
+######################################################################
+
+--- Entry 43 ---
+KEY: [ECSS] Pre-flight BLOCKED — N issue(s). probableCorruptWCS=true/false
+MEANS: ECSS Module 1 scanned the loaded G-code against machine travel bounds before Start and found it would go out of bounds.
+FIX: Read the specific issue lines logged right after this one — they name the axis/coordinate that's out of range. If probableCorruptWCS is true, your work coordinate offset is likely wrong, not the file — check Position tab for a wildly off G54 offset before blaming the file.
+NAV: Sidebar > Position (check WCS offsets)
+
+--- Entry 44 ---
+KEY: [ECSS] Start BLOCKED by pre-flight: <reasons>
+MEANS: Same as above — Start/Resume was refused because the pre-flight envelope check failed.
+FIX: Fix the underlying cause (bad WCS offset or a genuinely out-of-bounds file) rather than repeatedly retrying Start.
+
+--- Entry 45 ---
+KEY: [ECSS] Pre-flight BLOCK overridden by user — proceeding with <cmd>. (Module 3 Z watchdog still active.)
+MEANS: A one-shot manual override was used to bypass the pre-flight block for this Start.
+FIX: Only use this for a deliberate diagnostic move you understand is safe — the override consumes itself after one Start and re-arms the block for the next one.
+
+--- Entry 46 ---
+KEY: [ECSS] WCS health: <axis>=<value> (threshold ±50 mm).
+MEANS: ECSS Module 2 flagged a work coordinate offset (G54 etc.) more than 50mm from zero — a common signature of NVRAM/EEPROM corruption on the board.
+FIX: Re-zero that axis at a known-good physical reference point (Sidebar > Position > Zero) before running anything — a corrupted offset can send the machine somewhere unexpected on the very first move.
+NAV: Sidebar > Position
+
+--- Entry 47 ---
+KEY: [ECSS] Z RUNAWAY fired: drop=N mm in M ms, mposZ=Z
+MEANS: ECSS Module 3 detected the Z axis dropping further/faster than physically expected for a controlled move and fired an emergency abort (0x03).
+FIX: Stop and physically inspect Z before doing anything else — this is the watchdog that exists specifically to catch a runaway plunge. Note: as of the last audit this module is gated behind an env var that's unset by default, so confirm it's actually enabled in your deployment before relying on it.
+
+--- Entry 48 ---
+KEY: [Engine] command '<cmd>' rejected: no active controller
+MEANS: A command was sent to the backend but no controller is currently connected to a board.
+FIX: Go to Device tab and connect before issuing any commands.
+NAV: Device tab
+
+--- Entry 49 ---
+KEY: [Engine] file:load rejected: no active controller / missing content
+MEANS: A G-code file load was attempted with no board connected, or the uploaded content was empty.
+FIX: Connect first, and confirm the file you're dragging in actually has content (0-byte files are rejected).
+
+--- Entry 50 ---
+KEY: Failed to open <port>: <message>
+MEANS: The backend tried to open the selected serial/USB port and the OS refused.
+FIX: See Section D (serial/connection errors) below for the specific OS-level reason this usually carries.
+
+
+######################################################################
+# D. EasyCNC — Probing
+######################################################################
+
+--- Entry 51 ---
+KEY: Probing already in progress
+MEANS: A new probe cycle was started while one was already running.
+FIX: Wait for the current probe step to finish (or cancel it in the wizard) before starting another.
+
+--- Entry 52 ---
+KEY: No active controller
+MEANS: Probe was started with no board connected.
+FIX: Connect on the Device tab first.
+
+--- Entry 53 ---
+KEY: Probing aborted
+MEANS: The user cancelled the probe cycle mid-run (Abort button in the probe wizard).
+FIX: Restart the probe wizard from Step 1 if you still need to set your zero.
+
+--- Entry 54 ---
+KEY: X probe did not contact / Y probe did not contact / <axis> probe did not contact
+MEANS: During an XYZ corner-block probe, that axis's touch move completed its full travel without the probe circuit ever triggering.
+FIX: Check the probe clip is actually touching bare metal (not paint/coating) on both the bit and the block, and that the bit is positioned close enough to the block before starting that step.
+NAV: Probe wizard Step 2 — rejog closer, then retry Step 3
+
+--- Entry 55 ---
+KEY: Strategy "<name>" has no RSP-native routine yet
+MEANS: The selected probing strategy isn't implemented for the RSP protocol path yet.
+FIX: Use the Z Probe or XYZ Probe strategies from the standard wizard — this only affects less-common/experimental probe routines.
+
+--- Entry 56 ---
+KEY: Controller ack timeout
+MEANS: The probe move was sent but the board never acknowledged it in time.
+FIX: Check the connection (Device tab); if the link is fine, retry the probe step once.
+
+--- Entry 57 ---
+KEY: Controller has no RSP-native move primitive
+MEANS: An internal mismatch between the probing code and the active controller type.
+FIX: Should not occur in normal use — if seen, note which controller protocol (RTS vs RSP) was active and report it.
+
+
+######################################################################
+# B. EasyCNC — RSP protocol
+######################################################################
+
+--- Entry 58 ---
+KEY: [RSP] EV_FAULT axis=<axis> code=<code>
+MEANS: The RSP device sent an explicit axis-fault event for a specific axis and fault code.
+FIX: Note the axis and code, Reset that motor from Sidebar > Position, and check its driver's fault output wiring if it repeats.
+
+--- Entry 59 ---
+KEY: [RSP] EV_ESTOP received
+MEANS: The RSP device reported its e-stop input has been triggered.
+FIX: Physically release the e-stop, then clear it from the app before resuming.
+
+--- Entry 60 ---
+KEY: [RSP] EV_COMM_LOST received (device entered safe-stop)
+MEANS: The device itself detected a communications loss and dropped into its own safe-stop state independent of the host's link-loss handling.
+FIX: Reconnect from the Device tab; check the resume-checkpoint prompt on next file load if a job was running.
+
+--- Entry 61 ---
+KEY: [RSP] resume-state load failed: <message>
+MEANS: The backend couldn't read data/rsp_resume_state.json on startup (missing, corrupted, or a permissions issue).
+FIX: Not fatal — it just means no resume checkpoint is offered on next file load. If this should have a checkpoint, check file permissions on the backend's data directory.
+
+--- Entry 62 ---
+KEY: [RSP] resume-state write failed: <message>
+MEANS: The backend couldn't write the resume checkpoint file when a job stopped — a later crash/restart won't be able to offer a resume.
+FIX: Check the backend process has write permission to its data directory and that the disk isn't full.
+
+--- Entry 63 ---
+KEY: [RSP] command "<cmd>" not supported by RSP firmware — ignored
+MEANS: A command was sent that this firmware build's RSP dialect doesn't implement.
+FIX: Confirm you're on a firmware build that matches what the frontend expects; not all commands exist on every RSP firmware revision.
+
+--- Entry 64 ---
+KEY: [RSP] op 0x<hex> not sent — link down
+MEANS: An operation couldn't be transmitted because the RSP link is currently down.
+FIX: Reconnect; the specific command was dropped, not queued, so retry it manually once the link is back.
+
+--- Entry 65 ---
+KEY: [RSP] probe failed: <message>
+MEANS: The RSP-native probe routine threw an error mid-cycle.
+FIX: Check probe wiring/continuity and retry from the probe wizard's current step.
+
+--- Entry 66 ---
+KEY: [RSP] Controller already bound, unbinding first
+MEANS: A new connection attempt found an existing RSP binding still active and cleaned it up automatically before proceeding.
+FIX: Informational — no action needed unless connects consistently take two tries.
+
+--- Entry 67 ---
+KEY: [RSP] bind() called with no connection
+MEANS: Internal sequencing issue — the controller tried to bind before a transport connection existed.
+FIX: Disconnect fully and reconnect from the Device tab; report if this repeats.
+
+
+######################################################################
+# A. EasyCNC — RTS protocol (primary controller)
+######################################################################
+
+--- Entry 68 ---
+KEY: [RTS] <axis>: switch triggered — next axis...
+MEANS: During the homing sequence, this axis's limit switch was detected and homing is moving on to the next axis in the Z→X→Y order.
+FIX: Informational progress message — no action needed unless the sequence stalls after this.
+
+--- Entry 69 ---
+KEY: [RTS] <axis> axis homed — position zeroed / Homing complete — all axes zeroed
+MEANS: Confirms that axis (or all axes) successfully completed homing and had its position set to zero at the home switch.
+FIX: Informational — homing succeeded.
+
+--- Entry 70 ---
+KEY: Y1 + Y2 motors reset sent / Motor <axis> (index N) reset sent
+MEANS: A manual per-motor Reset was issued — either both Y motors together (dual-motor axis) or a single named motor.
+FIX: Confirms the reset command went out; watch the alarm banner to see if the fault actually clears.
+
+--- Entry 71 ---
+KEY: Clearing X/Y1/Y2/Z motor...
+MEANS: Progress message while a per-motor clear-fault sequence is running for that specific motor.
+FIX: Wait for the corresponding '... reset sent' / 'All motors reset' confirmation.
+
+
+######################################################################
+# E. Serial / USB connection (OS-level)
+######################################################################
+
+--- Entry 72 ---
+KEY: Error: Opening COMx: Access is denied (Windows)
+MEANS: Another program already has the COM port open, or Windows hasn't released it from a previous session.
+FIX: Close any other terminal/Arduino IDE/serial monitor using that port, unplug/replug the USB cable, then reconnect from the Device tab.
+NAV: Device tab
+
+--- Entry 73 ---
+KEY: Error: No such file or directory, cannot open /dev/ttyUSB0 (Linux)
+MEANS: The port path no longer exists — the board was unplugged, or it enumerated under a different /dev/ttyUSBx or /dev/ttyACMx number.
+FIX: Re-plug the USB cable, refresh the port dropdown on the Device tab, and pick the currently-listed port.
+NAV: Device tab > Select a device...
+
+--- Entry 74 ---
+KEY: Error: Permission denied, cannot open /dev/ttyUSB0 (Linux)
+MEANS: Your user account isn't in the group that owns the serial device (usually 'dialout' on Debian/Ubuntu).
+FIX: Add your user to the dialout group (sudo usermod -a -G dialout $USER) and log out/in, or run with sudo as a quick test only.
+
+--- Entry 75 ---
+KEY: Error: Resource temporarily unavailable / EBUSY
+MEANS: The port is already open by another process.
+FIX: Close other serial tools (Arduino Serial Monitor, PuTTY, another instance of this app) that might be holding the port.
+
+--- Entry 76 ---
+KEY: Port simply disappears from the dropdown mid-session
+MEANS: The USB cable was unplugged, the board reset/browned-out, or a USB hub lost power.
+FIX: Check the physical cable and any USB hub power; try a direct connection to the PC without a hub.
+
+--- Entry 77 ---
+KEY: No response after Connect (status stays 'Connecting...')
+MEANS: Wrong baud rate selected, or the wrong device was picked from the port list (e.g. a Bluetooth virtual COM port instead of the CNC board).
+FIX: Confirm baud rate matches firmware (default 115200, some boards use 230400) and that you picked the CNC board's actual port, not an unrelated device.
+NAV: Device tab > Baud Rate
+
+--- Entry 78 ---
+KEY: Connection Error status pill
+MEANS: A general catch-all shown when the port opened but the handshake/init sequence with the firmware failed.
+FIX: Try Disconnect then Connect again; if it persists, power-cycle the board.
+
+--- Entry 79 ---
+KEY: USB device re-enumerates under a new port number after every reset
+MEANS: Normal behavior on some OS/driver combos (especially after a board reset via DTR toggle) — not a fault by itself.
+FIX: Just re-select the new port number in the dropdown; consider a machine profile pinned by serial number if this is disruptive.
+
+--- Entry 80 ---
+KEY: Driver not installed / device shows as 'Unknown Device' in Device Manager (Windows)
+MEANS: The board's USB-to-serial chip (CH340, CP2102, or STM32 CDC) doesn't have a driver installed on this PC.
+FIX: Install the matching USB driver for your board's chip before it will appear in the port dropdown.
+
+--- Entry 81 ---
+KEY: App shows Connected but position never updates
+MEANS: The port opened successfully but the board isn't actually sending status frames — often a baud mismatch or a firmware that isn't fully booted.
+FIX: Power-cycle the board, reconnect, and confirm baud rate; check the boot banner if you have a raw terminal available.
+
+--- Entry 82 ---
+KEY: Multiple ports listed, unsure which is the CNC board
+MEANS: Normal on a PC with other serial devices (Arduino, Bluetooth, modem chipsets) attached.
+FIX: Unplug the CNC board's USB cable, note which entry disappears from the dropdown, replug and pick that one.
+
+--- Entry 83 ---
+KEY: Intermittent disconnects only under spindle load
+MEANS: Electrical noise from the spindle/VFD coupling into the USB cable or a shared ground loop.
+FIX: Route the USB cable away from spindle/VFD power wiring, use a ferrite choke on the USB cable, and confirm the VFD's shielding/grounding is correct.
+
+--- Entry 84 ---
+KEY: Connection works on one USB port but not another on the same PC
+MEANS: Some USB 3.0 ports have known compatibility issues with certain USB-serial chipsets, or a hub-vs-direct difference.
+FIX: Prefer a USB 2.0 port or a direct connection (no hub) if you see this.
+
+--- Entry 85 ---
+KEY: Baud rate mismatch symptom: garbage/binary characters in a raw terminal
+MEANS: Terminal and board are talking at different baud rates.
+FIX: Match the app's baud rate setting to the firmware's configured baud (115200 default, 230400 on some builds).
+NAV: Device tab > Baud Rate
+
+
+######################################################################
+# F. Standard GRBL error codes (generic/GRBL-fallback path)
+######################################################################
+
+--- Entry 86 ---
+KEY: error:1
+MEANS: G-code words consist of a letter and a value. Letter was not found.
+FIX: Check the line for a stray letter with no following number, or a corrupted line from a bad export — re-slice the file.
+
+--- Entry 87 ---
+KEY: error:2
+MEANS: Numeric value format is not valid or missing an expected value.
+FIX: A number is malformed (e.g. 'X.' with nothing after the decimal) — fix or re-export the G-code.
+
+--- Entry 88 ---
+KEY: error:3
+MEANS: Grbl '$' system command was not recognized or supported.
+FIX: Check the $-command syntax; you may be sending a setting command the firmware build doesn't support.
+
+--- Entry 89 ---
+KEY: error:4
+MEANS: Negative value received for an expected positive value.
+FIX: A setting or parameter that must be positive (like step pulse time) was sent negative — check the value being written.
+
+--- Entry 90 ---
+KEY: error:5
+MEANS: Homing cycle is not enabled via settings.
+FIX: Enable homing ($22=1) in firmware settings before using $H.
+
+--- Entry 91 ---
+KEY: error:6
+MEANS: Minimum step pulse time must be greater than 3usec.
+FIX: Increase the $0 step pulse time setting — a value under 3us is rejected.
+
+--- Entry 92 ---
+KEY: error:7
+MEANS: EEPROM read failed. Reset and restored to default values.
+FIX: Firmware settings storage was corrupted and reset to defaults — re-enter your machine's calibrated settings.
+
+--- Entry 93 ---
+KEY: error:8
+MEANS: Grbl '$' command cannot be used unless Grbl is IDLE.
+FIX: Stop or finish the current job before changing settings.
+
+--- Entry 94 ---
+KEY: error:9
+MEANS: G-code locked out during alarm or jog state.
+FIX: Clear the alarm (or wait for the jog to finish) before sending G-code.
+
+--- Entry 95 ---
+KEY: error:10
+MEANS: Soft limits cannot be enabled without homing also enabled.
+FIX: Enable homing ($22=1) before enabling soft limits ($20=1).
+
+--- Entry 96 ---
+KEY: error:11
+MEANS: Max characters per line exceeded.
+FIX: That G-code line is too long — split it or re-export from your CAM software with shorter lines.
+
+--- Entry 97 ---
+KEY: error:12
+MEANS: '$' setting value exceeds the maximum step rate supported.
+FIX: Lower the steps/mm or max-rate setting that's pushing the step rate too high for the firmware to generate.
+
+--- Entry 98 ---
+KEY: error:13
+MEANS: Safety door detected as opened.
+FIX: Close the safety door switch/interlock before resuming.
+
+--- Entry 99 ---
+KEY: error:14
+MEANS: Build info or startup line exceeded EEPROM line length limit.
+FIX: Shorten the custom startup line stored in firmware settings.
+
+--- Entry 100 ---
+KEY: error:15
+MEANS: Jog target exceeds machine travel. Command ignored.
+FIX: Reduce the jog distance/step size — you're commanding past the configured travel limits.
+
+--- Entry 101 ---
+KEY: error:16
+MEANS: Jog command with no '=' or contains prohibited g-code.
+FIX: Malformed jog command from the UI/host — should not occur in normal use; report if seen.
+
+--- Entry 102 ---
+KEY: error:17
+MEANS: Laser mode requires PWM output.
+FIX: Only relevant if laser mode ($32=1) is enabled without a PWM-capable spindle output configured.
+
+--- Entry 103 ---
+KEY: error:20
+MEANS: Unsupported or invalid g-code command found in block.
+FIX: That G-code command isn't supported by this firmware — check for CAM-specific codes not meant for this controller.
+
+--- Entry 104 ---
+KEY: error:21
+MEANS: More than one g-code command from same modal group found in block.
+FIX: Two conflicting commands (e.g. two motion modes) are on the same line — fix the G-code source.
+
+--- Entry 105 ---
+KEY: error:22
+MEANS: Feed rate has not yet been set or is undefined.
+FIX: A G1/G2/G3 move was commanded before any F (feed rate) word was ever set — add an F word earlier in the file.
+
+--- Entry 106 ---
+KEY: error:23
+MEANS: G-code command in block requires an integer value.
+FIX: A parameter that must be a whole number (like a tool number) was given a decimal — fix the line.
+
+--- Entry 107 ---
+KEY: error:24
+MEANS: Two G-code commands that both require XYZ axis words were detected in the block.
+FIX: Conflicting motion commands on one line — split them onto separate lines.
+
+--- Entry 108 ---
+KEY: error:25
+MEANS: A G-code word was repeated in the block.
+FIX: The same letter (e.g. two X words) appears twice on one line — fix the source file.
+
+--- Entry 109 ---
+KEY: error:26
+MEANS: A G-code command requires XYZ axis words in the block, but none were detected.
+FIX: A move command has no axis coordinates at all — check for a truncated/corrupted line.
+
+--- Entry 110 ---
+KEY: error:27
+MEANS: N line number value is not within the valid range of 1 - 9,999,999.
+FIX: Line numbering in the file is out of GRBL's supported range — most CAM posts don't include N numbers; remove them if present.
+
+--- Entry 111 ---
+KEY: error:28
+MEANS: A G-code command is missing a required P or L value word.
+FIX: A command like G4 (dwell) needs a P value — check the line for a missing parameter.
+
+--- Entry 112 ---
+KEY: error:29
+MEANS: Work coordinate systems G59.1, G59.2, G59.3 are not supported.
+FIX: Only G54-G59 (not G59.1-3) are supported — change the WCS selection in your CAM post.
+
+--- Entry 113 ---
+KEY: error:30
+MEANS: G53 requires an active G0 or G1 motion mode.
+FIX: G53 (machine-coordinate move) needs a linear motion mode active first — add a G0/G1 before it.
+
+--- Entry 114 ---
+KEY: error:31
+MEANS: Unused axis words in the block with G80 motion mode cancel active.
+FIX: Leftover axis words on a canned-cycle-cancel line — clean up the G-code.
+
+--- Entry 115 ---
+KEY: error:32
+MEANS: G2/G3 arc commanded but no XYZ axis words in the selected plane.
+FIX: An arc move needs at least one axis word in the active plane (G17/18/19) — check the line.
+
+--- Entry 116 ---
+KEY: error:33
+MEANS: The motion command has an invalid target.
+FIX: Generated by G2/G3/G38.2 when the target point is unreachable/invalid — check for a corrupted toolpath.
+
+--- Entry 117 ---
+KEY: error:34
+MEANS: Arc traced with radius definition had a math error computing geometry.
+FIX: Break the arc into smaller semi-circle/quadrant segments, or re-export using IJK offsets instead of R.
+
+--- Entry 118 ---
+KEY: error:35
+MEANS: Arc traced with offset definition is missing the IJK offset word.
+FIX: An I/J/K-defined arc is missing its offset word for the active plane — check the CAM post configuration.
+
+--- Entry 119 ---
+KEY: error:36
+MEANS: Unused, leftover G-code words that aren't used by any command in the block.
+FIX: Extra words on the line that don't belong to any active command — clean up the G-code source.
+
+--- Entry 120 ---
+KEY: error:37
+MEANS: G43.1 dynamic tool length offset cannot apply to an axis other than its configured axis.
+FIX: Tool length offset is being applied to the wrong axis — check the post-processor's TLO axis setting.
+
+--- Entry 121 ---
+KEY: error:38
+MEANS: Tool number greater than max supported value.
+FIX: The T (tool) number in the file exceeds what the firmware allows — check your tool numbering.
+
+
+######################################################################
+# G. Standard GRBL ALARM codes (generic/GRBL-fallback path)
+######################################################################
+
+--- Entry 122 ---
+KEY: ALARM:1
+MEANS: Hard limit triggered. Machine position is likely lost due to a sudden halt.
+FIX: Re-home the machine before doing anything else — position after a hard-limit trip cannot be trusted.
+
+--- Entry 123 ---
+KEY: ALARM:2
+MEANS: G-code motion target exceeds machine travel. Position safely retained.
+FIX: Safe to unlock ($X) — the move was rejected before it happened. Fix the offending line/offset before retrying.
+
+--- Entry 124 ---
+KEY: ALARM:3
+MEANS: Reset while in motion. Lost steps are likely.
+FIX: Re-home the machine — position accuracy cannot be guaranteed after an in-motion reset.
+
+--- Entry 125 ---
+KEY: ALARM:4
+MEANS: Probe fail — probe not in the expected initial state before the probe cycle started.
+FIX: For G38.2/G38.3 the probe must start untriggered; for G38.4/G38.5 it must start triggered. Check the probe isn't already touching before you start.
+
+--- Entry 126 ---
+KEY: ALARM:5
+MEANS: Probe fail — probe did not contact the workpiece within programmed travel.
+FIX: Reposition closer to the surface/touch plate and retry, or check the probe wiring/continuity.
+
+--- Entry 127 ---
+KEY: ALARM:6
+MEANS: Homing fail — active homing cycle was reset.
+FIX: Re-run the homing cycle from a clear state; don't reset mid-home.
+
+--- Entry 128 ---
+KEY: ALARM:7
+MEANS: Homing fail — safety door opened during the homing cycle.
+FIX: Close the door/interlock and re-run homing.
+
+--- Entry 129 ---
+KEY: ALARM:8
+MEANS: Homing fail — pull-off travel failed to clear the limit switch.
+FIX: Increase the pull-off distance setting, or check the switch for mechanical binding.
+
+--- Entry 130 ---
+KEY: ALARM:9
+MEANS: Homing fail — could not find the limit switch within the search distance.
+FIX: Check switch wiring and that the axis actually travels toward the switch during homing (direction setting).
+
+--- Entry 131 ---
+KEY: ALARM:10
+MEANS: Homing fail — second dual-axis limit switch failed to trigger within travel distance.
+FIX: On a dual-motor axis (e.g. Y1/Y2), check the second switch's wiring — only relevant on Grbl-Mega/dual-axis builds.
+
+
+######################################################################
+# H. Job / file loading
+######################################################################
+
+--- Entry 132 ---
+KEY: File rejected — unsupported extension
+MEANS: The dragged/browsed file isn't one of the accepted types.
+FIX: Accepted extensions are .nc .gcode .txt .ngc .cnc .tap — re-export from your CAM software with one of these.
+
+--- Entry 133 ---
+KEY: File loads but line count shows 0
+MEANS: The file was empty, or every line was a comment and got filtered out during parsing.
+FIX: Re-check the export from your CAM software — confirm it actually contains motion commands, not just headers/comments.
+
+--- Entry 134 ---
+KEY: "Reload Current" needed after an edit
+MEANS: You edited the G-code file externally after loading it into the app; the app is still holding the old copy.
+FIX: Click Reload Current in File Management to re-read the file from disk.
+NAV: Sidebar > File Management > Reload Current
+
+--- Entry 135 ---
+KEY: Job progress bar stuck at 0% after Start
+MEANS: The job was accepted but no lines are executing — often a stale controller reference after a reconnect.
+FIX: Stop, reload the file fresh, and Start again; if it persists, disconnect/reconnect on the Device tab first.
+
+--- Entry 136 ---
+KEY: Job finishes early / fewer lines executed than the file contains
+MEANS: Lines were skipped due to ack-timeouts/retries being exhausted (see bulk-push retry messages in Section A), or the file had trailing comment-only lines that don't count as executable.
+FIX: Compare the reported executed-line count to the file's total; check the console log around any skipped-line warnings.
+
+--- Entry 137 ---
+KEY: Can't load a new file — 'a job is already running'
+MEANS: A previous job wasn't fully stopped before trying to load a new one.
+FIX: Press Stop first, confirm the job bar shows idle, then load the new file.
+
+
+######################################################################
+# I. General hardware troubleshooting (root causes behind the alarms above)
+######################################################################
+
+--- Entry 138 ---
+KEY: Machine homes to the wrong end of an axis
+MEANS: Homing direction setting for that axis doesn't match which end the limit switch is physically mounted on.
+FIX: Flip the homing direction bit for that axis in Settings > CNC / firmware config, or physically relocate the switch.
+
+--- Entry 139 ---
+KEY: One axis moves the opposite direction from the jog button pressed
+MEANS: That axis's direction (DIR) signal or motor wiring is inverted relative to firmware convention.
+FIX: Invert the direction-polarity setting for that axis in firmware config rather than re-wiring the motor.
+
+--- Entry 140 ---
+KEY: Dual-motor axis (Y1/Y2) racks out of square over time
+MEANS: One of the two Y motors is losing steps under load (current too low) or the belts have different tension.
+FIX: Match belt tension on both sides and confirm both Y drivers have identical current settings; re-square using the machine's squaring procedure after fixing.
+
+--- Entry 141 ---
+KEY: Spindle doesn't turn on with M3
+MEANS: VFD/relay wiring to the spindle control output isn't connected, or the spindle enable output pin isn't configured in firmware.
+FIX: Verify continuity from the control board's spindle output to the VFD's run/enable input; check Sidebar > Controls > Spindle shows the command was actually sent.
+
+--- Entry 142 ---
+KEY: Coolant relay doesn't switch with M7/M8
+MEANS: Coolant output pin wiring or relay board power is disconnected.
+FIX: Check the relay board has power and the control signal reaches it; test the relay manually with a multimeter.
+
+--- Entry 143 ---
+KEY: Limit switch triggers randomly with nothing touching it
+MEANS: Electrical noise (EMI) on an unshielded switch wire, especially near stepper/spindle cabling, or a floating input with no pull-up/pull-down.
+FIX: Use shielded cable for switch wiring, route away from motor power leads, and confirm firmware enables an internal pull-up/pull-down on that input.
+
+--- Entry 144 ---
+KEY: Probe gives inconsistent Z-zero results between runs
+MEANS: Probe tip contact surface is dirty/oxidized, or the touch plate isn't making a clean electrical connection to the bit.
+FIX: Clean both contact surfaces before each probe session; confirm the probe clip has a solid connection point on the collet/bit, not paint or coating.
+
+--- Entry 145 ---
+KEY: Machine loses steps only on fast rapid moves
+MEANS: Acceleration setting is too aggressive for the motor/driver/mechanical combination at that speed.
+FIX: Lower the max acceleration setting for that axis in firmware config until rapids are reliable, then dial back up carefully.
+
+--- Entry 146 ---
+KEY: USB connection is fine but jogging feels laggy/delayed
+MEANS: Too many status-poll requests queued, or a very low system resource situation on the host PC.
+FIX: Close unnecessary background apps; if using a Raspberry Pi or similar low-power host, confirm it isn't thermal-throttling.
+
+--- Entry 147 ---
+KEY: Machine position drifts over a long job (ends up slightly off from where it started)
+MEANS: Missed steps accumulating from marginal current/acceleration settings, or backlash in the mechanical drivetrain.
+FIX: Check for backlash by jogging one direction then reversing while watching for dead travel; verify current settings are adequate for the load.
+
+
+######################################################################
+# J. Standard GRBL real-time status report fields
+######################################################################
+
+--- Entry 148 ---
+KEY: Idle
+MEANS: Machine is powered, homed or not, and not moving. Ready to accept commands.
+FIX: Normal resting state — no fix needed.
+
+--- Entry 149 ---
+KEY: Run
+MEANS: Machine is actively executing a motion command.
+FIX: Normal — no fix needed.
+
+--- Entry 150 ---
+KEY: Hold:0
+MEANS: Feed hold is active and deceleration has completed; motion is fully stopped, ready to resume.
+FIX: Send cycle-start (~) or press Resume in the app to continue.
+
+--- Entry 151 ---
+KEY: Hold:1
+MEANS: Feed hold was requested but the machine is still decelerating to a stop.
+FIX: Wait a moment for it to settle into Hold:0 before resuming.
+
+--- Entry 152 ---
+KEY: Jog
+MEANS: Machine is executing a jog command.
+FIX: Normal during manual jogging — no fix needed.
+
+--- Entry 153 ---
+KEY: Alarm
+MEANS: Machine is in an alarm-locked state and will reject motion commands until cleared.
+FIX: Send $X (unlock) or use the app's Clear Alarm button; investigate the specific ALARM:N code first.
+
+--- Entry 154 ---
+KEY: Door:0
+MEANS: Safety door is closed and the door-hold has been cleared.
+FIX: Normal — no fix needed.
+
+--- Entry 155 ---
+KEY: Door:1
+MEANS: Safety door is currently open; machine is holding.
+FIX: Close the door/interlock switch to allow resume.
+
+--- Entry 156 ---
+KEY: Door:2
+MEANS: Door is closed but the machine is still resuming after being held.
+FIX: Wait for it to settle to Door:0/Idle.
+
+--- Entry 157 ---
+KEY: Door:3
+MEANS: Door was opened during a hold that was already in progress from another cause.
+FIX: Close the door, then clear/resume as needed.
+
+--- Entry 158 ---
+KEY: Check
+MEANS: Machine is in G-code check mode — parsing without moving, for validating a file before a real run.
+FIX: Send $C again to exit check mode when done reviewing.
+
+--- Entry 159 ---
+KEY: Home
+MEANS: Machine is actively executing a homing cycle.
+FIX: Normal during $H — no fix needed.
+
+--- Entry 160 ---
+KEY: Sleep
+MEANS: Machine has entered a low-power sleep state after $SLP or an idle timeout.
+FIX: Send any command or reset to wake it.
+
+--- Entry 161 ---
+KEY: MPos:
+MEANS: Machine position — absolute coordinates relative to the homed origin, ignoring any work offset.
+FIX: Reference field, not an error — use to sanity-check the machine thinks it's where you expect.
+
+--- Entry 162 ---
+KEY: WPos:
+MEANS: Work position — position relative to the currently active work coordinate system (G54 etc.).
+FIX: Reference field — if this looks wildly wrong, check your WCS offset, not the machine itself.
+
+--- Entry 163 ---
+KEY: WCO:
+MEANS: Work coordinate offset currently applied — the difference between MPos and WPos.
+FIX: A WCO more than a few tens of mm from expected is the same signature ECSS Module 2's WCS-health check flags.
+
+--- Entry 164 ---
+KEY: Bf:
+MEANS: Planner and RX buffer availability (blocks free, bytes free) — flow-control info for the sender.
+FIX: Consistently near-zero available buffer suggests the sender is pushing faster than the board can plan — reduce feed or check for a stall.
+
+--- Entry 165 ---
+KEY: FS:
+MEANS: Current feed rate and spindle speed actually being executed.
+FIX: Compare to what you commanded — a mismatch can indicate an override slider is active.
+
+--- Entry 166 ---
+KEY: Pn:
+MEANS: Currently active/triggered input pins (limit switches, probe, door, e-stop) reported by letter code.
+FIX: If a letter appears here with nothing physically triggering it, suspect a wiring/EMI/pull-up issue on that input.
+
+--- Entry 167 ---
+KEY: Ov:
+MEANS: Active override percentages for feed, rapid, and spindle.
+FIX: Check this if motion seems faster/slower than commanded — an override slider may be left away from 100%.
+
+--- Entry 168 ---
+KEY: A:
+MEANS: Active accessory state flags — spindle direction, flood/mist coolant.
+FIX: Reference field — cross-check against what you expect from your M3/M7/M8 commands.
+
+--- Entry 169 ---
+KEY: Ln:
+MEANS: Current line number being executed, when line numbers are enabled in the status report mask.
+FIX: Useful for locating exactly where in the file a stall or unexpected stop happened.
+
+
+######################################################################
+# K. Common GRBL $-setting misconfigurations (generic/GRBL-fallback path)
+######################################################################
+
+--- Entry 170 ---
+KEY: $0 (step pulse time)
+MEANS: Too short a value for your driver can cause missed steps that look like random position drift.
+FIX: Increase toward 10us if you see unexplained drift with no other cause.
+
+--- Entry 171 ---
+KEY: $1 (step idle delay)
+MEANS: Controls how long motors stay energized after a move; set wrong, axes can drift/sag when idle on a low-friction axis (like Z).
+FIX: Set to 255 (always on) if an axis sags when idle, especially Z with a heavy spindle.
+
+--- Entry 172 ---
+KEY: $2 / $3 (step/direction port invert masks)
+MEANS: Wrong bits here make an axis run backwards or double-step.
+FIX: Toggle the specific axis's bit rather than rewiring the motor.
+
+--- Entry 173 ---
+KEY: $5 (limit pin invert)
+MEANS: Wrong polarity here makes the board think a switch is always triggered (instant alarm on boot) or never triggered (homing timeout).
+FIX: Match this to whether your switches are normally-open or normally-closed.
+
+--- Entry 174 ---
+KEY: $6 (probe pin invert)
+MEANS: Wrong polarity here is the single most common cause of 'probe did not contact' or a probe that triggers immediately.
+FIX: Flip this bit if a probe cycle either times out every time or fails instantly.
+
+--- Entry 175 ---
+KEY: $10 (status report mask)
+MEANS: Controls which fields (WPos vs MPos, buffer state, etc.) appear in the status line the app parses.
+FIX: If the app shows blank/missing position fields, confirm this mask includes what the host expects.
+
+--- Entry 176 ---
+KEY: $20 (soft limits enable)
+MEANS: Requires homing enabled first; if set without $22=1 it will error (error:10) or simply not take effect.
+FIX: Enable $22 before $20.
+
+--- Entry 177 ---
+KEY: $21 (hard limits enable)
+MEANS: If enabled with noisy/unshielded switch wiring, causes random false-trip alarms.
+FIX: Disable temporarily to confirm noise is the cause, then fix wiring/shielding rather than leaving it off long-term.
+
+--- Entry 178 ---
+KEY: $22 (homing cycle enable)
+MEANS: Must be on for $H / the app's Home button to do anything.
+FIX: Enable if Home silently does nothing.
+
+--- Entry 179 ---
+KEY: $23 (homing direction invert mask)
+MEANS: Wrong bits send an axis homing away from its switch instead of toward it.
+FIX: Flip the bit for any axis that moves the wrong way when you press Home.
+
+--- Entry 180 ---
+KEY: $24 / $25 (homing feed / seek rate)
+MEANS: Too fast a seek rate can make the board overshoot and miss detecting the switch cleanly.
+FIX: Lower the seek rate if homing is inconsistent run-to-run.
+
+--- Entry 181 ---
+KEY: $27 (homing pull-off distance)
+MEANS: Too small a pull-off can leave the switch still pressed after backing off, causing ALARM:8.
+FIX: Increase pull-off distance a small amount if you see repeated pull-off failures.
+
+--- Entry 182 ---
+KEY: $30 / $31 (max/min spindle speed)
+MEANS: If your configured RPM range doesn't match the real spindle/VFD, PWM-to-RPM mapping will be wrong.
+FIX: Set these to match the actual spindle's real min/max RPM.
+
+--- Entry 183 ---
+KEY: $32 (laser mode)
+MEANS: If enabled on a spindle (not laser) machine, motion dynamics change (no G0 spindle-off behavior) unexpectedly.
+FIX: Only enable for an actual laser head.
+
+--- Entry 184 ---
+KEY: $100-$102 (X/Y/Z steps/mm)
+MEANS: Wrong values here are the most common cause of parts coming out the wrong physical size.
+FIX: Recalibrate by commanding a known move distance and measuring the real travel, then correct proportionally.
+
+--- Entry 185 ---
+KEY: $110-$112 (X/Y/Z max rate)
+MEANS: Set higher than the motor/driver/mechanics can actually achieve, causes stalls and lost steps at high feed.
+FIX: Lower until rapids are reliable, then verify with a squareness/repeatability test.
+
+--- Entry 186 ---
+KEY: $120-$122 (X/Y/Z acceleration)
+MEANS: Too aggressive causes lost steps on direction changes and corners; too conservative wastes cycle time.
+FIX: Tune down if you see steps lost specifically at sharp corners or direction reversals.
+
+--- Entry 187 ---
+KEY: $130-$132 (X/Y/Z max travel)
+MEANS: Used by soft limits AND by ECSS Module 1's pre-flight envelope check — a value of 0 here causes false-positive blocks on every job.
+FIX: Set these to your machine's real physical travel in mm, not 0 and not left default.
+
+
+######################################################################
+# L. EasyCNC — backend/socket layer
+######################################################################
+
+--- Entry 188 ---
+KEY: Missing port path or IP address
+MEANS: A connect request was sent without specifying which port or network address to connect to.
+FIX: Pick a device from the Device tab's dropdown rather than connecting with nothing selected.
+NAV: Device tab
+
+--- Entry 189 ---
+KEY: Not connected (controller:console error)
+MEANS: A command was sent over the socket while no controller connection exists.
+FIX: Connect on the Device tab before issuing jog/home/probe/job commands.
+
+--- Entry 190 ---
+KEY: Missing g-code content (job:error)
+MEANS: A job-start request arrived with no G-code payload attached.
+FIX: Load a file in File Management before pressing Start — this usually means the load step silently failed.
+
+--- Entry 191 ---
+KEY: Job queue not available (Redis required) / Job queue module not loaded / CNC job queue not started (Redis required)
+MEANS: The optional background job-queue feature needs Redis running; without it, queuing (not direct job control) is unavailable.
+FIX: Only relevant if you're using the queued-job feature specifically — direct Start/Pause/Stop on a loaded file doesn't need Redis. Install/start Redis if you need queuing.
+
+--- Entry 192 ---
+KEY: Serial port error (socketHandlers)
+MEANS: A generic serial-layer error was caught while a port was open — see the OS-level Section E entries for likely underlying causes.
+FIX: Reconnect from the Device tab; check cable/driver per Section E if it repeats.
+
+
+######################################################################
+# M. EasyCNC — backend support services
+######################################################################
+
+--- Entry 193 ---
+KEY: [SerialConnection] Write error: <message>
+MEANS: A write to the open serial port failed mid-transfer — usually the OS dropped the port (cable pulled, device power-cycled, USB hub reset).
+FIX: Reconnect from the Device tab. If it recurs on a stable cable, check dmesg/Device Manager for the port disconnecting under load (see Section E).
+NAV: Device tab
+
+--- Entry 194 ---
+KEY: Connection is not open
+MEANS: A send/write was attempted on a SerialService instance that has no active connection.
+FIX: Connect on the Device tab first; this is a sequencing error, not a hardware fault.
+
+--- Entry 195 ---
+KEY: Library entry <id> not found
+MEANS: A macro/library lookup was made for an id that doesn't exist in the macro library store, e.g. it was deleted or never saved.
+FIX: Re-check the macro list in the Macros panel and re-save/re-select the entry.
+NAV: Sidebar > Macros
+
+--- Entry 196 ---
+KEY: FSMonitor error: <error>
+MEANS: The filesystem watcher that tracks the working G-code/config directory hit an OS-level error (permissions, path removed).
+FIX: Confirm the watched folder still exists and the backend process has read access to it.
+
+--- Entry 197 ---
+KEY: TaskRunner: Failed to start task: <message>
+MEANS: A background task (e.g. a scripted utility run) failed to spawn — usually a missing binary or bad working directory.
+FIX: Check the backend console for the underlying spawn error and confirm any external tool the task depends on is installed and on PATH.
+
+--- Entry 198 ---
+KEY: node-telegram-bot-api is not installed. Run `npm install node-telegram-bot-api` in the backend folder.
+MEANS: The optional Telegram-notification integration was enabled but its npm dependency was never installed.
+FIX: Only relevant if you're using Telegram job-status notifications. Run the npm install command in the backend folder, or leave the integration disabled.
+
+--- Entry 199 ---
+KEY: Bot is not connected (TelegramBotService)
+MEANS: A Telegram notification was attempted before the bot service finished connecting (or after it disconnected).
+FIX: Check the Telegram integration's connection status in Settings before relying on job-complete notifications.
+NAV: Settings > Integrations
+
+--- Entry 200 ---
+KEY: WhatsApp not ready (state=<state>)
+MEANS: The optional WhatsApp-notification integration tried to send before its client finished its ready/auth handshake (often still waiting on QR-code scan).
+FIX: Open Settings > Integrations and complete the WhatsApp QR pairing before expecting notifications to send.
+NAV: Settings > Integrations
+

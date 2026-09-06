@@ -29,6 +29,7 @@ const { ToolLibrary } = require('./services/toollibrary/ToolLibrary');
 const { WhatsAppService } = require('./services/whatsapp/WhatsAppService');
 const { TelegramBotService } = require('./services/telegram/TelegramBotService');
 const { LibraryService } = require('./services/library/LibraryService');
+const { ChatbotService } = require('./services/chatbot/ChatbotService');
 const errlog = require('./middleware/errlog');
 const errclient = require('./middleware/errclient');
 const errnotfound = require('./middleware/errnotfound');
@@ -87,6 +88,7 @@ const jobResumeService  = new JobResumeService({  dataDir, io, logger, getContro
                                                   getConfig: () => engine.config });
 const toolLibrary       = new ToolLibrary({       configStore: engine.config, io, logger });
 const libraryService    = new LibraryService({    dataDir, io, logger });
+const chatbotService    = new ChatbotService();
 const whatsappService   = new WhatsAppService({   configStore: engine.config, io, logger,
                                                   getController, getEngine: () => engine, dataDir,
                                                   libraryService, webcamService });
@@ -190,6 +192,27 @@ app.post('/api/command', (req, res) => {
     try {
         engine.controller.command(cmd, ...args);
         res.json({ ok: true });
+    } catch (err) {
+        logger.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Chatbot ──────────────────────────────────────────────────────
+// Answers only — never touches the machine. If a suggestedAction comes
+// back, the frontend is responsible for confirming with the user and
+// executing it through the exact same local functions the regular UI
+// buttons already call.
+app.post('/api/chat', async (req, res) => {
+    const message = req.body.message;
+    const history = req.body.history || [];
+    const machineContext = req.body.machineContext || null;
+    if (!message || typeof message !== 'string') {
+        return res.status(400).json({ error: 'Missing message' });
+    }
+    try {
+        const result = await chatbotService.answer(message, history, machineContext);
+        res.json(result);
     } catch (err) {
         logger.error(err);
         res.status(500).json({ error: err.message });

@@ -333,6 +333,54 @@
     margin: 0 4px;
 }
 
+/* ---- Suggested Action (do-it-for-me confirm flow) ---- */
+.chatbot-action-row {
+    margin-top: 10px;
+}
+
+.chatbot-action-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-main);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.chatbot-action-btn:hover {
+    background: var(--border-hover);
+}
+
+.chatbot-action-yes {
+    background: var(--primary-accent);
+    color: var(--bg-main);
+    border-color: var(--primary-accent);
+}
+
+.chatbot-action-confirm {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+.chatbot-action-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+.chatbot-action-done {
+    font-size: 12px;
+    color: var(--primary-accent);
+    font-weight: 500;
+}
+
 /* ---- Welcome Message ---- */
 .chatbot-welcome {
     text-align: center;

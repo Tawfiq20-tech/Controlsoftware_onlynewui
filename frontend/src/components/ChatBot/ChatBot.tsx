@@ -1,8 +1,17 @@
 /**
  * ChatBot Widget — Onefinity Assistant
  *
- * A self-contained, floating chat widget that connects to the
- * Python FastAPI chatbot backend on port 8000.
+ * A self-contained, floating chat widget backed by the SAME local Node
+ * backend that already runs the machine (port 4000, /api/chat) — a
+ * same-origin call exactly like every other control-panel button makes.
+ * No separate service, no API key baked into the client bundle.
+ *
+ * The backend only ever answers with text plus, optionally, a named
+ * suggestedAction. This component turns that suggestion into a confirm
+ * button, and only THEN calls the existing backendHome/backendUnlock/
+ * backendJobPause/etc. functions — the exact same functions the regular
+ * Home/Alarm/Pause buttons already call. The chatbot never gets a new,
+ * separate path to the machine.
  *
  * - Does NOT modify any existing CNC UI components.
  * - Renders as a fixed-position overlay (bottom-right corner).
@@ -10,31 +19,64 @@
  */
 
 import { useCNCStore } from '../../stores/cncStore';
+import {
+    backendHome,
+    backendUnlock,
+    backendJobPause,
+    backendJobResume,
+    backendJobStop,
+} from '../../utils/backendConnection';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import './ChatBot.css';
 
 /* ── Types ─────────────────────────────────────────────── */
 
+interface SuggestedAction {
+    action: 'home' | 'unlock' | 'job_pause' | 'job_resume' | 'job_stop' | 'jog' | 'probe' | 'job_start';
+    label: string;
+    autoExec: boolean;
+}
+
 interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
+    suggestedAction?: SuggestedAction | null;
+    actionState?: 'idle' | 'confirming' | 'done' | 'error';
 }
 
 interface ChatApiResponse {
     answer: string;
     sources: string[];
-    similarity_score: number;
-    used_rag: boolean;
-    request_id: string;
-    latency_ms: number;
+    usedOnline: boolean;
+    suggestedAction: SuggestedAction | null;
 }
 
 /* ── Config ─────────────────────────────────────────────── */
 
-const CHATBOT_API_URL = 'http://localhost:8000/api/v1/chat';
-const CHATBOT_API_KEY = 'Aravindraj07';
+const getBackendBase = (): string => {
+    const env = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
+    if (env) return String(env).replace(/\/$/, '');
+    if (typeof window !== 'undefined') {
+        const { protocol, hostname } = window.location;
+        return `${protocol}//${hostname}:4000`;
+    }
+    return 'http://localhost:4000';
+};
+
+const CHATBOT_API_URL = `${getBackendBase()}/api/chat`;
 const MAX_HISTORY = 6; // Send last N messages as context
+
+// Only actions the v1 allowlist can execute with zero extra parameters.
+// jog/probe/job_start need parameters chat text can't safely supply, so
+// they stay guide-only (answer text only, no confirm button).
+const ACTION_EXECUTORS: Partial<Record<SuggestedAction['action'], () => void>> = {
+    home: backendHome,
+    unlock: backendUnlock,
+    job_pause: backendJobPause,
+    job_resume: backendJobResume,
+    job_stop: backendJobStop,
+};
 
 /* ── Component ──────────────────────────────────────────── */
 
@@ -89,13 +131,6 @@ export default function ChatBot() {
     const sendMessage = async () => {
         const trimmed = input.trim();
         if (!trimmed || isLoading) return;
-        // Grab live machine state from cncStore
-        const store = useCNCStore.getState();
-        const machineState = store.machineState; // 'idle' | 'running' | 'alarm' | 'motorError'
-        const fileInfo = store.fileInfo;
-        const errorLogs = store.consoleLines.filter(l => l.type === 'error');
-        const lastError = errorLogs.length > 0 ? errorLogs[errorLogs.length - 1].text : null;
-
 
         const userMsg: ChatMessage = { role: 'user', content: trimmed };
         setMessages(prev => [...prev, userMsg]);
@@ -109,33 +144,36 @@ export default function ChatBot() {
                 .slice(-MAX_HISTORY)
                 .map(m => ({ role: m.role, content: m.content }));
 
+            // Live machine context, for reference only — the backend never
+            // acts on this, it's just extra grounding for the answer text.
+            const store = useCNCStore.getState();
+            const errorLogs = store.consoleLines.filter(l => l.type === 'error');
+            const machineContext = {
+                state: store.machineState,
+                lastError: errorLogs.length > 0 ? errorLogs[errorLogs.length - 1].text : null,
+                loadedFile: store.fileInfo?.name || null,
+                connected: store.connected,
+            };
+
             const res = await fetch(CHATBOT_API_URL, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': CHATBOT_API_KEY,
-                },
-                body: JSON.stringify({
-                    question: trimmed,
-                    history: history,
-                    machine_context: {
-                        state: machineState,
-                        last_error: lastError,
-                        loaded_file: fileInfo?.name || null,
-                        connected: store.connected
-                    }
-                }),
-
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: trimmed, history, machineContext }),
             });
 
             if (!res.ok) {
                 const errBody = await res.json().catch(() => null);
-                throw new Error(errBody?.detail || `Server error (${res.status})`);
+                throw new Error(errBody?.error || `Server error (${res.status})`);
             }
 
             const data: ChatApiResponse = await res.json();
 
-            const botMsg: ChatMessage = { role: 'assistant', content: data.answer };
+            const botMsg: ChatMessage = {
+                role: 'assistant',
+                content: data.answer,
+                suggestedAction: data.suggestedAction,
+                actionState: 'idle',
+            };
             setMessages(prev => [...prev, botMsg]);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to assistant';
@@ -149,6 +187,29 @@ export default function ChatBot() {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
+        }
+    };
+
+    /* ── Action confirm / execute ──────────────────────── */
+
+    const setActionState = (index: number, state: ChatMessage['actionState']) => {
+        setMessages(prev => prev.map((m, i) => (i === index ? { ...m, actionState: state } : m)));
+    };
+
+    const requestConfirm = (index: number) => setActionState(index, 'confirming');
+    const cancelConfirm = (index: number) => setActionState(index, 'idle');
+
+    const runAction = (index: number, action: SuggestedAction) => {
+        const exec = ACTION_EXECUTORS[action.action];
+        if (!exec) {
+            setActionState(index, 'error');
+            return;
+        }
+        try {
+            exec();
+            setActionState(index, 'done');
+        } catch (err) {
+            setActionState(index, 'error');
         }
     };
 
@@ -211,6 +272,48 @@ export default function ChatBot() {
                                 }`}
                             >
                                 <ReactMarkdown>{msg.content}</ReactMarkdown>
+
+                                {msg.role === 'assistant' && msg.suggestedAction && (
+                                    <div className="chatbot-action-row">
+                                        {msg.actionState === 'idle' && (
+                                            msg.suggestedAction.autoExec ? (
+                                                <button
+                                                    className="chatbot-action-btn"
+                                                    onClick={() => requestConfirm(i)}
+                                                >
+                                                    Want me to do this — {msg.suggestedAction.label}?
+                                                </button>
+                                            ) : (
+                                                <div className="chatbot-action-hint">
+                                                    ({msg.suggestedAction.label} needs details I can't guess from chat — use the panel above.)
+                                                </div>
+                                            )
+                                        )}
+                                        {msg.actionState === 'confirming' && (
+                                            <div className="chatbot-action-confirm">
+                                                <span>Confirm: {msg.suggestedAction.label}?</span>
+                                                <button
+                                                    className="chatbot-action-btn chatbot-action-yes"
+                                                    onClick={() => runAction(i, msg.suggestedAction as SuggestedAction)}
+                                                >
+                                                    Yes, do it
+                                                </button>
+                                                <button
+                                                    className="chatbot-action-btn chatbot-action-no"
+                                                    onClick={() => cancelConfirm(i)}
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        )}
+                                        {msg.actionState === 'done' && (
+                                            <div className="chatbot-action-done">Done — sent {msg.suggestedAction.label.toLowerCase()}.</div>
+                                        )}
+                                        {msg.actionState === 'error' && (
+                                            <div className="chatbot-error">Couldn't run that — try the button on the panel instead.</div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         ))}
 
