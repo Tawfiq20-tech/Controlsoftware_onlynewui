@@ -64,8 +64,21 @@ class CNCEngine extends EventEmitter {
         // connections, so this is safe to fire-and-forget on boot.
         const diagEnabled = this.config.get('preferences.remoteDiagEnabled', false);
         const diagUrl = this.config.get('preferences.remoteDiagUrl', null);
+        const diagToken = this.config.get('preferences.remoteDiagToken', null);
+        // Inject (remote command -> live controller, i.e. remote motion) is a
+        // SEPARATE opt-in from the mirror itself and defaults OFF. The mirror
+        // connection alone only ever sends data outbound; nothing on the wire
+        // format required a return channel. Requiring this second flag means
+        // enabling telemetry visibility can never silently also enable remote
+        // motion control -- that needs its own explicit decision.
+        const diagAllowInject = this.config.get('preferences.remoteDiagAllowInject', false);
         if (diagUrl) remoteDiagMirror.setUrl(diagUrl);
+        if (diagToken) remoteDiagMirror.setToken(diagToken);
         remoteDiagMirror.onInject((payload) => {
+            if (!diagAllowInject) {
+                logger.warn('[RemoteDiag] INJECT blocked -- preferences.remoteDiagAllowInject is not true');
+                return;
+            }
             // Inject-handler — forwards command to the active controller.
             try {
                 if (this.controller && payload && payload.cmd) {

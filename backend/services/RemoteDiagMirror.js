@@ -31,6 +31,7 @@ const BACKLOG_MAX = 500;
 class RemoteDiagMirror {
     constructor() {
         this.url = DEFAULT_URL;
+        this.token = null;
         this.enabled = false;
         this.ws = null;
         this.reconnectTimer = null;
@@ -43,7 +44,14 @@ class RemoteDiagMirror {
     }
 
     setUrl(url) { if (typeof url === 'string' && url.length > 0) this.url = url; }
+    setToken(token) { if (typeof token === 'string' && token.length > 0) this.token = token; }
     onInject(fn) { this.onInjectCallback = fn; }
+
+    _urlWithToken() {
+        if (!this.token) return this.url;
+        const sep = this.url.includes('?') ? '&' : '?';
+        return `${this.url}${sep}token=${encodeURIComponent(this.token)}`;
+    }
 
     start() {
         if (this.enabled) return;
@@ -74,7 +82,7 @@ class RemoteDiagMirror {
     _connect() {
         if (!this.enabled) return;
         try {
-            this.ws = new WebSocket(this.url, { handshakeTimeout: 4000 });
+            this.ws = new WebSocket(this._urlWithToken(), { handshakeTimeout: 4000 });
         } catch (err) {
             logger.warn(`[RemoteDiag] connect threw: ${err.message}`);
             this._scheduleReconnect();
