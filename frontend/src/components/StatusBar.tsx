@@ -18,7 +18,6 @@ export default function StatusBar() {
         appPreferences,
         firmwareType,
         firmwareVersion,
-        position,
         remoteDiagStatus,
     } = useCNCStore();
 
