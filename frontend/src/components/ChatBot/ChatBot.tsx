@@ -81,6 +81,7 @@ const ACTION_EXECUTORS: Partial<Record<SuggestedAction['action'], () => void>> =
 /* ── Component ──────────────────────────────────────────── */
 
 export default function ChatBot() {
+    const connected = useCNCStore(s => s.connected);
     const [isOpen, setIsOpen] = useState(false);
     const [isClosing, setIsClosing] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -139,8 +140,10 @@ export default function ChatBot() {
         setIsLoading(true);
 
         try {
-            // Build history (last N messages for context)
-            const history = [...messages, userMsg]
+            // Build history from messages BEFORE this turn — the backend appends
+            // the current query itself, so including userMsg here would send the
+            // same message twice as consecutive "user" turns to the LLM.
+            const history = messages
                 .slice(-MAX_HISTORY)
                 .map(m => ({ role: m.role, content: m.content }));
 
@@ -201,7 +204,10 @@ export default function ChatBot() {
 
     const runAction = (index: number, action: SuggestedAction) => {
         const exec = ACTION_EXECUTORS[action.action];
-        if (!exec) {
+        // Every other control in this app (Sidebar/JobControlBar/StatusBar/Header)
+        // gates its backend calls on `connected` — match that here so a stale
+        // confirm button can't silently no-op against a disconnected machine.
+        if (!exec || !connected) {
             setActionState(index, 'error');
             return;
         }
@@ -228,12 +234,12 @@ export default function ChatBot() {
                         <div className="chatbot-header-info">
                             <div className="chatbot-avatar">
                                 OF
-                                <div className={`chatbot-avatar-status ${isLoading ? 'online' : 'online'}`} />
+                                <div className={`chatbot-avatar-status ${connected ? 'online' : 'offline'}`} />
                             </div>
                             <div>
                                 <div className="chatbot-title">Onefinity Assistant</div>
-                                <div className={`chatbot-status-text online`}>
-                                    {isLoading ? 'Thinking...' : 'Online'}
+                                <div className={`chatbot-status-text ${connected ? 'online' : 'offline'}`}>
+                                    {isLoading ? 'Thinking...' : connected ? 'Machine connected' : 'Machine offline'}
                                 </div>
                             </div>
                         </div>
@@ -277,12 +283,18 @@ export default function ChatBot() {
                                     <div className="chatbot-action-row">
                                         {msg.actionState === 'idle' && (
                                             msg.suggestedAction.autoExec ? (
-                                                <button
-                                                    className="chatbot-action-btn"
-                                                    onClick={() => requestConfirm(i)}
-                                                >
-                                                    Want me to do this — {msg.suggestedAction.label}?
-                                                </button>
+                                                connected ? (
+                                                    <button
+                                                        className="chatbot-action-btn"
+                                                        onClick={() => requestConfirm(i)}
+                                                    >
+                                                        Want me to do this — {msg.suggestedAction.label}?
+                                                    </button>
+                                                ) : (
+                                                    <div className="chatbot-action-hint">
+                                                        (Machine isn't connected — connect first, then ask again.)
+                                                    </div>
+                                                )
                                             ) : (
                                                 <div className="chatbot-action-hint">
                                                     ({msg.suggestedAction.label} needs details I can't guess from chat — use the panel above.)
