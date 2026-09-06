@@ -23,17 +23,17 @@ interface ThemeCard {
 const THEMES: ThemeCard[] = [
     {
         id: 'dark',
-        name: 'Carbon Orange',
-        tagline: 'Dark navy · orange accent',
+        name: 'Minimal Grey – Dark',
+        tagline: 'Clean macOS dark design · low light optimized',
         icon: <Moon size={16} />,
-        swatches: ['#0e1015', '#15171f', '#181b25', '#f59e0b', '#e2e8f0', '#283040'],
+        swatches: ['#16191e', '#1d2127', '#252a32', '#383f4d', '#e6edf3', '#30363d'],
     },
     {
         id: 'light',
-        name: 'Stack Overflow Light',
-        tagline: 'Light · soft grey · orange accent',
+        name: 'Minimal Grey – Light',
+        tagline: 'Clean, modern and professional macOS light design',
         icon: <Sun size={16} />,
-        swatches: ['#f8f9f9', '#ffffff', '#f1f2f3', '#f48024', '#232629', '#d6d9dc'],
+        swatches: ['#ebedf0', '#f4f5f8', '#ffffff', '#5a6578', '#1e293b', '#d0d5dd'],
     },
 ];
 

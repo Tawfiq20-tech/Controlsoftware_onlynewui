@@ -106,9 +106,9 @@
 
 .dro-value {
     flex: 1;
-    text-align: right;
+    text-align: center;
     font-family: var(--font-mono);
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
     color: var(--primary-accent);
     letter-spacing: -0.02em;
@@ -172,31 +172,36 @@
     cursor: pointer;
     transition: all var(--transition-fast);
     border: 1px solid var(--border-ui);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .pos-zero-btn {
-    background: var(--bg-panel);
-    color: var(--primary-accent);
+    background: var(--bg-elevated);
+    color: var(--text-main);
+    border-color: var(--border-ui);
 }
 .pos-zero-btn:hover {
     background: var(--primary-accent);
-    color: var(--bg-main);
+    color: #ffffff;
     border-color: var(--primary-accent);
 }
 
 .pos-home-btn {
-    background: var(--bg-panel);
-    color: var(--success, oklch(0.7 0.15 145));
+    background: var(--bg-elevated);
+    color: var(--success, #10b981);
+    border-color: var(--border-ui);
 }
 .pos-home-btn:hover {
-    background: var(--success, oklch(0.7 0.15 145));
-    color: var(--bg-main);
-    border-color: var(--success, oklch(0.7 0.15 145));
+    background: var(--success, #10b981);
+    color: #ffffff;
+    border-color: var(--success, #10b981);
 }
 
 .pos-action-btn:disabled {
-    opacity: 0.3;
+    opacity: 0.55;
+    color: var(--text-dim, #64748b) !important;
     cursor: not-allowed;
+    box-shadow: none;
 }
 
 /* Position Table Header */
@@ -212,24 +217,47 @@
     letter-spacing: 0.06em;
 }
 .pos-th-axis { width: 26px; flex-shrink: 0; text-align: center; }
-.pos-th-work { flex: 1; text-align: right; }
-.pos-th-machine { width: 80px; text-align: right; }
-.pos-th-actions { width: 52px; }
+.pos-th-work { flex: 1; text-align: center; }
+.pos-th-machine { flex: 1; text-align: center; }
+.pos-th-actions { width: 52px; flex-shrink: 0; display: flex; justify-content: flex-end; }
+
+.pos-unit-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--primary-accent);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.pos-unit-toggle-btn:hover {
+    background: var(--primary-accent);
+    color: #ffffff;
+    border-color: var(--primary-accent);
+}
 
 /* Machine position value in DRO row */
 .dro-machine-value {
-    width: 80px;
-    text-align: right;
+    flex: 1;
+    text-align: center;
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-dim);
-    flex-shrink: 0;
 }
 
 /* Button group in DRO row */
 .dro-btn-group {
     display: flex;
-    gap: 2px;
+    gap: 4px;
+    width: 52px;
+    justify-content: flex-end;
     flex-shrink: 0;
 }
 

@@ -15,34 +15,34 @@
 }
 
 :root {
-    /* ---- Tactical Industrial Colors ---- */
-    --primary-accent: #f59e0b;
-    --primary-hover: #d97706;
-    --primary-glow: rgba(245, 158, 11, 0.18);
-    --primary-glow-strong: rgba(245, 158, 11, 0.35);
+    /* ---- Minimal Grey Mac Design System Variables ---- */
+    --primary-accent: var(--accent, #38404d);
+    --primary-hover: var(--accent-strong, #272d37);
+    --primary-glow: var(--accent-soft, rgba(56, 64, 77, 0.20));
+    --primary-glow-strong: var(--accent-hover, rgba(56, 64, 77, 0.35));
 
     --industrial-cyan: #0284c7;
     --industrial-cyan-bright: #38bdf8;
     --industrial-cyan-glow: rgba(2, 132, 199, 0.25);
 
-    --bg-main: #0c0f14;
-    --bg-sidebar: #121721;
-    --bg-panel: #181e2b;
-    --bg-input: #0f131a;
-    --bg-hover: rgba(255, 255, 255, 0.06);
-    --bg-elevated: #1e2638;
+    --bg-main: var(--bg-app, #16191e);
+    --bg-sidebar: var(--bg-sidebar, #1d2127);
+    --bg-panel: var(--bg-panel, #1d2127);
+    --bg-input: var(--bg-input, #181b20);
+    --bg-hover: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    --bg-elevated: var(--bg-elevated, #252a32);
 
-    --border-ui: #242c3d;
-    --border-hover: #37435b;
-    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-ui: var(--border, #30363d);
+    --border-hover: var(--border-strong, #444c56);
+    --border-subtle: var(--border, #30363d);
 
-    --text-main: #d1d5db;
-    --text-dim: #9ca3af;
-    --text-bright: #f9fafb;
+    --text-main: var(--text-main, #e6edf3);
+    --text-dim: var(--text-dim, #8b949e);
+    --text-bright: var(--text-bright, #ffffff);
 
-    --danger: #ef4444;
-    --success: #10b981;
-    --warning: #f59e0b;
+    --danger: var(--status-bad, #ef4444);
+    --success: var(--status-ok, #10b981);
+    --warning: var(--status-warn, #f59e0b);
     --info: #0284c7;
 
     /* ---- Radius ---- */

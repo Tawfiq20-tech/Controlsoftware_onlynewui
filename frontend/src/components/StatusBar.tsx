@@ -1,5 +1,6 @@
+import { Ruler } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
-import { backendUnlock } from '../utils/backendConnection';
+import { backendUnlock, sendBackendCommand } from '../utils/backendConnection';
 import './StatusBar.css';
 
 const STATE_LABELS: Record<string, string> = {
@@ -16,6 +17,7 @@ export default function StatusBar() {
         machineState,
         activeWCS,
         appPreferences,
+        setAppPreferences,
         firmwareType,
         firmwareVersion,
         remoteDiagStatus,
@@ -28,6 +30,13 @@ export default function StatusBar() {
     const stateClass = !connected
         ? 'state-offline'
         : `state-${machineState}`;
+
+    const handleToggleUnits = () => {
+        const currentUnit = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'inches' : 'mm';
+        const nextUnits = currentUnit === 'inches' ? 'mm' : 'inches';
+        setAppPreferences({ ...appPreferences, units: nextUnits });
+        sendBackendCommand(nextUnits === 'mm' ? 'G21' : 'G20');
+    };
 
     return (
         <footer className="status-bar" role="status" aria-label="Machine status">
@@ -55,10 +64,16 @@ export default function StatusBar() {
             <div className="sb-divider" />
 
             {/* Units */}
-            <div className="sb-item" title="Units">
+            <button
+                type="button"
+                className="sb-item sb-unit-btn"
+                onClick={handleToggleUnits}
+                title={`Active Units: ${appPreferences?.units || 'mm'} — Click to toggle mm / inches (G20/G21)`}
+            >
+                <Ruler size={11} className="sb-unit-icon" />
                 <span className="sb-key">Units</span>
-                <span className="sb-val">{appPreferences.units}</span>
-            </div>
+                <span className="sb-val">{appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'in' : 'mm'}</span>
+            </button>
 
             {/* Alarm badge + clear button */}
             {machineState === 'alarm' && (

@@ -1,129 +1,136 @@
 /*
- * Theme system — two palettes wired through CSS variables.
- *
+ * Minimal Grey Theme system — macOS Desktop Software template styling.
+ * Supports light & dark theme matching the Minimal Grey design system.
  * Switch by setting `data-theme="dark" | "light"` on <html>.
- * Default = dark (Desert Sandstone with orange accent).
- *
- * Variables intentionally named by semantic role, not raw hue, so future
- * themes can be added without touching component CSS.
- *
- * Three.js scenes read these vars via getComputedStyle(document.documentElement)
- * and re-init on the 'cnc:theme' window event.
  */
 
 :root,
 :root[data-theme='dark'] {
-    /* Original cool-dark navy + ORANGE accent — reverted per Tawfiq photo 7234 (2026-06-28).
-       Desert Sandstone warm-brown background was rejected; orange accent stays. */
-    --bg-app:        #0e1015;
-    --bg-sidebar:    #15171f;
-    --bg-panel:      #181b25;
-    --bg-elevated:   #1f2330;
-    --bg-overlay:    rgba(14, 16, 21, 0.85);
+    /* Minimal Grey — Dark Theme (macOS Dark Software Aesthetic) */
+    --bg-app:        #16191e;
+    --bg-sidebar:    #1d2127;
+    --bg-panel:      #1d2127;
+    --bg-elevated:   #252a32;
+    --bg-card:       #252a32;
+    --bg-input:      #181b20;
+    --bg-hover:      rgba(255, 255, 255, 0.08);
+    --bg-overlay:    rgba(22, 25, 30, 0.90);
 
-    --text-main:     #e2e8f0;
-    --text-dim:      #94a3b8;
-    --text-mute:     #64748b;
+    --text-main:     #e6edf3;
+    --text-dim:      #8b949e;
+    --text-mute:     #6e7681;
+    --text-bright:   #ffffff;
 
-    --border:        rgba(255, 255, 255, 0.10);
-    --border-strong: rgba(255, 255, 255, 0.20);
+    --border:        #30363d;
+    --border-strong: #444c56;
+    --border-ui:     #30363d;
 
-    /* Vivid peach orange — matches the "Browse for G-Code File" button */
-    --accent:        #f59e0b;
-    --accent-strong: #d97706;
-    --accent-soft:   rgba(245, 158, 11, 0.18);
-    --accent-hover:  rgba(245, 158, 11, 0.30);
-    --accent-text:   #1a1410;
+    /* Accent & Active Tab Pill */
+    --accent:        #383f4d;
+    --accent-strong: #4b5466;
+    --accent-soft:   rgba(56, 63, 77, 0.40);
+    --accent-hover:  rgba(75, 84, 102, 0.50);
+    --accent-text:   #ffffff;
 
     --axis-x: #ef4444;
     --axis-y: #10b981;
     --axis-z: #3b82f6;
 
     --status-ok:    #4ade80;
-    --status-warn:  #fde047;
-    --status-bad:   #fca5a5;
-    --status-idle:  #94a3b8;
+    --status-warn:  #fbbf24;
+    --status-bad:   #f87171;
+    --status-idle:  #8b949e;
 
-    /* Pill button gradients — START orange, PAUSE outlined, STOP red */
-    --btn-primary-bg:    linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
-    --btn-primary-bd:    #d97706;
-    --btn-primary-fg:    #1a1410;
-    --btn-primary-shadow:0 4px 16px rgba(245, 158, 11, 0.40), inset 0 1px 0 rgba(255, 240, 200, 0.45);
+    /* Button Gradients & Colors */
+    --btn-primary-bg:    #343b47;
+    --btn-primary-bd:    #485263;
+    --btn-primary-fg:    #ffffff;
+    --btn-primary-shadow:0 2px 8px rgba(0, 0, 0, 0.40);
 
-    --btn-warn-bg:       transparent;
+    --btn-warn-bg:       rgba(245, 158, 11, 0.15);
     --btn-warn-bd:       #f59e0b;
     --btn-warn-fg:       #fbbf24;
 
-    --btn-danger-bg:     linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
-    --btn-danger-bd:     #991b1b;
-    --btn-danger-fg:     #fff5f5;
+    --btn-danger-bg:     #dc2626;
+    --btn-danger-bd:     #b91c1c;
+    --btn-danger-fg:     #ffffff;
 
-    /* 3D scene colours (Three.js reads these as 0xRRGGBB hex) */
-    --scene-bg:      #0e1015;
+    /* 3D scene colours */
+    --scene-bg:      #14171c;
     --scene-grid:    #283040;
-    --scene-bed:     #161b25;
-    --scene-rapid:   #2dd4bf;
-    --scene-cut:     #f59e0b;
-    --scene-arc:     #fb923c;
+    --scene-bed:     #1a1e24;
+    --scene-rapid:   #38bdf8;
+    --scene-cut:     #F28C28;
+    --scene-arc:     #F28C28;
     --scene-cursor:  #fde047;
 }
 
 :root[data-theme='light'] {
-    /* Stack Overflow Light — Tawfiq's pick from Gallery v2 (2026-06-29, msg 7254) */
-    --bg-app:        #f8f9f9;
-    --bg-sidebar:    #ffffff;
-    --bg-panel:      #f1f2f3;
+    /* Minimal Grey — Light Theme (macOS Light Software Aesthetic) */
+    --bg-app:        #ebedf0;
+    --bg-sidebar:    #f4f5f8;
+    --bg-panel:      #f4f5f8;
     --bg-elevated:   #ffffff;
-    --bg-overlay:    #f8f9f9f0;
+    --bg-card:       #ffffff;
+    --bg-input:      #ffffff;
+    --bg-hover:      rgba(0, 0, 0, 0.05);
+    --bg-overlay:    rgba(235, 237, 240, 0.90);
 
-    --text-main:     #232629;
-    --text-dim:      #6a737c;
-    --text-mute:     #6a737c;
+    --text-main:     #1e293b;
+    --text-dim:      #475569;
+    --text-mute:     #94a3b8;
+    --text-bright:   #0f172a;
 
-    --border:        #d6d9dc;
-    --border-strong: #d6d9dc;
+    --border:        #d0d5dd;
+    --border-strong: #94a3b8;
+    --border-ui:     #d0d5dd;
 
-    --accent:        #f48024;
-    --accent-strong: #f48024;
-    --accent-soft:   #f4802422;
-    --accent-hover:  #f4802433;
+    /* Accent & Active Tab Pill */
+    --accent:        #5a6578;
+    --accent-strong: #475263;
+    --accent-soft:   rgba(90, 101, 120, 0.12);
+    --accent-hover:  rgba(90, 101, 120, 0.22);
     --accent-text:   #ffffff;
 
     --axis-x: #d63a3a;
     --axis-y: #2c9854;
     --axis-z: #2b6fbf;
 
-    --status-ok:    #16a34a;
-    --status-warn:  #ca8a04;
-    --status-bad:   #b91c1c;
-    --status-idle:  #6a737c;
+    --status-ok:    #10b981;
+    --status-warn:  #f59e0b;
+    --status-bad:   #ef4444;
+    --status-idle:  #64748b;
 
-    --btn-primary-bg:    #f48024;
-    --btn-primary-bd:    #f48024;
+    /* Button Gradients & Colors */
+    --btn-primary-bg:    #5a6578;
+    --btn-primary-bd:    #475263;
     --btn-primary-fg:    #ffffff;
-    --btn-primary-shadow:0 2px 8px #f4802440, inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    --btn-primary-shadow:0 2px 4px rgba(0, 0, 0, 0.12);
 
-    --btn-warn-bg:       transparent;
-    --btn-warn-bd:       #f48024;
-    --btn-warn-fg:       #f48024;
+    --btn-warn-bg:       #fef3c7;
+    --btn-warn-bd:       #f59e0b;
+    --btn-warn-fg:       #b45309;
 
-    --btn-danger-bg:     #b91c1c;
-    --btn-danger-bd:     #7f1d1d;
+    --btn-danger-bg:     #dc2626;
+    --btn-danger-bd:     #b91c1c;
     --btn-danger-fg:     #ffffff;
 
-    --scene-bg:      #ebedee;
-    --scene-grid:    #c8cccd;
-    --scene-bed:     #f1f2f3;
-    --scene-rapid:   #6a737c;
-    --scene-cut:     #f48024;
-    --scene-arc:     #f48024;
-    --scene-cursor:  #d63a3a;
+    /* 3D scene colours */
+    --scene-bg:      #e4e8ec;
+    --scene-grid:    #8b98a8;
+    --scene-bed:     #c5cdd6;
+    --scene-rapid:   #0284c7;
+    --scene-cut:     #F28C28;
+    --scene-arc:     #F28C28;
+    --scene-cursor:  #ef4444;
 }
 
-/* Smooth transitions on theme switch (skip for things that animate often) */
+/* Smooth transitions on theme switch */
 body, .app, .settings-root, .settings-sidebar, .settings-content,
 .wa-block, .wa-list-item, .settings-card,
 .v3d-canvas-wrap, .v3d-toolbar, .v3d-stats,
-.v3d-playback-bar, .v3d-carve-bar, .v3d-sim-launcher {
+.v3d-playback-bar, .v3d-carve-bar, .v3d-sim-launcher,
+.sidebar, .dro-row, .header, .status-bar, .v3d-root {
     transition: background 240ms ease, color 240ms ease, border-color 240ms ease;
 }
+

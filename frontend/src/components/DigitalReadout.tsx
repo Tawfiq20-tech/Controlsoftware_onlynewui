@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCNCStore } from '../stores/cncStore';
+import { backendZeroAll, sendBackendCommand } from '../utils/backendConnection';
 import './DigitalReadout.css';
 
 interface DigitalReadoutProps {
@@ -14,11 +15,30 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
         machineState,
         activeWCS,
         setActiveWCS,
+        setPosition,
         updatePosition
     } = useCNCStore();
 
     const [editingAxis, setEditingAxis] = useState<string | null>(null);
     const [editValue, setEditValue] = useState<string>('');
+
+    const handleZeroAll = () => {
+        if (!connected || machineState !== 'idle') return;
+        backendZeroAll();
+        setPosition({ x: 0, y: 0, z: 0 });
+    };
+
+    const handleZeroXY = () => {
+        if (!connected || machineState !== 'idle') return;
+        sendBackendCommand('G10 L20 P0 X0 Y0');
+        setPosition({ ...position, x: 0, y: 0 });
+    };
+
+    const handleZeroZ = () => {
+        if (!connected || machineState !== 'idle') return;
+        sendBackendCommand('G10 L20 P0 Z0');
+        setPosition({ ...position, z: 0 });
+    };
 
     const handleAxisClick = (axis: 'x' | 'y' | 'z') => {
         if (!connected || machineState !== 'idle') return;
@@ -142,6 +162,7 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
                 <button 
                     className="zero-button zero-all"
                     disabled={!connected || machineState !== 'idle'}
+                    onClick={handleZeroAll}
                     title="Zero all axes"
                 >
                     Zero All
@@ -149,6 +170,7 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
                 <button 
                     className="zero-button zero-xy"
                     disabled={!connected || machineState !== 'idle'}
+                    onClick={handleZeroXY}
                     title="Zero X and Y axes"
                 >
                     Zero XY
@@ -156,6 +178,7 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
                 <button 
                     className="zero-button zero-z"
                     disabled={!connected || machineState !== 'idle'}
+                    onClick={handleZeroZ}
                     title="Zero Z axis"
                 >
                     Zero Z

@@ -3,7 +3,7 @@ import {
     ChevronUp, ChevronDown,
     Upload, File, X, Play, Terminal,
     Settings, Info, Check, AlertTriangle, Circle, Plus, Edit, Trash2,
-    RefreshCw, RotateCcw, FileText, Crosshair, Home,
+    RefreshCw, RotateCcw, FileText, Crosshair, Home, Ruler,
 } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { formatAxisValue, formatFileSize } from '../utils/formatters';
@@ -59,6 +59,7 @@ export default function Sidebar() {
         setRawGcodeContent,
         toolpathSegments: _ts, setToolpathSegments,
         consoleLines, addConsoleLog,
+        appPreferences, setAppPreferences,
     } = useCNCStore();
 
     // Lock the Controls tab while the machine is actively running a job, so
@@ -140,6 +141,14 @@ export default function Sidebar() {
 
     // Continuous jog start/stop can be wired to pointer events when continuous mode UI is added.
     // For now, step-mode jog is used via handleJog.
+
+    const handleToggleUnits = () => {
+        const currentUnit = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'inches' : 'mm';
+        const nextUnits = currentUnit === 'inches' ? 'mm' : 'inches';
+        setAppPreferences({ ...appPreferences, units: nextUnits });
+        sendBackendCommand(nextUnits === 'mm' ? 'G21' : 'G20');
+        addConsoleLog('info', `Units switched to ${nextUnits.toUpperCase()} (${nextUnits === 'mm' ? 'G21' : 'G20'})`);
+    };
 
     const handleZero = (axis: 'x' | 'y' | 'z') => {
         if (!connected) return;
@@ -526,13 +535,23 @@ export default function Sidebar() {
                             <span className="pos-th-axis">Axis</span>
                             <span className="pos-th-work">Work Position</span>
                             <span className="pos-th-machine">Machine Position</span>
-                            <span className="pos-th-actions"></span>
+                            <span className="pos-th-actions">
+                                <button
+                                    className="pos-unit-toggle-btn"
+                                    onClick={handleToggleUnits}
+                                    title={`Active Units: ${appPreferences?.units || 'mm'}. Click to toggle mm / inches (G21 / G20)`}
+                                >
+                                    <Ruler size={10} />
+                                    <span>{appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'in' : 'mm'}</span>
+                                </button>
+                            </span>
                         </div>
 
                         {/* Axis Rows */}
                         <div className="dro-container">
                             {(['x', 'y', 'z'] as const).map(axis => {
                                 const machinePos = useCNCStore.getState().machinePosition;
+                                const isInch = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in';
                                 return (
                                     <div className="dro-row" key={axis}>
                                         <div
@@ -543,7 +562,7 @@ export default function Sidebar() {
                                         </div>
                                         <span className="dro-value">
                                             {formatAxisValue(position[axis])}
-                                            <span className="dro-unit">mm</span>
+                                            <span className="dro-unit">{isInch ? 'in' : 'mm'}</span>
                                         </span>
                                         <span className="dro-machine-value">
                                             {formatAxisValue(machinePos[axis])}

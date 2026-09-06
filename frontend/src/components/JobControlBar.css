@@ -1,53 +1,56 @@
 /* Job Control Bar - positioned below 3D preview */
 .job-control-bar {
     position: absolute;
-    bottom: 80px; /* Above the info panel */
+    bottom: 24px;
     left: 16px;
     right: 16px;
     display: flex;
     align-items: center;
     gap: 12px;
-    background: rgba(26, 26, 30, 0.9);
+    background: var(--bg-overlay, rgba(22, 25, 30, 0.92));
     backdrop-filter: blur(20px);
-    padding: 12px 16px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    padding: 10px 16px;
+    border-radius: var(--radius-lg, 10px);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
     z-index: 15;
+    transition: background 240ms ease, border-color 240ms ease;
 }
 
 .job-control-bar .job-play-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    border: none;
-    background: rgba(255, 255, 255, 0.1);
-    color: #b0b0b0;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid var(--btn-primary-bd, #485263);
+    background: var(--btn-primary-bg, #343b47);
+    color: var(--btn-primary-fg, #ffffff);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
     flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .job-control-bar .job-play-btn:hover:not(:disabled) {
-    background: #4a90e2;
+    background: var(--primary-hover, #475263);
     color: #ffffff;
     transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(74, 144, 226, 0.3);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .job-control-bar .job-play-btn:disabled {
-    opacity: 0.3;
+    opacity: 0.35;
     cursor: not-allowed;
     transform: none;
 }
 
 .job-control-bar .job-play-btn.running {
-    background: rgba(74, 144, 226, 0.2);
-    color: #4a90e2;
-    border: 1px solid rgba(74, 144, 226, 0.3);
+    background: var(--status-ok, #10b981);
+    color: #ffffff;
+    border-color: var(--status-ok, #10b981);
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
 }
 
 .job-control-bar .job-info {
@@ -59,42 +62,42 @@
     display: flex;
     gap: 16px;
     font-size: 11px;
-    color: #888888;
+    color: var(--text-dim, #8b949e);
     margin-bottom: 6px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
 .job-control-bar .job-stat-val {
-    color: #ffffff;
-    font-weight: 600;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    color: var(--text-main, #e6edf3);
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
     text-transform: none;
     letter-spacing: 0;
 }
 
 .job-control-bar .job-progress-bar {
-    height: 4px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 2px;
+    height: 5px;
+    background: var(--border-ui, rgba(255, 255, 255, 0.1));
+    border-radius: 3px;
     overflow: hidden;
 }
 
 .job-control-bar .job-progress-fill {
     height: 100%;
-    background: #4a90e2;
-    border-radius: 2px;
+    background: var(--accent, #5a6578);
+    border-radius: 3px;
     transition: width 0.3s ease;
 }
 
 .job-control-bar .job-stop-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    border: 1px solid rgba(220, 38, 38, 0.3);
-    background: rgba(220, 38, 38, 0.1);
-    color: #dc2626;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid var(--border-ui, rgba(220, 38, 38, 0.3));
+    background: var(--bg-elevated, #252a32);
+    color: var(--status-bad, #ef4444);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -104,13 +107,14 @@
 }
 
 .job-control-bar .job-stop-btn:hover:not(:disabled) {
-    background: rgba(220, 38, 38, 0.2);
-    border-color: rgba(220, 38, 38, 0.5);
+    background: var(--status-bad, #ef4444);
+    border-color: var(--status-bad, #ef4444);
+    color: #ffffff;
     transform: translateY(-1px);
 }
 
 .job-control-bar .job-stop-btn:disabled {
-    opacity: 0.2;
+    opacity: 0.3;
     cursor: not-allowed;
     transform: none;
 }
@@ -120,11 +124,11 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    padding: 10px 14px;
-    background: #dc2626;
-    border: 2px solid #dc2626;
-    border-radius: 8px;
-    color: white;
+    padding: 9px 14px;
+    background: var(--btn-danger-bg, #dc2626);
+    border: 1px solid var(--btn-danger-bd, #b91c1c);
+    border-radius: var(--radius-md, 6px);
+    color: var(--btn-danger-fg, #ffffff);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
@@ -132,26 +136,26 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     flex-shrink: 0;
+    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.25);
 }
 
 .job-control-bar .emergency-stop-btn:hover:not(:disabled) {
     background: #b91c1c;
-    border-color: #b91c1c;
-    transform: scale(1.05);
+    border-color: #991b1b;
+    transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(220, 38, 38, 0.4);
 }
 
 .job-control-bar .emergency-stop-btn:active:not(:disabled) {
-    transform: scale(0.98);
+    transform: translateY(0);
     background: #991b1b;
-    border-color: #991b1b;
 }
 
 .job-control-bar .emergency-stop-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    background: #6b7280;
-    border-color: #6b7280;
+    background: var(--bg-elevated, #6b7280);
+    border-color: var(--border-ui, #6b7280);
     transform: none;
 }
 
@@ -160,10 +164,10 @@
 .job-control-bar .job-startfrom-btn {
     width: 36px;
     height: 36px;
-    border-radius: 7px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.06);
-    color: #888;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.1));
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+    color: var(--text-dim, #888);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -172,17 +176,11 @@
     flex-shrink: 0;
 }
 
-.job-control-bar .job-outline-btn:hover:not(:disabled) {
-    background: rgba(167, 139, 250, 0.15);
-    border-color: rgba(167, 139, 250, 0.35);
-    color: #a78bfa;
-    transform: translateY(-1px);
-}
-
+.job-control-bar .job-outline-btn:hover:not(:disabled),
 .job-control-bar .job-startfrom-btn:hover:not(:disabled) {
-    background: rgba(74, 144, 226, 0.15);
-    border-color: rgba(74, 144, 226, 0.35);
-    color: #4a90e2;
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+    color: var(--text-main);
     transform: translateY(-1px);
 }
 
@@ -196,17 +194,17 @@
 /* Responsive design */
 @media (max-width: 768px) {
     .job-control-bar {
-        bottom: 70px;
+        bottom: 16px;
         left: 8px;
         right: 8px;
-        padding: 10px 12px;
+        padding: 8px 12px;
         gap: 8px;
     }
     
     .job-control-bar .job-play-btn,
     .job-control-bar .job-stop-btn {
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
     }
     
     .job-control-bar .job-stats-row {
@@ -215,7 +213,7 @@
     }
     
     .job-control-bar .emergency-stop-btn {
-        padding: 8px 10px;
+        padding: 7px 10px;
         font-size: 10px;
     }
 }

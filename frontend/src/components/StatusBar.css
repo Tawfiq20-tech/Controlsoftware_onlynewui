@@ -26,6 +26,24 @@
     height: 100%;
 }
 
+.sb-unit-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background var(--transition-fast), color var(--transition-fast);
+    border-radius: 4px;
+}
+
+.sb-unit-btn:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    color: var(--text-main);
+}
+
+.sb-unit-icon {
+    color: var(--primary-accent);
+}
+
 .sb-divider {
     width: 1px;
     height: 14px;

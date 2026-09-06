@@ -3,16 +3,12 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #0e1015;
-    color: #e2e8f0;
+    background: var(--scene-bg, #16191e);
+    color: var(--text-main, #e2e8f0);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-/* Carve mode: viewer | resize-handle (4 px) | G-code list panel.
-   Three columns because the ResizeHandle is itself a grid item — if we
-   only declared two columns it would wrap to a second row and push the
-   G-code panel BELOW the canvas (the bug Tawfiq hit in msg 7339).
-   --gp-w is set by ResizeHandle drag + localStorage; defaults to 280. */
+/* Carve mode: viewer | resize-handle (4 px) | G-code list panel. */
 .v3d-root-carve {
     display: grid;
     grid-template-columns: 1fr 4px var(--gp-w, 280px);
@@ -35,9 +31,9 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    background: rgba(20, 24, 36, 0.85);
+    background: var(--bg-overlay, rgba(20, 24, 36, 0.85));
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
     border-radius: 10px;
     padding: 6px;
     z-index: 5;
@@ -46,31 +42,29 @@
 
 .v3d-toolbar-top {
     top: 12px;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 12px;
+    transform: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    padding: 6px 8px;
+    width: fit-content;
 }
 
-/* Narrow widths: anchor the toolbar to the left + cap its width so the
-   buttons wrap onto a second row instead of running into the info card
-   on the right (Tawfiq msg 7324, vertical preview v2). */
-@media (max-width: 900px) {
-    .v3d-toolbar-top {
-        left: 12px;
-        transform: none;
-        max-width: calc(100% - 220px);
-    }
-}
-@media (max-width: 600px) {
-    .v3d-toolbar-top { max-width: calc(100% - 24px); }
+.v3d-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .v3d-btn {
     height: 26px;
     min-width: 26px;
     padding: 0 10px;
-    background: #181e2b;
-    color: #9ca3af;
-    border: 1px solid #283245;
+    background: var(--bg-elevated, #181e2b);
+    color: var(--text-dim, #9ca3af);
+    border: 1px solid var(--border-ui, #283245);
     border-radius: 4px;
     font-size: 10.5px;
     font-weight: 600;
@@ -81,35 +75,35 @@
     align-items: center;
     justify-content: center;
     transition: all 120ms ease;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
 
 .v3d-btn:hover {
-    background: #222b3d;
-    color: #f3f4f6;
-    border-color: #3b4863;
+    background: var(--bg-hover, #222b3d);
+    color: var(--text-main, #f3f4f6);
+    border-color: var(--border-hover, #3b4863);
 }
 
 .v3d-btn.active {
-    background: #273142;
-    border-color: #f59e0b;
-    color: #fbbf24;
-    box-shadow: inset 0 0 0 1px #f59e0b, 0 1px 4px rgba(245, 158, 11, 0.25);
+    background: var(--accent, #383f4d);
+    border-color: var(--accent, #383f4d);
+    color: var(--accent-text, #ffffff);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
     font-weight: 700;
 }
 
 .v3d-divider {
     width: 1px;
     height: 18px;
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--border-ui, rgba(255, 255, 255, 0.12));
     margin: 0 4px;
 }
 
 .v3d-hud {
     position: absolute;
-    background: rgba(20, 24, 36, 0.85);
+    background: var(--bg-overlay, rgba(20, 24, 36, 0.85));
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
     border-radius: 10px;
     padding: 10px 14px;
     z-index: 5;
@@ -130,19 +124,19 @@
 }
 
 .v3d-hud-label {
-    color: #93c5fd;
+    color: var(--axis-z, #93c5fd);
     font-weight: 600;
     width: 14px;
 }
 
 .v3d-hud-val {
-    color: #e2e8f0;
+    color: var(--text-main, #e2e8f0);
     font-weight: 600;
 }
 
-.v3d-hud-line { color: #cbd5e1; }
-.v3d-hud-line b { color: #f1f5f9; font-weight: 600; }
-.v3d-hud-dim { color: #94a3b8; font-size: 11px; }
+.v3d-hud-line { color: var(--text-main, #cbd5e1); }
+.v3d-hud-line b { color: var(--text-bright, #f1f5f9); font-weight: 600; }
+.v3d-hud-dim { color: var(--text-dim, #94a3b8); font-size: 11px; }
 
 .v3d-legend {
     position: absolute;
@@ -154,13 +148,13 @@
     flex-wrap: wrap;
     justify-content: center;
     max-width: calc(100% - 24px);
-    background: rgba(20, 24, 36, 0.85);
+    background: var(--bg-overlay, rgba(20, 24, 36, 0.85));
     backdrop-filter: blur(8px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
     border-radius: 8px;
     padding: 6px 12px;
     font-size: 11px;
-    color: #cbd5e1;
+    color: var(--text-dim, #cbd5e1);
     z-index: 5;
 }
 
@@ -196,7 +190,7 @@
     align-items: center;
     gap: 10px;
     padding: 8px 12px;
-    background: rgba(20, 24, 36, 0.92);
+    background: var(--bg-overlay, rgba(20, 24, 36, 0.92));
     backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 10px;
@@ -352,14 +346,15 @@
 .v3d-sim-meta b { color: var(--text-main, #f1f5f9); font-weight: 600; }
 
 /* ── Design info card (top-right HUD) — Tawfiq msg 7262 redesign ── */
+/* ── Design info card (top-right HUD) ── */
 .v3d-info-card {
     position: absolute;
     top: 12px; right: 12px;
     min-width: 240px;
     padding: 12px 14px;
-    background: rgba(15, 19, 32, 0.78);
-    backdrop-filter: blur(10px);
-    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    background: var(--bg-overlay, rgba(22, 25, 30, 0.90));
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.10));
     border-radius: 10px;
     color: var(--text-main, #e2e8f0);
     font-size: 12px;
@@ -367,10 +362,11 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
 }
 .v3d-info-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--text-main, #f1f5f9);
     white-space: nowrap;
     overflow: hidden;
@@ -385,15 +381,16 @@
     display: flex; flex-direction: column;
     gap: 2px;
     padding: 6px 8px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
     border-radius: 6px;
 }
 .v3d-info-label {
     font-size: 9px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    font-weight: 600;
-    color: var(--text-mute, #64748b);
+    font-weight: 700;
+    color: var(--text-dim, #64748b);
 }
 .v3d-info-val {
     font-size: 14px;
@@ -408,24 +405,23 @@
     margin-left: 2px;
 }
 .v3d-info-meta {
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--text-dim, #94a3b8);
     font-variant-numeric: tabular-nums;
-    padding-top: 4px;
-    border-top: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+    padding-top: 6px;
+    border-top: 1px solid var(--border-ui, rgba(255, 255, 255, 0.06));
     line-height: 1.4;
 }
 
-/* Inline X/Y/Z position chips — used inside Prepare-mode info card AND
-   the Carve top banner. Replaces the old standalone top-left HUD per
-   Tawfiq msg 7316 (was overlapping the view toolbar). */
+/* Inline X/Y/Z position chips */
 .v3d-info-pos {
     display: grid;
     grid-template-columns: auto 1fr auto 1fr auto 1fr;
     gap: 4px 6px;
     align-items: center;
     padding: 6px 8px;
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
     border-radius: 6px;
 }
 .v3d-info-pos-chip {
@@ -650,5 +646,160 @@
 .v3d-gp-row.current .v3d-gp-num  { background: var(--accent, #f59e0b); color: var(--accent-text, #1a1410); font-weight: 700; }
 .v3d-gp-row.current .v3d-gp-code { color: var(--text-main, #f1f5f9); font-weight: 600; }
 
+/* Machine selector in 3D toolbar */
+.v3d-machine-selector {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-elevated, #181e2b);
+    border: 1px solid var(--border-ui, #283245);
+    border-radius: 4px;
+    padding: 0 8px;
+    height: 26px;
+    color: var(--text-dim, #9ca3af);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    transition: all 120ms ease;
+}
 
+.v3d-machine-selector:hover {
+    border-color: var(--border-strong, #475569);
+    color: var(--text-main, #f3f4f6);
+}
 
+.v3d-machine-dropdown {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-main, #f3f4f6);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.v3d-machine-dropdown option {
+    background: var(--bg-elevated, #181e2b);
+    color: var(--text-main, #f3f4f6);
+}
+
+/* Range status badge in 3D info card */
+.v3d-range-badge {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+}
+
+.v3d-range-badge.ok {
+    background: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.v3d-range-badge.warn {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    animation: v3d-pulse 2s infinite ease-in-out;
+}
+
+@keyframes v3d-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Custom Machine Modal Dialog */
+.v3d-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.v3d-modal {
+    background: var(--bg-card, #1e2433);
+    border: 1px solid var(--border-ui, #2e384d);
+    border-radius: 8px;
+    width: 360px;
+    padding: 20px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    color: var(--text-main, #ffffff);
+}
+
+.v3d-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-ui, rgba(255, 255, 255, 0.08));
+}
+
+.v3d-modal-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-bright, #ffffff);
+}
+
+.v3d-modal-close {
+    background: transparent;
+    border: none;
+    color: var(--text-mute, #94a3b8);
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.v3d-modal-close:hover {
+    color: var(--text-bright, #ffffff);
+}
+
+.v3d-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.v3d-input-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.v3d-input-row label {
+    font-size: 11.5px;
+    color: var(--text-dim, #cbd5e1);
+    font-weight: 500;
+}
+
+.v3d-input-row input {
+    background: var(--bg-input, #0f131a);
+    border: 1px solid var(--border-ui, #334155);
+    border-radius: 4px;
+    padding: 6px 10px;
+    color: var(--text-main, #ffffff);
+    font-size: 13px;
+    outline: none;
+}
+
+.v3d-input-row input:focus {
+    border-color: var(--accent, #3b82f6);
+}
+
+.v3d-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}

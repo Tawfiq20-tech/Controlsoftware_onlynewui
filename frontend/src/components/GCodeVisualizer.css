@@ -3,7 +3,7 @@
     flex: 1;
     position: relative;
     overflow: hidden;
-    background: radial-gradient(circle at center, #161c27 0%, #0c0f14 100%);
+    background: var(--scene-bg, #16191e);
     touch-action: none;
 }
 

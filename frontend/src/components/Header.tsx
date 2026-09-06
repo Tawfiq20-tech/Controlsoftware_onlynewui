@@ -1,9 +1,10 @@
-import { useState, useRef } from 'react';
-import { Square, Home, ChevronDown, AlertTriangle } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Square, Home, ChevronDown, AlertTriangle, Sun, Moon } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { backendEstop, backendEstopClear, backendUnlock, backendMotorReset, backendClearLimitError } from '../utils/backendConnection';
 import HomeMenu from './HomeMenu';
 import onefinityLogo from '../assets/brand/onefinity-logo.png';
+import { ThemeId, getStoredTheme, setTheme, onThemeChange } from '../utils/theme';
 import './Header.css';
 
 interface HeaderProps {
@@ -22,6 +23,18 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
     const [homeMenuOpen, setHomeMenuOpen] = useState(false);
     const homeBtnRef = useRef<HTMLButtonElement>(null);
     const [alarmDetailsOpen, setAlarmDetailsOpen] = useState(false);
+    const [theme, setCurrTheme] = useState<ThemeId>(getStoredTheme());
+
+    useEffect(() => {
+        const unsubscribe = onThemeChange((t) => setCurrTheme(t));
+        return unsubscribe;
+    }, []);
+
+    const toggleTheme = () => {
+        const nextTheme = theme === 'dark' ? 'light' : 'dark';
+        setCurrTheme(nextTheme);
+        setTheme(nextTheme);
+    };
 
     const {
         connected,
@@ -51,9 +64,7 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
         <>
         <header className="header flex items-center justify-between h-12 px-4 bg-bg-sidebar border-b border-border-ui">
             <div className="header-left flex items-center gap-3">
-                {/* Onefinity brand logo (Tawfiq msg 7389) — sits to the LEFT
-                    of the home icon so the product identity is the first
-                    thing on the screen. */}
+                {/* Onefinity brand logo */}
                 <img src={onefinityLogo} alt="Onefinity" className="header-brand-logo" />
 
                 {/* Home button + dropdown */}
@@ -77,7 +88,7 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
                     />
                 </div>
 
-                {/* Navigation Tabs — non-Carve tabs lock during an active carve job. */}
+                {/* Navigation Tabs */}
                 <nav className="nav-tabs flex" role="tablist">
                     {NAV_TABS.map(tab => {
                         const isCarving = machineState === 'running' || machineState === 'paused';
@@ -85,10 +96,10 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
                         return (
                             <button
                                 key={tab}
-                                className={`nav-tab px-4 py-2 text-sm font-medium transition-colors duration-fast border-b-2 ${
+                                className={`nav-tab px-4 py-2 text-sm font-medium transition-colors duration-fast ${
                                     activeTab === tab
-                                        ? 'text-primary border-primary'
-                                        : 'text-text-dim border-transparent hover:text-text-main'
+                                        ? 'active'
+                                        : 'text-text-dim hover:text-text-main'
                                 } ${locked ? 'nav-tab-locked' : ''}`}
                                 role="tab"
                                 aria-selected={activeTab === tab}
@@ -129,6 +140,18 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
 
             {/* Right — Actions */}
             <div className="header-right">
+                {/* Theme Toggle Button */}
+                <button
+                    type="button"
+                    className="theme-toggle-btn flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border-ui bg-bg-panel text-text-dim hover:text-text-main transition-all duration-fast"
+                    onClick={toggleTheme}
+                    title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Theme`}
+                    aria-label="Toggle Theme"
+                >
+                    {theme === 'dark' ? <Sun size={14} className="text-amber-400" /> : <Moon size={14} className="text-slate-700" />}
+                    <span className="hidden sm:inline capitalize">{theme}</span>
+                </button>
+
                 <button
                     className={`btn-danger flex items-center gap-2 px-3 py-1.5 text-xs font-bold rounded-md border transition-all duration-fast ${
                         !connected 
