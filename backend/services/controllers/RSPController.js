@@ -34,7 +34,7 @@ const { EventEmitter } = require('events');
 const logger = require('../../logger');
 const defs = require('../rsp/defs');
 const codec = require('../rsp/codec');
-const { ReliableStream, LinkLost } = require('../rsp/stream');
+const { ReliableStream, LinkLost, RspTimeoutError } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
 
@@ -67,6 +67,15 @@ const FEED_OVERRIDE_MIN = 50.0;
 const FEED_OVERRIDE_MAX = 150.0;
 const FEED_OVERRIDE_COARSE = 10.0;
 const FEED_OVERRIDE_FINE = 1.0;
+
+// FIX-7: on a failed ad-hoc probe (no contact within maxTravelMm, rejected
+// status, or a timed-out/lost reply), the tool is left wherever it stopped --
+// at/near the workpiece with no automatic retreat. This dispatch path (the
+// single quick-probe UI action, not the multi-step corner routine in
+// ProbingService.js) has no configStore wired in, so use a small, always-safe
+// hardcoded Z retreat rather than plumbing config through for one constant.
+const PROBE_FAIL_RETRACT_MM = 5.0;
+const PROBE_FAIL_RETRACT_FEED = 500;
 
 /**
  * Transport adapter bridging AXIO's Connection (rawData events / writeRaw)
@@ -781,9 +790,20 @@ class RSPController extends EventEmitter {
                 const dirNeg = p.dirNeg ? 1 : 0;
                 const maxTravelMm = Number(p.maxTravelMm || p.distance || 25);
                 const feed = Number(p.feed || p.feedRate || 100);
-                this.probeAxis(axis, dirNeg, maxTravelMm, feed).catch((exc) => {
-                    logger.warn(`[RSP] probe failed: ${exc.message || exc}`);
-                    this.emit('probe', { success: false, error: exc.message || String(exc) });
+                this.probeAxis(axis, dirNeg, maxTravelMm, feed).then((out) => {
+                    // FIX-7: contact:false is a normal resolution (firmware
+                    // ran out of travel without triggering), not a thrown
+                    // error -- still needs the same retract-on-fail as a
+                    // rejected/timed-out probe, or the bit is left sitting at
+                    // the far end of maxTravelMm with no automatic retreat.
+                    if (!out.contact) this._probeFailRetract('no contact within travel');
+                }).catch((exc) => {
+                    const msg = (exc instanceof RspTimeoutError)
+                        ? 'no reply from firmware before timeout -- check link/wiring'
+                        : (exc.message || String(exc));
+                    logger.warn(`[RSP] probe failed: ${msg}`);
+                    this.emit('probe', { success: false, error: msg });
+                    this._probeFailRetract(msg);
                 });
                 break;
             }
@@ -977,6 +997,30 @@ class RSPController extends EventEmitter {
             }
             return { x, y, z, feed };
         });
+    }
+
+    /**
+     * FIX-7: best-effort Z-only retreat after a failed ad-hoc probe (no
+     * contact, rejected status, timeout, or link loss), so the bit doesn't
+     * sit at the far end of maxTravelMm -- often at or just above the
+     * workpiece -- until the next unrelated move happens to clear it. Only
+     * moves Z (not X/Y) since a failed probe gives no information about
+     * whether a lateral move is obstructed. Deliberately swallows its own
+     * failure (e.g. link genuinely down) rather than throwing -- this runs
+     * inside a .then()/.catch() tail with nothing left to propagate to, and
+     * a failed safety retreat is not itself a new user-facing error.
+     */
+    _probeFailRetract(reason) {
+        if (!this.stream) return;
+        const mpos = this.state.status.mpos || { x: 0, y: 0, z: 0 };
+        this._moveAbsolute(mpos.x, mpos.y, mpos.z + PROBE_FAIL_RETRACT_MM, PROBE_FAIL_RETRACT_FEED)
+            .then(() => {
+                this.emit('console', `⚠️ Probe failed (${reason}) -- retracted Z ${PROBE_FAIL_RETRACT_MM}mm as a precaution.`);
+            })
+            .catch((exc) => {
+                logger.warn(`[RSP] probe-fail retract could not complete: ${exc.message || exc}`);
+                this.emit('console', `⚠️ Probe failed (${reason}) -- automatic retract ALSO failed (${exc.message || exc}). Check machine position before jogging.`);
+            });
     }
 
     _setFeedOverride(pct) {
