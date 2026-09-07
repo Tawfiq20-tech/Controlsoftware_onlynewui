@@ -120,7 +120,7 @@ export default function ProbingModal({ open, initialType, onClose }: Props) {
     // msg11601 item 4: separate, human-triggered step. WCS zero after the
     // xyz-corner routine still sits at the touch-plate TOP -- this call
     // only happens after the operator confirms the probe device is
-    // physically removed, then drops Z by plateThickness and re-zeros.
+    // physically removed, then drops Z by probeSettings.blockThickness and re-zeros.
     async function finalizeCorner() {
         setFinalizeState('running');
         setFinalizeError(null);

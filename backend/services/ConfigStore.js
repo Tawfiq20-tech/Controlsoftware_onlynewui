@@ -73,7 +73,6 @@ const DEFAULT_CONFIG = {
         jogSpeed: 1000,
         jogDistance: 1,
         safeHeight: 10,
-        probeThickness: 0,
         probeFeedrate: 100,
         spindleDelay: 0,
         reconnectAutomatically: false,
