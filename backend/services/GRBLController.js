@@ -97,6 +97,10 @@ class GrblController extends EventEmitter {
         // Initialization state
         this._initialized = false;
         this._initTimeout = null;
+        this._initStepTimeouts = [];
+
+        // Pending delayed soft-reset scheduled by gcode:stop (see _clearStopResetTimeout)
+        this._stopResetTimeout = null;
 
         // Wire up all sub-system events
         this._setupRunnerEvents();
@@ -141,6 +145,7 @@ class GrblController extends EventEmitter {
     unbind() {
         this._stopQueryTimer();
         this._clearInitTimeout();
+        this._clearStopResetTimeout();
 
         if (this.connection) {
             this.connection.removeAllListeners('data');
@@ -174,12 +179,15 @@ class GrblController extends EventEmitter {
     _requestInitData() {
         if (this._initialized) return;
 
-        // Send init commands in sequence
-        setTimeout(() => this.writeln('$I'), 100);   // Build info
-        setTimeout(() => this.writeln('$$'), 200);   // Settings
-        setTimeout(() => this.writeln('$#'), 300);   // Work coordinates
-        setTimeout(() => this.writeln('$N'), 400);   // Startup lines
-        setTimeout(() => this.writeln('$G'), 500);   // Parser state
+        // Send init commands in sequence. Handles are stored so a re-entrant
+        // call (e.g. a duplicate startup banner arriving before _initialized
+        // flips true) can have its predecessor's batch fully cancelled
+        // instead of leaking a second uncancelled set of writes onto the wire.
+        this._initStepTimeouts.push(setTimeout(() => this.writeln('$I'), 100));   // Build info
+        this._initStepTimeouts.push(setTimeout(() => this.writeln('$$'), 200));   // Settings
+        this._initStepTimeouts.push(setTimeout(() => this.writeln('$#'), 300));   // Work coordinates
+        this._initStepTimeouts.push(setTimeout(() => this.writeln('$N'), 400));   // Startup lines
+        this._initStepTimeouts.push(setTimeout(() => this.writeln('$G'), 500));   // Parser state
 
         // Mark initialized and start polling after all commands sent
         this._initTimeout = setTimeout(() => {
@@ -196,6 +204,15 @@ class GrblController extends EventEmitter {
         if (this._initTimeout) {
             clearTimeout(this._initTimeout);
             this._initTimeout = null;
+        }
+        for (const t of this._initStepTimeouts) clearTimeout(t);
+        this._initStepTimeouts = [];
+    }
+
+    _clearStopResetTimeout() {
+        if (this._stopResetTimeout) {
+            clearTimeout(this._stopResetTimeout);
+            this._stopResetTimeout = null;
         }
     }
 
@@ -218,6 +235,7 @@ class GrblController extends EventEmitter {
     _onClose() {
         this._stopQueryTimer();
         this._clearInitTimeout();
+        this._clearStopResetTimeout();
         this._initialized = false;
         this.workflow.stop();
         this.sender.rewind();
@@ -244,6 +262,12 @@ class GrblController extends EventEmitter {
 
         this.runner.on('ok', () => {
             this.emit('ok');
+
+            // Ignore bare 'ok' tokens while the init/settings handshake is
+            // still in flight -- those are replies to $I/$$/$#/$N/$G, not
+            // G-code line acks, and must never be counted toward job/feeder
+            // progress (see BUG-01: false 100% job completion).
+            if (!this._initialized) return;
 
             // Drive the sender forward if streaming
             if (this.sender.isActive) {
@@ -550,6 +574,10 @@ class GrblController extends EventEmitter {
         return {
             // ─── G-code streaming ────────────────────────────────
             'gcode:load': (name, gcode, context) => {
+                // Cancel any reset still pending from a prior gcode:stop --
+                // otherwise it can fire mid-execution of this newly loaded
+                // job (see BUG-04: stop-then-reload reboots the board).
+                this._clearStopResetTimeout();
                 this.sender.load(name, gcode, context);
                 this.emit('gcode:load', { name, total: this.sender.total });
             },
@@ -560,6 +588,7 @@ class GrblController extends EventEmitter {
             },
             'gcode:start': () => {
                 if (this.sender.total === 0) return;
+                this._clearStopResetTimeout();
                 this.workflow.start();
                 this.sender.rewind();
                 this.sender.unhold();
@@ -594,7 +623,9 @@ class GrblController extends EventEmitter {
                 this.sender.rewind();
                 this.feeder.clear();
                 this.writeImmediate(GRBL_REALTIME_COMMANDS.FEED_HOLD);
-                setTimeout(() => {
+                this._clearStopResetTimeout();
+                this._stopResetTimeout = setTimeout(() => {
+                    this._stopResetTimeout = null;
                     this.writeImmediate(GRBL_REALTIME_COMMANDS.SOFT_RESET);
                 }, 250);
             },

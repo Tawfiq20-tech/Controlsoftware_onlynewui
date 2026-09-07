@@ -146,9 +146,14 @@ class GrblRunner extends EventEmitter {
             return;
         }
 
-        // Startup line ($N0=...)
+        // Startup block setting ($N0=..., $N1=...) -- NOT a firmware boot event.
+        // Must use a different event name than the real boot banner below:
+        // GRBLController's init sequence requests these via '$N' as one of its
+        // own steps, so if this fired 'startup' it would signal "the board just
+        // rebooted" on every single init cycle and re-trigger _requestInitData()
+        // forever, starving _initialized from ever becoming true.
         if (/^\$N\d+=/.test(line)) {
-            this.emit('startup', { raw: line });
+            this.emit('startupBlocks', { raw: line });
             return;
         }
 
