@@ -83,7 +83,7 @@ const webcamService     = new WebcamService({     configStore: engine.config, io
 const gamepadService    = new GamepadService({    configStore: engine.config, io, logger, getController });
 const watchdirService   = new WatchDirService({   configStore: engine.config, io, logger });
 const probingService    = new ProbingService({    configStore: engine.config, io, logger, getController });
-const jobHistoryService = new JobHistoryService({ dataDir,                    io, logger, getController });
+const jobHistoryService = new JobHistoryService({ dataDir,                    io, logger, getController, getEngine: () => engine });
 const jobResumeService  = new JobResumeService({  dataDir, io, logger, getController,
                                                   getConfig: () => engine.config });
 const toolLibrary       = new ToolLibrary({       configStore: engine.config, io, logger });
