@@ -12,6 +12,7 @@ import StatusBar from './components/StatusBar';
 import { QuickHelpButton } from './components/KeyboardShortcuts';
 import HomingOverlay from './components/HomingOverlay';
 import { SafetyBanner } from './components/SafetyBanner';
+import MotorErrorDialog from './components/MotorErrorDialog';
 import ResizeHandle from './components/ResizeHandle';
 import ProbingModal from './components/ProbingModal/ProbingModal';
 import ChatBot from './components/ChatBot/ChatBot';
@@ -108,6 +109,7 @@ function AppInner() {
         <div className="app">
             <HomingOverlay />
             <SafetyBanner />
+            <MotorErrorDialog />
             <Header activeTab={activeHeaderTab} setActiveTab={setActiveHeaderTab} />
 
             <main className="app-main">

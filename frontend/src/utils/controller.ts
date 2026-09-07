@@ -79,6 +79,11 @@ export interface AlarmInfo {
     message?: string;
     description?: string;
     raw?: string;
+    // Raw fault/limit bit flags from RSP telemetry (defs.js Telemetry.asDict).
+    // No verified per-bit-to-axis mapping exists anywhere in the backend, so
+    // consumers must render these as opaque hex, not decode individual bits.
+    limitFlags?: number;
+    faultFlags?: number;
 }
 
 export interface ErrorInfo {
