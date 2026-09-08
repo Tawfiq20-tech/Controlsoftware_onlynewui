@@ -41,6 +41,7 @@ class Connection extends EventEmitter {
         this.path = options.path;
         this.baudRate = options.baudRate || 115200;
         this.network = options.network || false;
+        this.networkPort = options.networkPort || undefined;
         this.rtscts = options.rtscts || false;
         this.rawMode = options.rawMode || false;
         // [GENERIC MODE] Default to Generic instead of Grbl when detection fails
@@ -92,6 +93,7 @@ class Connection extends EventEmitter {
                 path: this.path,
                 baudRate: this.baudRate,
                 network: this.network,
+                networkPort: this.networkPort,
                 rtscts: this.rtscts,
                 rawMode: this.rawMode,
                 writeFilter: this._writeFilter,
