@@ -51,6 +51,8 @@ export default function Sidebar() {
         connected,
         machineState,
         position, setPosition,
+        machinePosition,
+        aAxis,
         jogDistance, setJogDistance,
         jogSpeed, setJogSpeed,
         coordSystem, setCoordSystem,
@@ -493,12 +495,12 @@ export default function Sidebar() {
                 {settingsTab === 'Position' && (
                     <div className="sidebar-section" style={{ borderBottom: 'none' }}>
                         {/* Alarm / Motor Error Banner */}
-                        {(useCNCStore.getState().machineState === 'alarm' || useCNCStore.getState().machineState === 'motorError') && (
+                        {(machineState === 'alarm' || machineState === 'motorError') && (
                             <div className="pos-alarm-banner" style={{ flexDirection: 'column', gap: '6px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%' }}>
                                     <AlertTriangle size={14} />
                                     <span style={{ flex: 1 }}>
-                                        {useCNCStore.getState().machineState === 'motorError'
+                                        {machineState === 'motorError'
                                             ? 'MOTOR ERROR — Closed-loop error detected'
                                             : 'ALARM — Machine locked'}
                                     </span>
@@ -550,7 +552,7 @@ export default function Sidebar() {
                         {/* Axis Rows */}
                         <div className="dro-container">
                             {(['x', 'y', 'z'] as const).map(axis => {
-                                const machinePos = useCNCStore.getState().machinePosition;
+                                const machinePos = machinePosition;
                                 const isInch = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in';
                                 return (
                                     <div className="dro-row" key={axis}>
@@ -580,8 +582,8 @@ export default function Sidebar() {
                             })}
                             {/* A axis (rotary) — only rendered when firmware
                                 reports the rotary as connected. Tawfiq msg 7350. */}
-                            {useCNCStore.getState().aAxis.connected && (() => {
-                                const a = useCNCStore.getState().aAxis;
+                            {aAxis.connected && (() => {
+                                const a = aAxis;
                                 return (
                                     <div className="dro-row" key="a">
                                         <div className="dro-axis-badge" style={{ background: '#a855f7' }}>A</div>
@@ -608,7 +610,7 @@ export default function Sidebar() {
                 {settingsTab === 'Jog' && (
                     <div className="sidebar-section" style={{ borderBottom: 'none' }}>
                         {/* Alarm / Motor Error Banner */}
-                        {(useCNCStore.getState().machineState === 'alarm' || useCNCStore.getState().machineState === 'motorError') && (
+                        {(machineState === 'alarm' || machineState === 'motorError') && (
                             <div style={{
                                 background: 'rgba(220, 50, 50, 0.15)',
                                 border: '1px solid rgba(220, 50, 50, 0.4)',
@@ -621,7 +623,7 @@ export default function Sidebar() {
                             }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                     <span style={{ color: '#ff6b6b', fontWeight: 700, fontSize: '12px' }}>
-                                        {useCNCStore.getState().machineState === 'motorError'
+                                        {machineState === 'motorError'
                                             ? 'MOTOR ERROR — Closed-loop error'
                                             : 'ALARM — Machine locked'}
                                     </span>

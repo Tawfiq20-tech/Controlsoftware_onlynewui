@@ -616,7 +616,6 @@ class RSPController extends EventEmitter {
                 this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL));
                 break;
 
-            case 'unlock':
             // 'motor:reset'/'motor:resetAll'/'estop:clear'/'limit:clear' used
             // to fall through to the unknown-command default (silently
             // ignored -- confirmed by re-reading this switch end to end,
@@ -637,14 +636,29 @@ class RSPController extends EventEmitter {
             case 'motor:reset':
             case 'motor:resetAll':
             case 'estop:clear':
-            case 'limit:clear':
-                this._lastAlarmEmitted = null;
-                this._fireAndForget(defs.OP_UNLOCK, Buffer.alloc(0));
-                this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
-                if (this._resumeLine > 1) {
-                    this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+            case 'limit:clear': {
+                // FW-3: this used to be _fireAndForget + an unconditional
+                // "Alarm cleared / unlocked" console line -- claiming success
+                // even when the device NAK'd or never replied. sendCommand()
+                // resolves only on a real ACK for this seq and rejects on
+                // NAK/timeout/LinkLost, so use that instead of guessing.
+                if (!this.stream) {
+                    this.emit('console', '⚠️ [RSP] Unlock not sent -- controller not bound.');
+                    break;
                 }
+                this.stream.sendCommand(defs.OP_UNLOCK, Buffer.alloc(0), { timeout: 3.0 })
+                    .then(() => {
+                        this._lastAlarmEmitted = null;
+                        this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
+                        if (this._resumeLine > 1) {
+                            this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+                        }
+                    })
+                    .catch((exc) => {
+                        this.emit('console', `⚠️ [RSP] Unlock command failed: ${exc.message || exc}. Machine may still be alarmed -- do not assume it is safe to run.`);
+                    });
                 break;
+            }
 
             case 'reset':
                 this._lastAlarmEmitted = null;

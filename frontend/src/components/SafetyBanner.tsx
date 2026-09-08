@@ -21,6 +21,10 @@ export function SafetyBanner() {
     const wcsHealth = useCNCStore((s) => s.safetyWcsHealth);
     const zRunaway = useCNCStore((s) => s.safetyZRunaway);
     const setSafetyZRunaway = useCNCStore((s) => s.setSafetyZRunaway);
+    // Scoped selector, not getState() — this component doesn't full-store
+    // subscribe, so a getState() read inside the render body below would go
+    // stale until some OTHER selector happened to trigger a re-render.
+    const overrideArmed = useCNCStore((s) => s.safetyOverrideArmed);
     const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
     // Auto-dismiss Z runaway notice after 60 seconds so the banner doesn't
@@ -76,7 +80,6 @@ export function SafetyBanner() {
 
     if (validation?.blocked && !validation.cleared) {
         const top = validation.issues.slice(0, 3);
-        const overrideArmed = useCNCStore.getState().safetyOverrideArmed;
         banners.push(
             <div key="val" className="ecss-banner ecss-banner--block">
                 <div className="ecss-banner__icon">🚫</div>
