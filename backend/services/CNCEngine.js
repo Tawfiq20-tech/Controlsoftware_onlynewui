@@ -398,7 +398,24 @@ class CNCEngine extends EventEmitter {
             return;
         }
 
-        // Close existing connection if any
+        // FIX-10 (Tawfiq fix-plan item 6): the frontend's useAutoConnect hook
+        // resets its "connected" state to false on every page reload and, on
+        // a race against the backend's serialport:open replay to the new
+        // socket, re-issues an 'open' for the same port that's already live
+        // -- even mid-job. Tearing down and recreating the connection here
+        // re-runs Connection.js's firmware-detection probe, which sends a
+        // real soft-reset byte to the board, killing whatever was running.
+        // If it's the exact same already-open port, this is just the new
+        // socket asking to attach to what's already there -- do that instead
+        // of resetting the link.
+        if (this.connection && this.connection.isOpen && this.port === portPath) {
+            this.connection.addConnection(socket);
+            socket.emit('serialport:open', { port: this.port, controllerType: this.connection.controllerType });
+            if (typeof callback === 'function') callback(null);
+            return;
+        }
+
+        // Close existing connection if any (different port, or a stale one)
         if (this.connection && this.connection.isOpen) {
             this._closeConnection();
         }
@@ -714,6 +731,28 @@ class CNCEngine extends EventEmitter {
 
     _closeConnection() {
         if (this.controller) {
+            // FIX-10: this path (explicit disconnect, or _handleOpen tearing
+            // down a stale/different-port connection) used to unbind()
+            // straight away, silently discarding an in-flight job with no
+            // checkpoint and no frontend notice -- unlike the genuine
+            // transport-drop path below in _onConnectionClose(), which
+            // already does this. Mirror that here so a job survives an
+            // open-a-different-port or manual-disconnect the same way it
+            // survives a real USB drop.
+            let lostJob = null;
+            if (typeof this.controller.notifyConnectionLost === 'function') {
+                try {
+                    lostJob = this.controller.notifyConnectionLost();
+                } catch (err) {
+                    logger.warn(`notifyConnectionLost failed: ${err.message}`);
+                }
+            }
+            if (lostJob && lostJob.jobWasActive) {
+                this.io.emit('connection:lost', {
+                    port: this.port,
+                    resumeLine: lostJob.resumeLine,
+                });
+            }
             this.controller.unbind();
             this.controller.removeAllListeners();
             this.controller = null;
