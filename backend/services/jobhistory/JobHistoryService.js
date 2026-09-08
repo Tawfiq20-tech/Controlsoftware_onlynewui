@@ -41,7 +41,7 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
 class JobHistoryService extends EventEmitter {
-    constructor({ dataDir, io, logger, getController }) {
+    constructor({ dataDir, io, logger, getController, getEngine }) {
         super();
         this.dataDir = dataDir;
         this.io = io;
@@ -52,6 +52,17 @@ class JobHistoryService extends EventEmitter {
         this.activeJob = null;
         this._loadFromDisk();
         this._wireController();
+
+        // Constructor runs before any controller exists, so the call
+        // above is a no-op. Re-run it every time CNCEngine binds a fresh
+        // controller instance (reconnects create a new object each time)
+        // so job:start/end/error/abort are actually captured. Without
+        // this, job history silently records nothing for the process
+        // lifetime (FIXFILE.html FIX-20).
+        const engine = getEngine?.();
+        if (engine?.on) {
+            engine.on('controller:bound', () => this._wireController());
+        }
     }
 
     _loadFromDisk() {

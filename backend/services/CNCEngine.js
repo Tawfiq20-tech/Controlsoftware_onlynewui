@@ -478,6 +478,14 @@ class CNCEngine extends EventEmitter {
         // Notify all clients
         this.io.emit('controller:type', firmware);
 
+        // Internal (non-socket) event so services holding a stale
+        // getController() closure (e.g. JobHistoryService) can re-attach
+        // their own listeners to this fresh controller instance. A new
+        // controller object is created on every connect/reconnect, so a
+        // one-time wire-up in a service constructor goes stale after the
+        // first bind (FIXFILE.html FIX-20).
+        this.emit('controller:bound', this.controller);
+
         // [GENERIC MODE] GenericController has no runner — skip replay
         // [RTS] RTSController has no runner — skip replay
         // [GRBL ONLY] Replay buffered data through the GRBL runner
