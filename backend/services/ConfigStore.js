@@ -111,6 +111,12 @@ const DEFAULT_CONFIG = {
         zDropY: 18.0,
         parkZClearance: 10,
         connectionTest: true,
+        // FIX-7: Z-only retreat distance applied automatically after any
+        // failed probe leg (no contact, rejected status, timeout, or link
+        // loss) in ProbingService.js's RSP-native routines, so the bit
+        // doesn't sit wherever the failed leg stopped -- often near/in the
+        // stock right after a "drop Z below top surface" step.
+        probeFailRetractMm: 5,
     },
     machineProfiles: [],
     activeMachineProfile: null,
