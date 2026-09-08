@@ -37,6 +37,7 @@ const codec = require('../rsp/codec');
 const { ReliableStream, LinkLost } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
+const injectSpindleDelay = require('../../lib/injectSpindleDelay');
 
 // Power-cut survival: durable checkpoint persistence is now handled
 // entirely by JobResumeService (services/jobresume/), which owns the
@@ -677,7 +678,7 @@ class RSPController extends EventEmitter {
                 break;
 
             case 'gcode:load': {
-                const [name, gcode] = args;
+                const [name, gcode, spindleDelaySeconds] = args;
                 const incoming = gcode || '';
                 // If a job is still active (e.g. user stopped mid-carve but
                 // the JobStream hasn't fully wound down yet), abort it now so
@@ -695,11 +696,21 @@ class RSPController extends EventEmitter {
                 // rewrites the in-memory copy sent to firmware, never the
                 // user's original file on disk.
                 try {
-                    const { text, arcCount, segmentCount } = linearizeArcs(incoming);
+                    const { text: linearized, arcCount, segmentCount } = linearizeArcs(incoming);
+                    // Same host-side rewrite pattern as arc linearization:
+                    // insert a spin-up dwell after every M3/M4 so the tool
+                    // isn't plunging before the spindle is at speed. Without
+                    // this, preferences.spindleDelay was stored but never
+                    // read anywhere (FIXFILE.html FIX-16).
+                    const { text, insertedCount } = injectSpindleDelay(linearized, spindleDelaySeconds);
                     this._loadedGcode = text;
                     if (arcCount > 0) {
                         logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
                         this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
+                    }
+                    if (insertedCount > 0) {
+                        logger.info(`[RSP] gcode:load inserted ${insertedCount} spindle spin-up dwell(s) (G4 P${spindleDelaySeconds}) after M3/M4`);
+                        this.emit('console', `ℹ️ Added a ${spindleDelaySeconds}s spindle spin-up dwell after each M3/M4 (your file is unchanged).`);
                     }
                 } catch (err) {
                     logger.warn(`[RSP] gcode:load arc linearization failed: ${err.message}`);

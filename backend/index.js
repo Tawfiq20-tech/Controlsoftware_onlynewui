@@ -357,7 +357,7 @@ app.post('/api/probing/abort', (req, res) => {
     probingService.abort(); res.json({ ok: true });
 });
 // msg11601 item 4: operator confirms the probe/touch-plate has been
-// physically removed, THEN this drops Z by plateThickness and re-zeros --
+// physically removed, THEN this drops Z by probeSettings.blockThickness and re-zeros --
 // see ProbingService.finalizeCornerZero() doc comment for why this is a
 // separate human-triggered step and not part of /api/probing/run.
 app.post('/api/probing/finalize-corner', async (req, res) => {

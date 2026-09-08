@@ -913,8 +913,12 @@ class CNCEngine extends EventEmitter {
             return;
         }
 
-        // Load into controller's sender
-        this.controller.command('gcode:load', fileName, gcodeContent);
+        // Load into controller's sender. spindleDelay is read here (not
+        // inside the controller, which has no ConfigStore reference) and
+        // passed through so RSPController can inject a spin-up dwell after
+        // every M3/M4 -- see FIXFILE.html FIX-16.
+        const spindleDelay = Number(this.config.get('preferences.spindleDelay', 0)) || 0;
+        this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay);
 
         // Store file info for reconnecting clients
         const senderTotal = this.controller.sender?.total || gcodeContent.split('\n').filter(l => l.trim()).length;
