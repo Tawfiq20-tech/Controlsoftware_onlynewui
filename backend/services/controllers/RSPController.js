@@ -421,11 +421,29 @@ class RSPController extends EventEmitter {
         this.state.parserstate.spindle = dict.spindle_speed;
 
         // Alarm / Fault / E-Stop detection: surface telemetry alarm states to frontend UI
-        if (dict.state === defs.ST_ALARM || dict.state === defs.ST_ESTOP || dict.state === defs.ST_FAULT || dict.estop_active) {
-            const alarmType = dict.estop_active ? 'estop' : (dict.state_name ? dict.state_name.toLowerCase() : 'alarm');
+        //
+        // limit_flags/fault_flags come off the wire (Telemetry.asDict()) but were
+        // never checked here -- only the coarse `state` enum and the estop_active
+        // bit were. If firmware sets a fault bit without also flipping `state` to
+        // ST_ALARM/ST_ESTOP/ST_FAULT, the alarm was silently never detected/
+        // emitted -- matching the "alarm only visible after a refresh" report
+        // (Tawfiq msg12053/12060).
+        //
+        // limit_flags is intentionally NOT used as a trigger here: Tawfiq
+        // confirmed (msg12074) this machine has no limit switches physically
+        // wired, so those 4 GPIO inputs float and read as noise (observed
+        // stuck at 0x0f even at rest -- see msg12068 probe). Treating that as
+        // an alarm would fire permanently/falsely. Only fault_flags (a real
+        // driver/motor ALM signal) is a trustworthy trigger on this hardware.
+        // Re-enable limit_flags as a trigger once switches are actually wired.
+        const faultTripped = !!dict.fault_flags;
+        if (dict.state === defs.ST_ALARM || dict.state === defs.ST_ESTOP || dict.state === defs.ST_FAULT || dict.estop_active || faultTripped) {
+            const alarmType = dict.estop_active ? 'estop'
+                : (faultTripped && dict.state !== defs.ST_ALARM && dict.state !== defs.ST_ESTOP && dict.state !== defs.ST_FAULT) ? 'fault'
+                : (dict.state_name ? dict.state_name.toLowerCase() : 'alarm');
             if (!this._lastAlarmEmitted || this._lastAlarmEmitted !== alarmType) {
                 this._lastAlarmEmitted = alarmType;
-                logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active})`);
+                logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active}, limit_flags=${dict.limit_flags}, fault_flags=${dict.fault_flags})`);
                 
                 // If a job was running, capture the resume line immediately and pause!
                 if (this.job && this.job.active) {
@@ -452,8 +470,12 @@ class RSPController extends EventEmitter {
                 this.emit('alarm', {
                     type: alarmType,
                     code: dict.error_code || 0,
-                    message: dict.estop_active ? 'E-Stop / Limit Switch Triggered' : `${dict.state_name || 'Alarm'} state`,
-                    description: 'Machine hit limit switch, motor faulted, or E-Stop was engaged. Click Clear / Unlock to reset.',
+                    message: dict.estop_active ? 'E-Stop Triggered'
+                        : alarmType === 'fault' ? 'Motor / Driver Fault Triggered'
+                        : `${dict.state_name || 'Alarm'} state`,
+                    description: 'Machine motor/driver faulted or E-Stop was engaged. Click Clear / Unlock to reset.',
+                    limitFlags: dict.limit_flags || 0,
+                    faultFlags: dict.fault_flags || 0,
                 });
             }
         } else {
