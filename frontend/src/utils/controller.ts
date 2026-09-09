@@ -196,6 +196,8 @@ type ListenerFn = (...args: any[]) => void;
 class Controller {
     socket: Socket | null = null;
     listeners: Map<string, Set<ListenerFn>> = new Map();
+    private _connecting = false;
+    private _pendingConnectCallbacks: Array<(err?: Error) => void> = [];
 
     // Cached state
     port: string = '';
@@ -217,14 +219,35 @@ class Controller {
             return;
         }
 
+        // useAutoConnect's always-mounted effect and DevicePanel's own mount
+        // effect both call connectBackendSocket() -> connect() on app boot.
+        // The guard above only blocks an ALREADY-connected socket -- while
+        // the first handshake is still in flight, a second caller passed it
+        // too and used to create a second io() client here, orphaning the
+        // first (never .disconnect()'d, never dereferenced). Both sockets
+        // then had _wireServerEvents() wired to the SAME this.listeners Map,
+        // so any server broadcast that reached both live sockets fired every
+        // registered listener twice for one logical event -- self-resolving
+        // once the orphan errored out, which matches "the FIRST <event>
+        // happens twice" and not subsequent ones. Queue the second caller's
+        // callback onto the in-flight connection instead of starting a new
+        // socket.
+        if (this._connecting) {
+            if (callback) this._pendingConnectCallbacks.push(callback);
+            return;
+        }
+        this._connecting = true;
+
         this.socket = io(host, {
             transports: ['websocket', 'polling'],
             ...options,
         });
 
         this.socket.on('connect', () => {
+            this._connecting = false;
             this._emit('connect');
             callback?.();
+            this._flushPendingConnectCallbacks();
         });
 
         this.socket.on('disconnect', () => {
@@ -232,8 +255,10 @@ class Controller {
         });
 
         this.socket.on('connect_error', (err: Error) => {
+            this._connecting = false;
             this._emit('connect_error', err);
             callback?.(err);
+            this._flushPendingConnectCallbacks(err);
         });
 
         // Wire up all server events to local listeners
@@ -248,6 +273,8 @@ class Controller {
             this.socket.disconnect();
             this.socket = null;
         }
+        this._connecting = false;
+        this._flushPendingConnectCallbacks(new Error('disconnected before connect completed'));
         this.port = '';
         this.type = '';
         this.state = null;
@@ -477,6 +504,12 @@ class Controller {
         this.listeners.get(eventName)?.forEach((fn) => {
             try { fn(...args); } catch (_) { /* ignore */ }
         });
+    }
+
+    private _flushPendingConnectCallbacks(err?: Error): void {
+        const pending = this._pendingConnectCallbacks;
+        this._pendingConnectCallbacks = [];
+        pending.forEach((cb) => cb(err));
     }
 
     // ─── Server Event Wiring ─────────────────────────────────────
