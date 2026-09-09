@@ -82,6 +82,14 @@ export class JoystickManager {
     public disconnect(): void {
         this.stopPolling();
         this.gamepad = null;
+        // A caller that reconnects without perfectly tracking its
+        // onStateChange() unsubscribe function (e.g. a fast Connect ->
+        // Disconnect -> Connect cycle with a flaky USB/BT gamepad) would
+        // otherwise leave the old callback registered forever, so a single
+        // poll tick after reconnect fires every stacked stale callback in
+        // addition to the new one. disconnect() should mean "forget every
+        // prior listener", not just "stop polling".
+        this.callbacks.clear();
     }
 
     /**

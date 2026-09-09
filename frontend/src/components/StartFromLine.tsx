@@ -198,7 +198,19 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
                             type="number"
                             className="sfl-number-input"
                             value={safeHeight}
-                            onChange={(e) => setSafeHeight(parseFloat(e.target.value) || 10)}
+                            onChange={(e) => {
+                                const parsed = parseFloat(e.target.value);
+                                // Sign gets normalized before this feeds the
+                                // G53 G0 Z move below, but the MAGNITUDE was
+                                // never clamped -- an absurd typed value
+                                // (e.g. a stray extra digit) sends a full-
+                                // speed rapid Z move of that size in machine
+                                // coordinates.
+                                const clamped = Number.isFinite(parsed) ? Math.min(500, Math.max(0.1, Math.abs(parsed))) : 10;
+                                setSafeHeight(clamped);
+                            }}
+                            min={0.1}
+                            max={500}
                             step={0.5}
                         />
                         <span className="sfl-field-hint">Z will lift to this height before resuming</span>

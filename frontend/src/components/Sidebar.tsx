@@ -143,6 +143,10 @@ export default function Sidebar() {
     // For now, step-mode jog is used via handleJog.
 
     const handleToggleUnits = () => {
+        // LOW#13: every other command handler here checks `connected` first;
+        // this one didn't, so toggling units while disconnected sent G21/G20
+        // into the void and still flipped the UI label as if it took effect.
+        if (!connected) return;
         const currentUnit = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'inches' : 'mm';
         const nextUnits = currentUnit === 'inches' ? 'mm' : 'inches';
         setAppPreferences({ ...appPreferences, units: nextUnits });
@@ -539,6 +543,7 @@ export default function Sidebar() {
                                 <button
                                     className="pos-unit-toggle-btn"
                                     onClick={handleToggleUnits}
+                                    disabled={!connected}
                                     title={`Active Units: ${appPreferences?.units || 'mm'}. Click to toggle mm / inches (G21 / G20)`}
                                 >
                                     <Ruler size={10} />

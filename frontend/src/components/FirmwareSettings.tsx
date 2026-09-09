@@ -116,6 +116,15 @@ export default function FirmwareSettings() {
         toastTimerRef.current = setTimeout(() => setToast(null), 3000);
     }, []);
 
+    // LOW#15: a toast fired just before unmount (e.g. closing this panel
+    // right after Save) left its 3s setTimeout live -- it fired after
+    // unmount and called setToast on a gone component.
+    useEffect(() => {
+        return () => {
+            if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        };
+    }, []);
+
     // Convert store Record<number,string> to Map for convenience
     const settings = new Map<number, string>(
         Object.entries(firmwareSettings).map(([k, v]) => [Number(k), v])

@@ -342,6 +342,23 @@ class JobStream extends EventEmitter {
         } catch (exc) {
             // non-fatal
         }
+        // Stop the host's own retransmit loop from continuing to push this
+        // job's not-yet-ACKed lines onto the wire after abort() -- without
+        // this, _retransmitReady() (stream.js) kept resending up to
+        // `window` (16) already-queued OP_JOB_LINE frames on their normal
+        // RTO cadence, which could still get ACKed and land in the device
+        // planner well after the UI reported "stopped". Frames the device
+        // already ACKed are unaffected (they're gone from the stream's
+        // pending set already) -- those are what OP_JOB_ABORT below is for.
+        const cancelled = this.stream.cancelPending((p) => {
+            const op = p.payload[0];
+            if (op !== defs.OP_JOB_LINE && op !== defs.OP_JOB_START && op !== defs.OP_JOB_END) return false;
+            if (p.payload.length < 3) return false;
+            return p.payload.readUInt16LE(1) === jobId;
+        });
+        if (cancelled > 0) {
+            this._log.info(`abort: cancelled ${cancelled} in-flight frame(s) for job ${jobId}`);
+        }
         this.emit('aborted');
         // Best-effort notify the firmware to drop its planner NOW. Without
         // this, lines already accepted into the device's planner keep
@@ -621,6 +638,14 @@ class JobStream extends EventEmitter {
 
     /** Called on EV_EXECUTED. */
     _onExecuted(f) {
+        // Mirrors noteProgress()'s guard below: a stray EV_EXECUTED can
+        // arrive in the gap between abort() and the next upload() (same
+        // jobId hasn't been reused yet, so the jobId check alone doesn't
+        // catch it) -- without this, that straggler still updates
+        // _executed/_lastConfirmedPos and re-emits 'progress' for a job the
+        // host has already abandoned, which the UI has no way to tell apart
+        // from live progress on a job that's actually still running.
+        if (!this._active || this._aborted) return;
         let parsed;
         try {
             parsed = codec.parseEvExecuted(f.payload.subarray(1));

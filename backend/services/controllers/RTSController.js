@@ -472,9 +472,29 @@ class RTSController extends EventEmitter {
         this._stopPolling();
         this._stopHealthMonitor();
         this._clearInitTimer();
+        // MED#9: these were previously left running across a reconnect --
+        // each held a closure over the old connection/controller state, so
+        // a stream pump or buffer-poll tick firing after unbind() could
+        // write to a stale/closed connection or advance gcode indices that
+        // no longer mean anything to the fresh bind().
+        this._stopStreamPump();
+        this._stopBufferPolling();
         if (this._jogStopTimer) {
             clearTimeout(this._jogStopTimer);
             this._jogStopTimer = null;
+        }
+        if (this._cycleStartTimer) {
+            clearTimeout(this._cycleStartTimer);
+            this._cycleStartTimer = null;
+        }
+        this._clearAckTimeout();
+        if (this._bulkAckTimer) {
+            clearTimeout(this._bulkAckTimer);
+            this._bulkAckTimer = null;
+        }
+        if (this._homingTimer) {
+            clearTimeout(this._homingTimer);
+            this._homingTimer = null;
         }
 
         if (this.connection) {
@@ -828,6 +848,7 @@ class RTSController extends EventEmitter {
                         this._stopBufferPolling();
                         this._running = false;
                         this.emit('sender:end');
+                        this.emit('job:end', {}); // LOW#14
                         this.emit('workflow:state', 'idle');
                     }
                     // Update progress with REAL board-reported line number
@@ -940,7 +961,8 @@ class RTSController extends EventEmitter {
                     try { this._softReset(); } catch (e) { /* still abort downstream */ }
                     this._running = false;
                     this.emit('console', `ECSS Z-RUNAWAY ABORT: Z dropped ${drop} mm in ${ms} ms — stream stopped.`);
-                    this.emit('sender:end');
+                    this.emit('sender:end', { aborted: true });
+                    this.emit('job:error', { message: `Z-runaway abort: dropped ${drop} mm in ${ms} ms` }); // LOW#14
                     this.emit('workflow:state', 'idle');
                 }
             }
@@ -1249,6 +1271,7 @@ class RTSController extends EventEmitter {
                 this._stopStreamPump();
                 this._running = false;
                 this.emit('sender:end');
+                this.emit('job:end', {}); // LOW#14
                 this.emit('workflow:state', 'idle');
             }
         }
@@ -1282,7 +1305,10 @@ class RTSController extends EventEmitter {
                         logger.warn(`[RTS] Stream pump hit ${MAX_PASSES}-pass safety bound with ${this._executedCount}/${this._gcodeLines.length} executed. Stopping.`);
                         this._stopStreamPump();
                         this._running = false;
-                        this.emit('sender:end');
+                        // MED#11: safety-bound trip, not a real completion —
+                        // executedCount < gcodeLines.length here.
+                        this.emit('sender:end', { aborted: true });
+                        this.emit('job:error', { message: `${MAX_PASSES}-pass safety bound hit with ${this._executedCount}/${this._gcodeLines.length} executed` }); // LOW#14
                         this.emit('workflow:state', 'idle');
                         return;
                     }
@@ -2821,6 +2847,7 @@ class RTSController extends EventEmitter {
         this._gcodeIndex = 0;
         this._running = false;
         this._paused = false;
+        this._loadedName = name; // LOW#14: needed by job:start (JobHistoryService)
         logger.info(`[RTS] Loaded G-code "${name}" — ${this._gcodeLines.length} lines (first: "${this._gcodeLines[0] || ''}")`);
         this.emit('gcode:load', { name, total: this._gcodeLines.length });
     }
@@ -2874,6 +2901,14 @@ class RTSController extends EventEmitter {
         this._zRunawayFired = false;
         logger.info(`[RTS] _startJob: streaming ${this._gcodeLines.length} lines from line ${this._gcodeIndex} (board activeState=${this._activeState})`);
         this.emit('sender:start');
+        // LOW#14: JobHistoryService listens for 'job:start', not 'sender:*'
+        // -- this controller never emitted it, so no RTS run was ever
+        // recorded (RSPController.js already emits its own job:start).
+        this.emit('job:start', {
+            filename: this._loadedName || '',
+            gcode: this._gcodeLines.join('\n'),
+            controller: 'RTS',
+        });
         this.emit('workflow:state', 'running');
         // vendor-pcap-v1 (msg 7084) — VERBATIM replica of vendor RTS-X
         // TWO_SQUARES protocol decoded from Tawfiq's live USBPcap capture.
@@ -3055,7 +3090,9 @@ class RTSController extends EventEmitter {
         this._bulkSendOne = null;
         this._bulkCycleStartFired = false;
         this._jogCancel(); // Stop motion
-        this.emit('sender:end');
+        // MED#11: _stopJob is exclusively the user-initiated stop path.
+        this.emit('sender:end', { aborted: true });
+        this.emit('job:abort'); // LOW#14
         this.emit('workflow:state', 'idle');
     }
 
@@ -3070,6 +3107,7 @@ class RTSController extends EventEmitter {
         if (this._gcodeIndex >= this._gcodeLines.length) {
             this._running = false;
             this.emit('sender:end');
+            this.emit('job:end', {}); // LOW#14
             this.emit('workflow:state', 'idle');
             return;
         }

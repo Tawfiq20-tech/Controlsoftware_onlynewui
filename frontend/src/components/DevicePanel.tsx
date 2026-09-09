@@ -51,7 +51,20 @@ export default function DevicePanel() {
     const [joystickActive, setJoystickActive] = useState(false);
     const [joystickInfo, setJoystickInfo] = useState<string>('');
     const [joystickState, setJoystickState] = useState<JoystickState | null>(null);
-    const [lastJogTime, setLastJogTime] = useState(0);
+    // Not React state on purpose: this is a pure throttle timestamp, read
+    // and written only from inside the joystickManager poll callback below
+    // (registered once per connect, never re-created on render) -- as a
+    // useState value it was captured into that callback's closure at
+    // connect-time and never saw its own updates, so the 100ms throttle
+    // only worked during the app's very first 100ms of life. Same reason
+    // `connected`/`joystickActive` are mirrored into refs below instead of
+    // read directly from the closure.
+    const lastJogTimeRef = useRef(0);
+    const connectedRef = useRef(connected);
+    const joystickActiveRef = useRef(joystickActive);
+    const joystickUnsubscribeRef = useRef<(() => void) | null>(null);
+    useEffect(() => { connectedRef.current = connected; }, [connected]);
+    useEffect(() => { joystickActiveRef.current = joystickActive; }, [joystickActive]);
 
     // UI state
     const [activeSection, setActiveSection] = useState<'controller' | 'joystick' | 'position' | 'firmware' | 'profiles'>('controller');
@@ -83,6 +96,8 @@ export default function DevicePanel() {
 
         // Cleanup joystick on unmount
         return () => {
+            joystickUnsubscribeRef.current?.();
+            joystickUnsubscribeRef.current = null;
             if (joystickManager.isConnected()) {
                 joystickManager.disconnect();
             }
@@ -191,18 +206,20 @@ export default function DevicePanel() {
 
             joystickManager.connect();
             const info = joystickManager.getGamepadInfo();
-            
+
             if (info) {
                 setJoystickConnected(true);
                 setJoystickInfo(info.id);
                 setError(null);
 
-                joystickManager.onStateChange((state) => {
+                // Defensive: unsubscribe any stray previous listener before
+                // registering a fresh one, so this handler firing twice (or
+                // a reconnect that raced its own cleanup) can never stack a
+                // second poll callback.
+                joystickUnsubscribeRef.current?.();
+                joystickUnsubscribeRef.current = joystickManager.onStateChange((state) => {
                     setJoystickState(state);
-                    
-                    if (joystickActive && connected) {
-                        handleJoystickJog(state);
-                    }
+                    handleJoystickJog(state);
                 });
             }
         } catch (err) {
@@ -211,6 +228,8 @@ export default function DevicePanel() {
     };
 
     const handleDisconnectJoystick = () => {
+        joystickUnsubscribeRef.current?.();
+        joystickUnsubscribeRef.current = null;
         joystickManager.disconnect();
         setJoystickConnected(false);
         setJoystickActive(false);
@@ -227,14 +246,14 @@ export default function DevicePanel() {
     };
 
     const handleJoystickJog = (state: JoystickState) => {
-        if (!connected || !joystickActive) return;
+        if (!connectedRef.current || !joystickActiveRef.current) return;
 
         const jogCmd = joystickMapper.mapAxesToJog(state.axes);
-        
+
         if (jogCmd) {
             const now = Date.now();
-            if (now - lastJogTime < 100) return;
-            setLastJogTime(now);
+            if (now - lastJogTimeRef.current < 100) return;
+            lastJogTimeRef.current = now;
 
             const { x, y, z, feedRate } = jogCmd;
             

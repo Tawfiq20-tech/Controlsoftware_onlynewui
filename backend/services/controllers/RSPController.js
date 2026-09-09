@@ -185,6 +185,17 @@ class RSPController extends EventEmitter {
         this._resumeGcode = null;
         this._feedOverridePct = 100.0;
         this._debugEnabled = false;
+        // Bumped at the top of every _startJob() call. _startJob() awaits
+        // twice (post-abort settle delay, up-to-3s idle-wait) before it
+        // ever touches this.job -- a second gcode:start firing during
+        // either await (e.g. Stop -> load a different file -> Start again
+        // while the machine is still decelerating from the first request)
+        // must not let the FIRST, now-stale call resume past its await and
+        // silently upload/start whatever G-code is current at THAT point,
+        // superseding the second call's job with the first call's. Each
+        // call captures its own generation and re-checks it after every
+        // await; a stale call bails instead of proceeding.
+        this._startJobGeneration = 0;
 
         this._bindJobListeners = this._bindJobListeners.bind(this);
     }
@@ -316,16 +327,23 @@ class RSPController extends EventEmitter {
                 // renders "Error undefined: undefined". Emit a plain object instead,
                 // matching the convention already used in RTSController.js.
                 this.emit('error', { message: `RSP job ${jobId} failed: ${failReason}` });
+                this.emit('job:error', { message: failReason });
             } else {
                 // Clean finish -- clear any resume point so a later START on
                 // the same file runs from line 1, not "resume from the end".
                 this._resumeLine = 0;
                 this._resumeGcode = null;
                 this.emit('sender:end', { jobId });
+                // LOW#14: JobHistoryService listens for 'job:end'/'job:error'/
+                // 'job:abort', not 'sender:*' -- those never existed on this
+                // controller, so every run went unrecorded. Fire alongside
+                // the existing sender:* emits the frontend already relies on.
+                this.emit('job:end', {});
             }
         });
         this.job.on('aborted', () => {
             this.emit('sender:end', { aborted: true });
+            this.emit('job:abort');
         });
         this.job.on('failed', (reason) => {
             const stopLine = this.job ? this.job.nextLineToRun() : 0;
@@ -754,6 +772,15 @@ class RSPController extends EventEmitter {
                     logger.info('[RSP] gcode:load — aborting previous active job before loading new file');
                     this.job.abort();
                 }
+                // MED#10: an aborted job object's .progress getter still
+                // reports its old executed/total counts (abort() doesn't
+                // clear _executed), and _currentLine was never reset here
+                // either -- so until the new job's first EV_EXECUTED came
+                // in, getSenderStatus() kept reporting the PREVIOUS file's
+                // line count/percentage overlaid on the newly loaded file
+                // (Tawfiq's "old-job-bleed" report).
+                this.job = null;
+                this._currentLine = 0;
                 this._loadedName = name || '';
                 // Firmware (easycnc_protocol.c, GcodeMove struct) has no
                 // arc-center field and rejects G2/G3 outright. Linearize
@@ -1155,22 +1182,53 @@ class RSPController extends EventEmitter {
             this.emit('console', '⚠️ Cannot start job: Machine is in ALARM or E-STOP state. Clear alarm ($X) first.');
             return;
         }
+        // Claim this call's generation. Any earlier, still-in-flight
+        // _startJob() call becomes stale the instant a newer one is
+        // claimed -- every await point below re-checks this before
+        // touching this.job, so a stale call bails instead of resuming
+        // and silently uploading/starting superseded G-code.
+        const gen = ++this._startJobGeneration;
         if (this.job.active) {
             logger.info('[RSP] gcode:start aborting previous active/paused job to restart/resume cleanly');
             this.job.abort();
             await new Promise(r => setTimeout(r, 100));
         }
-        // If the machine is still running (e.g. decelerating previous moves), wait for ST_IDLE
-        if (this.state && this.state.status && (this.state.status.state === defs.ST_RUNNING || this.state.status.state === defs.ST_STREAMING)) {
+        if (gen !== this._startJobGeneration) {
+            logger.info('[RSP] gcode:start superseded by a newer start request during post-abort settle -- bailing out');
+            return;
+        }
+        // If the machine is still running or actively decelerating from a
+        // just-aborted move (ST_STOPPING), wait for it to actually reach
+        // ST_IDLE before pipelining the next job's moves. ST_STOPPING was
+        // previously NOT in this condition -- a job aborted immediately
+        // before this call could leave the machine still winding down while
+        // this code treated it as already idle and started sending.
+        if (this.state && this.state.status && (
+            this.state.status.state === defs.ST_RUNNING ||
+            this.state.status.state === defs.ST_STREAMING ||
+            this.state.status.state === defs.ST_STOPPING
+        )) {
             logger.info(`[RSP] Machine is still in state ${this.state.status.activeState || this.state.status.state} -- waiting for motion to complete before starting job...`);
             const startWait = Date.now();
-            while (this.state.status && (this.state.status.state === defs.ST_RUNNING || this.state.status.state === defs.ST_STREAMING)) {
-                if (Date.now() - startWait > 3000) {
+            while (this.state.status && (
+                this.state.status.state === defs.ST_RUNNING ||
+                this.state.status.state === defs.ST_STREAMING ||
+                this.state.status.state === defs.ST_STOPPING
+            )) {
+                if (gen !== this._startJobGeneration) {
+                    logger.info('[RSP] gcode:start superseded by a newer start request while waiting for idle -- bailing out');
+                    return;
+                }
+                if (Date.now() - startWait > 8000) {
                     logger.warn('[RSP] Timed out waiting for machine to become idle before starting job.');
                     break;
                 }
                 await new Promise(r => setTimeout(r, 100));
             }
+        }
+        if (gen !== this._startJobGeneration) {
+            logger.info('[RSP] gcode:start superseded by a newer start request after idle-wait -- bailing out');
+            return;
         }
         const lines = String(gcodeText || '').split(/\r?\n/);
         // Reset so the G-code panel doesn't show the previous job's last
@@ -1192,6 +1250,16 @@ class RSPController extends EventEmitter {
             this.job.resume(resumeLine);
         }
         this.emit('sender:start', { jobId, total: lines.length, resumedFrom: resumeLine > 1 ? resumeLine : undefined });
+        // LOW#14: matching job:start for JobHistoryService (see job:end/
+        // job:abort/job:error alongside the sender:* emits below).
+        const modal = this.getModalState();
+        this.emit('job:start', {
+            filename: this._loadedName,
+            gcode: gcodeText,
+            controller: 'RSP',
+            wcs: modal.wcs,
+            toolNumber: modal.toolNumber,
+        });
         this.job.start();
     }
 

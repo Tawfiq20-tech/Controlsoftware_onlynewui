@@ -268,7 +268,20 @@ export default function RunOutline({ onClose }: RunOutlineProps) {
                                 type="number"
                                 className="ro-input"
                                 value={safeZ}
-                                onChange={(e) => setSafeZ(parseFloat(e.target.value) || 5)}
+                                onChange={(e) => {
+                                    const parsed = parseFloat(e.target.value);
+                                    // Feeds straight into a G0 Z move (see
+                                    // generateSquareOutline/generateDetailedOutline
+                                    // below) with no other check downstream --
+                                    // a negative or absurd value here sends a
+                                    // rapid move below the work surface instead
+                                    // of a retreat above it. Clamp to a sane
+                                    // positive retract range.
+                                    const clamped = Number.isFinite(parsed) ? Math.min(500, Math.max(0.1, parsed)) : 5;
+                                    setSafeZ(clamped);
+                                }}
+                                min={0.1}
+                                max={500}
                                 step={0.5}
                             />
                             <span className="ro-unit">mm</span>
@@ -283,7 +296,15 @@ export default function RunOutline({ onClose }: RunOutlineProps) {
                                 type="number"
                                 className="ro-input"
                                 value={feedRate}
-                                onChange={(e) => setFeedRate(parseInt(e.target.value) || 1000)}
+                                onChange={(e) => {
+                                    const parsed = parseInt(e.target.value, 10);
+                                    // min/max attrs are cosmetic only for a
+                                    // number input -- a typed/pasted negative
+                                    // or zero value reaches the G-code's F
+                                    // word unclamped without this.
+                                    const clamped = Number.isFinite(parsed) ? Math.min(10000, Math.max(100, parsed)) : 1000;
+                                    setFeedRate(clamped);
+                                }}
                                 min={100}
                                 max={10000}
                                 step={100}

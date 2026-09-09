@@ -212,6 +212,37 @@ class ReliableStream extends EventEmitter {
         this._heartbeatPaused = !!paused;
     }
 
+    /**
+     * Remove not-yet-ACKed frames matching `predicate` from the pending/
+     * retransmit set, without ever putting them on the wire again. Frames
+     * the device already ACKed are gone from `_sent` before this runs (see
+     * _handle()'s FT_ACK branch) -- this can only stop frames that are
+     * still in flight on the HOST side (queued, or sent once and awaiting
+     * ACK/retransmit), not undo work the device planner already accepted.
+     *
+     * Exists so JobStream.abort() can stop _retransmitReady() from
+     * continuing to push an aborted job's not-yet-ACKed OP_JOB_LINE/
+     * OP_JOB_START/OP_JOB_END frames onto the wire (and therefore into the
+     * device planner) after the host has abandoned the job -- previously
+     * abort() only sent OP_JOB_ABORT (best-effort, processed by firmware
+     * in-order behind whatever was already queued ahead of it) with no way
+     * to stop the host's own retransmit loop from keeping those older
+     * frames alive in the meantime.
+     *
+     * @param {(p: Pending) => boolean} predicate
+     * @returns {number} count of frames cancelled
+     */
+    cancelPending(predicate) {
+        let n = 0;
+        for (const [seq, p] of this._sent) {
+            if (predicate(p)) {
+                this._sent.delete(seq);
+                n += 1;
+            }
+        }
+        return n;
+    }
+
     _setLink(ok, reason = '') {
         if (ok) {
             this._linkDownReason = '';

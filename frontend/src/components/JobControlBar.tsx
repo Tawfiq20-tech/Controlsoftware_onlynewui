@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Play, Pause, Square, Zap, SkipForward, Maximize2 } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import {
@@ -8,7 +8,6 @@ import {
     backendJobStop,
     backendSoftReset,
 } from '../utils/backendConnection';
-import controller from '../utils/controller';
 import StartFromLine from './StartFromLine';
 import RunOutline from './RunOutline';
 import './JobControlBar.css';
@@ -24,29 +23,19 @@ export default function JobControlBar() {
         gcode,
         jobProgress,
         currentLine,
-        fileInfo,
-        rawGcodeContent,
         fileLoadedBackend,
-        controllerReady,
         safetyValidation,
         safetyOverrideArmed,
         addConsoleLog,
     } = useCNCStore();
 
-    // Push the parsed G-code to the backend feeder as soon as it's available and
-    // the backend has a live controller instance. Gating on controllerReady (not
-    // just `connected`) avoids a race: `connected` flips true the instant the
-    // serial port opens, but the backend's controller instance isn't assigned
-    // until firmware detection finishes ~100-200ms later. Firing loadFile()
-    // before that made CNCEngine.js hard-reject with no retry, leaving
-    // fileLoadedBackend stuck false and Start permanently unusable.
-    useEffect(() => {
-        if (!connected) return;
-        if (!controllerReady) return;
-        if (!rawGcodeContent) return;
-        if (fileLoadedBackend) return;
-        controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
-    }, [connected, controllerReady, rawGcodeContent, fileLoadedBackend, fileInfo?.name]);
+    // The file:load dispatch itself lives in App.tsx's effect (always
+    // mounted at the app root), not here. JobControlBar only mounts
+    // conditionally (Visualizer3D.tsx's showCarveBar), so a duplicate
+    // copy of that effect here used to race the App.tsx one -- both would
+    // see fileLoadedBackend===false at the same time and both would fire
+    // controller.loadFile(), causing the backend to redundantly re-parse
+    // and reload the sender (HIGH#8). Removed; see App.tsx.
 
     const handlePlayPause = () => {
         if (!connected) return;

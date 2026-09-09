@@ -245,12 +245,19 @@ function Step2Jog({
     setBitDiameter: (v: number) => void;
     machinePosition: { x: number; y: number; z: number };
 }) {
+    // MED#12: this wizard can reach step 2 without an active connection
+    // (e.g. port dropped mid-session) -- unlike Sidebar's jog controls,
+    // these buttons had no connected guard, so pressing them silently
+    // no-op'd deep inside backendJog/controller.jog with no feedback.
+    const connected = useCNCStore((s) => s.connected);
+
     // Was sending a raw GRBL '$J=...' string as args[0]; RSPController's
     // 'jog' handler expects an {x,y,z,feedRate} object (same shape Sidebar's
     // handleJog -> backendJog uses) so the string was silently ignored --
     // no axis key matched and nothing moved. Route through backendJog like
     // every other working jog control in the app.
     const jog = (axis: 'X' | 'Y' | 'Z', dir: 1 | -1, step: number) => {
+        if (!connected) return;
         const dist = dir * step;
         const feedRate = 2000;
         if (axis === 'X') backendJog(dist, undefined, undefined, feedRate);
@@ -271,13 +278,13 @@ function Step2Jog({
             </div>
 
             <div className="pm-jog-wheel">
-                <button className="pm-jog-btn jw-y-plus" onClick={() => jog('Y', 1, step)}>Y+</button>
-                <button className="pm-jog-btn jw-x-minus" onClick={() => jog('X', -1, step)}>X−</button>
-                <button className="pm-jog-btn jw-x-plus" onClick={() => jog('X', 1, step)}>X+</button>
-                <button className="pm-jog-btn jw-y-minus" onClick={() => jog('Y', -1, step)}>Y−</button>
+                <button className="pm-jog-btn jw-y-plus" onClick={() => jog('Y', 1, step)} disabled={!connected}>Y+</button>
+                <button className="pm-jog-btn jw-x-minus" onClick={() => jog('X', -1, step)} disabled={!connected}>X−</button>
+                <button className="pm-jog-btn jw-x-plus" onClick={() => jog('X', 1, step)} disabled={!connected}>X+</button>
+                <button className="pm-jog-btn jw-y-minus" onClick={() => jog('Y', -1, step)} disabled={!connected}>Y−</button>
                 <div className="pm-jog-z">
-                    <button className="pm-jog-btn" onClick={() => jog('Z', 1, step)}>Z+</button>
-                    <button className="pm-jog-btn" onClick={() => jog('Z', -1, step)}>Z−</button>
+                    <button className="pm-jog-btn" onClick={() => jog('Z', 1, step)} disabled={!connected}>Z+</button>
+                    <button className="pm-jog-btn" onClick={() => jog('Z', -1, step)} disabled={!connected}>Z−</button>
                 </div>
             </div>
 
@@ -300,7 +307,15 @@ function Step2Jog({
                     max={20}
                     step={0.1}
                     value={bitDiameter}
-                    onChange={(e) => setBitDiameter(Number(e.target.value) || 6)}
+                    onChange={(e) => {
+                        // MED#12: the min/max attrs only affect the spinner
+                        // arrows and native validity state, not typed input --
+                        // a bare Number() cast let negative/zero/oversized
+                        // values through into a probe-offset calculation.
+                        const v = Number(e.target.value);
+                        if (!Number.isFinite(v)) { setBitDiameter(6); return; }
+                        setBitDiameter(Math.min(20, Math.max(0.1, v)));
+                    }}
                     className="pm-bit-input"
                 />
             </label>

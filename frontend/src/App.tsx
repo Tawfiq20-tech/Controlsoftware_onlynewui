@@ -32,16 +32,16 @@ function AppInner() {
     useAutoConnect();
 
     // Push the parsed G-code to the backend feeder as soon as it's available and
-    // the backend has a live controller instance. This effect used to live only
-    // in JobControlBar.tsx, but JobControlBar is never mounted anywhere in this
-    // app's actual render tree (it's only used inside the orphaned
-    // Workspace3D.tsx, which nothing imports) -- so the backend never received
-    // file:load at all, no matter which fix was made to that dead component.
-    // Moved here, to the always-mounted app root, so it actually runs. Gating
-    // on controllerReady (not just `connected`) avoids the race where
-    // `connected` flips true the instant the serial port opens but the
-    // backend's controller instance isn't assigned until firmware detection
-    // finishes ~100-200ms later.
+    // the backend has a live controller instance. This is the single source of
+    // truth for the file:load dispatch -- it used to be duplicated in
+    // JobControlBar.tsx too (which mounts conditionally via Visualizer3D.tsx's
+    // showCarveBar), and having both effects race on the same fileLoadedBackend
+    // check caused two overlapping file:load emits and a redundant backend
+    // reparse/reload (HIGH#8). That duplicate was removed; this app-root effect
+    // is the only one left, so it must stay mounted unconditionally. Gating on
+    // controllerReady (not just `connected`) avoids the race where `connected`
+    // flips true the instant the serial port opens but the backend's controller
+    // instance isn't assigned until firmware detection finishes ~100-200ms later.
     const {
         connected,
         controllerReady,

@@ -59,6 +59,14 @@ class CNCEngine extends EventEmitter {
         // Track whether a job is in a paused state for file-upload conflict detection.
         this._jobPaused = false;
 
+        // Serializes _handleOpen() attempts. Without this, two overlapping
+        // serialport:open requests can both pass the "no connection yet"
+        // guard checks before either's real hardware open() completes,
+        // each construct their own `new Connection(...)`, and the second
+        // silently orphans the first (still opening, timers still running)
+        // with nothing left referencing it to ever close.
+        this._openLock = Promise.resolve();
+
         // ECSS-E: bring up the remote diag mirror if the user previously
         // toggled it on. The mirror connects out; it never accepts inbound
         // connections, so this is safe to fire-and-forget on boot.
@@ -385,7 +393,20 @@ class CNCEngine extends EventEmitter {
 
     // ─── Open Connection ─────────────────────────────────────────────
 
-    async _handleOpen(socket, portPath, options, callback) {
+    // Thin serializing wrapper around _doHandleOpen(). Chains onto
+    // _openLock so overlapping 'open' requests (e.g. two browser tabs, or
+    // a frontend reload racing the socket reconnect) run one at a time
+    // instead of each constructing their own Connection and orphaning
+    // whichever one loses the race.
+    _handleOpen(socket, portPath, options, callback) {
+        this._openLock = this._openLock
+            .then(() => this._doHandleOpen(socket, portPath, options, callback))
+            .catch((exc) => {
+                logger.error(`_handleOpen chain error: ${exc?.message || exc}`);
+            });
+    }
+
+    async _doHandleOpen(socket, portPath, options, callback) {
         if (typeof options === 'function') {
             callback = options;
             options = {};
@@ -455,28 +476,35 @@ class CNCEngine extends EventEmitter {
             this._onConnectionClose();
         });
 
-        // Open the connection
-        this.connection.open((err) => {
-            if (err) {
-                logger.error(`Failed to open ${portPath}: ${err.message}`);
-                this.connection = null;
-                this.port = null;
-                if (typeof callback === 'function') callback(err);
-                socket.emit('serialport:error', { port: portPath, error: err.message });
-                return;
-            }
+        // Open the connection. _handleOpen() chains this call onto
+        // _openLock, so wrap it in a Promise that resolves once the open
+        // attempt (success or failure) actually completes -- otherwise the
+        // lock would release as soon as this synchronous body returns.
+        return new Promise((resolveOpen) => {
+            this.connection.open((err) => {
+                if (err) {
+                    logger.error(`Failed to open ${portPath}: ${err.message}`);
+                    this.connection = null;
+                    this.port = null;
+                    if (typeof callback === 'function') callback(err);
+                    socket.emit('serialport:error', { port: portPath, error: err.message });
+                    resolveOpen();
+                    return;
+                }
 
-            // Start session logging
-            if (this.sessionLogger) {
-                this.sessionLogger.close();
-            }
-            this.sessionLogger = createSessionLogger(logger.sessionsDir, portPath);
-            this.sessionLogger.logConnection(true, portPath);
+                // Start session logging
+                if (this.sessionLogger) {
+                    this.sessionLogger.close();
+                }
+                this.sessionLogger = createSessionLogger(logger.sessionsDir, portPath);
+                this.sessionLogger.logConnection(true, portPath);
 
-            logger.info(`Connection opened: ${portPath}`);
-            this.io.emit('serialport:open', { port: portPath });
+                logger.info(`Connection opened: ${portPath}`);
+                this.io.emit('serialport:open', { port: portPath });
 
-            if (typeof callback === 'function') callback(null);
+                if (typeof callback === 'function') callback(null);
+                resolveOpen();
+            });
         });
     }
 

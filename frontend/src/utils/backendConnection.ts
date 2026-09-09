@@ -33,6 +33,18 @@ export function isBackendSupported(): boolean {
     return true;
 }
 
+// Socket.IO's underlying client fires its 'connect' event on every
+// automatic reconnect, not just the first connection -- Controller.connect()
+// forwards that straight through to the callback passed here, so without
+// this guard _wireControllerToStore() below would run again on every
+// WiFi drop / backend restart / laptop sleep-wake, each time registering a
+// fresh closure for all ~50 controller.on(...) handlers (they're distinct
+// function objects each call, so the listeners Set can't dedupe them) on
+// top of the ones already there -- unbounded growth plus every event
+// firing its side effects (console logs, state updates) multiple times per
+// occurrence.
+let _storeWired = false;
+
 /**
  * Connect to the backend Socket.IO server and wire events to the store.
  */
@@ -53,8 +65,12 @@ export function connectBackendSocket(): Promise<void> {
                 return;
             }
             store.setBackendSocketConnected(true);
-            // Wire controller events to store
-            _wireControllerToStore();
+            // Wire controller events to store -- once per page load, not
+            // once per reconnect (see _storeWired's comment above).
+            if (!_storeWired) {
+                _storeWired = true;
+                _wireControllerToStore();
+            }
             // Hydrate config from backend (machine profiles, ethernet, probe, preferences)
             controller.getConfigAll((_e, config) => {
                 if (config && typeof config === 'object') {
@@ -326,13 +342,23 @@ function _wireControllerToStore(): void {
         getStore().setJobActive(true);
     });
 
-    controller.on('sender:end', () => {
+    controller.on('sender:end', (data: unknown) => {
         const s = getStore();
+        const aborted = !!(data && typeof data === 'object' && 'aborted' in data && (data as { aborted?: boolean }).aborted);
         s.setJobActive(false);
         s.setMachineState('idle');
-        s.setJobProgress(100);
-        s.addConsoleLog('success', 'Job completed');
-        log('info', 'Job completed');
+        // MED#11: sender:end fires on abort paths too (user stop,
+        // Z-runaway ECSS abort, RTS stream-pump safety bound) -- not just
+        // real completion. Forcing jobProgress to 100 and logging "Job
+        // completed" on those paths lied about the job having finished.
+        if (aborted) {
+            s.addConsoleLog('warning', 'Job stopped');
+            log('info', 'Job stopped');
+        } else {
+            s.setJobProgress(100);
+            s.addConsoleLog('success', 'Job completed');
+            log('info', 'Job completed');
+        }
     });
 
     controller.on('sender:error', (err: unknown) => {
@@ -347,6 +373,14 @@ function _wireControllerToStore(): void {
     controller.on('file:load', (data: { name: string; total: number }) => {
         const s = getStore();
         s.setFileLoadedBackend(true);
+        // MED#10: without this, currentLine/jobProgress kept showing the
+        // PREVIOUS file's last values until the newly loaded job's first
+        // sender:status arrived -- old job's line count/percentage bled
+        // into the new file's initial display (Tawfiq's "old-job-bleed"
+        // report). Backend resets its own _currentLine on gcode:load
+        // (RSPController.js); mirror that here.
+        s.setCurrentLine(0);
+        s.setJobProgress(0);
         s.addConsoleLog('info', `File loaded: ${data.name} (${data.total} lines)`);
     });
 
