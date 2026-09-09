@@ -85,6 +85,23 @@ function AppInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Non-copyable UI (Tawfiq msg12266) — text selection is already locked
+    // down globally via index.css `body { user-select: none }` (Tawfiq's own
+    // commit 770ebfcd). This closes the other route to the same content: the
+    // browser's native right-click menu (Inspect/View Source/Save As/Copy).
+    // Left enabled on inputs/textarea/contenteditable so users can still
+    // paste values (e.g. numeric fields) via right-click — same exception
+    // index.css already carves out for text-select.
+    useEffect(() => {
+        const blockContextMenu = (e: MouseEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('input, textarea, [contenteditable="true"]')) return;
+            e.preventDefault();
+        };
+        document.addEventListener('contextmenu', blockContextMenu);
+        return () => document.removeEventListener('contextmenu', blockContextMenu);
+    }, []);
+
     // Activate global keyboard shortcuts — Ctrl+O triggers file open via sidebar
     useKeyboardShortcuts(() => {
         // Try to find and trigger the file input in Sidebar
