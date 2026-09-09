@@ -214,6 +214,32 @@ class JobStream extends EventEmitter {
         return { lastExecuted, firstUnconfirmed, inPlannerCount };
     }
 
+    /**
+     * Clear a finished/aborted job's stale progress bookkeeping without
+     * tearing down this instance (RSPController.js's gcode:load handler
+     * calls this instead of replacing `this.job` -- see MED#10/11 note
+     * there for why nulling the whole JobStream broke every start after
+     * the first file load: nothing ever recreated it, since the stream
+     * listeners bound in the constructor/bind() are only wired up once).
+     * No-ops if a job is actively streaming so it can't be reset out from
+     * under itself.
+     */
+    resetProgress() {
+        if (this._active) return;
+        this._executed = new Set();
+        this._acked = new Set();
+        this._sentLines = new Set();
+        this._totalLineCount = 0;
+        this._chunkStartLine = 0;
+        this._completedBeforeChunk = 0;
+        this._baseJobId = 0;
+        this._jobId = 0;
+        this._nextLine = 1;
+        this._jobDone = false;
+        this._stalled = false;
+        this._failReason = null;
+    }
+
     // ------------------------------------------------------------------
     /**
      * Validate + start streaming a job. Returns jobId.

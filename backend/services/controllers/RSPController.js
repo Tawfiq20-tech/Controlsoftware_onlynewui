@@ -779,7 +779,7 @@ class RSPController extends EventEmitter {
                 // in, getSenderStatus() kept reporting the PREVIOUS file's
                 // line count/percentage overlaid on the newly loaded file
                 // (Tawfiq's "old-job-bleed" report).
-                this.job = null;
+                if (this.job) this.job.resetProgress();
                 this._currentLine = 0;
                 this._loadedName = name || '';
                 // Firmware (easycnc_protocol.c, GcodeMove struct) has no
