@@ -1099,6 +1099,29 @@ class RSPController extends EventEmitter {
     }
 
     /**
+     * Awaitable RSP OP_ENTER_BOOTLOADER trigger for the no-BOOT0 USB DFU
+     * firmware-update path. Firmware only accepts this from SYS_IDLE
+     * (ST_ERR_STATE otherwise) and ACKs ST_OK *before* jumping into the
+     * STM32H723 system bootloader (fw_m3/Inc/rsp_defs.h:31-40, fw_m3/Inc/
+     * dfu_bootloader.h) -- so resolving on that ACK is the correct signal
+     * for the caller to start polling for the DFU USB device (VID 0x0483,
+     * PID 0xDF11). The CDC serial port disappears immediately after the
+     * ACK, same as this.stream will observe a LinkLost right after.
+     * @returns {Promise<void>}
+     */
+    enterBootloader() {
+        if (!this.stream) return Promise.reject(new Error('controller not bound'));
+        return this.stream.sendCommand(defs.OP_ENTER_BOOTLOADER, Buffer.alloc(0), { timeout: 5.0 }).then((rsp) => {
+            const status = rsp.payload[1];
+            if (status !== defs.ST_OK) {
+                const name = defs.ST_ERR_NAMES[status] || `0x${status.toString(16)}`;
+                throw new Error(`enter-bootloader rejected: ${name} (machine must be IDLE -- clear any job/alarm/estop first)`);
+            }
+            this.emit('console', '[RSP] Bootloader entry ACKed -- device jumping to USB DFU, CDC port will disappear now.');
+        });
+    }
+
+    /**
      * Awaitable absolute move (RSP OP_MOVE), used by ProbingService's
      * RSP-native multi-axis routines to reposition BETWEEN probe touches
      * (e.g. clear Z before approaching in X) where the next probe must not

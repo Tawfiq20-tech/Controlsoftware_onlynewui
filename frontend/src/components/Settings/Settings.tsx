@@ -14,7 +14,7 @@
  */
 import { useState } from 'react';
 import {
-    Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette,
+    Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu,
 } from 'lucide-react';
 import SectionWebcam from './SectionWebcam';
 import SectionWatchDir from './SectionWatchDir';
@@ -24,9 +24,10 @@ import SectionJobHistory from './SectionJobHistory';
 import SectionSurfacing from './SectionSurfacing';
 import SectionNotifications from './SectionNotifications';
 import SectionAppearance from './SectionAppearance';
+import SectionFirmwareUpdate from './SectionFirmwareUpdate';
 import './Settings.css';
 
-type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance';
+type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware';
 
 interface TabDef { id: Tab; label: string; icon: React.ReactNode; }
 
@@ -50,6 +51,7 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
             // Gamepad dropped per Tawfiq msg 7396 — duplicates DevicePanel → Joystick.
             { id: 'webcam',   label: 'Cameras',      icon: <Camera size={16} /> },
             { id: 'watchdir', label: 'Watch folder', icon: <FolderOpen size={16} /> },
+            { id: 'firmware', label: 'Firmware',     icon: <Cpu size={16} /> },
         ],
     },
     {
@@ -95,6 +97,7 @@ export default function Settings() {
                 {active === 'surfacing' && <SectionSurfacing />}
                 {active === 'webcam'    && <SectionWebcam />}
                 {active === 'watchdir'  && <SectionWatchDir />}
+                {active === 'firmware'  && <SectionFirmwareUpdate />}
                 {active === 'probing'   && <SectionProbing />}
                 {active === 'tools'     && <SectionTools />}
                 {active === 'history'   && <SectionJobHistory />}

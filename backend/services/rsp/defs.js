@@ -34,6 +34,13 @@ const OP_PROBE = 0x13;           // payload: axis u8 (0=X,1=Y,2=Z) dir u8 (1=neg
                                   // result u8 (0=contact,1=no_contact -- a miss
                                   // is NOT an error status) axis u8 dist_mm f32
                                   // x f32 y f32 z f32 (resulting machine position)
+const OP_ENTER_BOOTLOADER = 0x14; // no payload. Firmware only accepts this from
+                                  // ST_IDLE (replies ST_ERR_STATE otherwise).
+                                  // Acks ST_OK, then jumps into the STM32H723
+                                  // system bootloader (USB DFU) -- the CDC
+                                  // serial port disappears right after the ack.
+                                  // Caller must wait for the DFU device
+                                  // (VID 0x0483, PID 0xDF11) to enumerate.
 
 // Reverse lookup for diagnostic logging.
 const OP_NAMES = {};
@@ -42,7 +49,7 @@ const OP_NAMES = {};
         OP_GET_STATUS, OP_PING, OP_GET_RUN_STATE, OP_GET_CONFIG, OP_SOFT_RESET,
         OP_UNLOCK, OP_E_STOP, OP_FEED_HOLD, OP_RESUME, OP_JOG, OP_HOME, OP_ZERO,
         OP_JOB_START, OP_JOB_LINE, OP_JOB_END, OP_JOB_ABORT, OP_SET_FEED_OVERRIDE,
-        OP_MOVE, OP_PROBE,
+        OP_MOVE, OP_PROBE, OP_ENTER_BOOTLOADER,
     };
     for (const [name, val] of Object.entries(ops)) {
         OP_NAMES[val] = name;
@@ -267,7 +274,7 @@ module.exports = {
     OP_GET_STATUS, OP_PING, OP_GET_RUN_STATE, OP_GET_CONFIG, OP_SOFT_RESET,
     OP_UNLOCK, OP_E_STOP, OP_FEED_HOLD, OP_RESUME, OP_JOG, OP_HOME, OP_ZERO,
     OP_JOB_START, OP_JOB_LINE, OP_JOB_END, OP_JOB_ABORT, OP_SET_FEED_OVERRIDE,
-    OP_MOVE, OP_PROBE, OP_NAMES,
+    OP_MOVE, OP_PROBE, OP_ENTER_BOOTLOADER, OP_NAMES,
     ST_OK, ST_ERR_INTERNAL, ST_ERR_BUSY, ST_ERR_STATE, ST_ERR_JOB,
     ST_ERR_SEQ_GAP, ST_ERR_CRC, ST_ERR_BUFFER, ST_ERR_CMD, ST_ERR_ESTOP,
     ST_ERR_FAULT, ST_ERR_NAMES,

@@ -90,18 +90,8 @@ class DFUFlasher extends EventEmitter {
      * Returns a Map of address -> data buffer.
      */
     parseHex(hexString) {
-        // Stub: requires 'nrf-intel-hex' or similar
-        // Real implementation would parse Intel HEX format:
-        //   :10010000214601360121470136007EFE09D2190140
-        //   ^^ byte count
-        //     ^^^^ address
-        //         ^^ record type
-        //           .... data
-        //                   ^^ checksum
-        //
-        // For now, return empty map to avoid crash
-        this.emit('error', 'Hex parsing not implemented (requires nrf-intel-hex library)');
-        return new Map();
+        const hexParser = require('nrf-intel-hex');
+        return hexParser.fromHex(hexString);
     }
 
     /**

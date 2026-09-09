@@ -122,25 +122,57 @@ class DFU extends EventEmitter {
     }
 
     /**
-     * Open the DFU device (Node.js placeholder - requires usb library).
-     * In practice, this would use node-usb or similar.
+     * Open the DFU device. Enumerates over 'usb' (node-usb, libusb backend),
+     * wraps it as a WebUSBDevice so the rest of this class can use the same
+     * controlTransferIn/Out shape as a browser WebUSB device -- matches the
+     * gSender reference this class was ported from.
+     *
+     * The device disappears from CDC and re-enumerates as DFU (0483:DF11)
+     * right after RSP_OP_ENTER_BOOTLOADER is ACKed on the firmware side, so
+     * this retries for a few seconds rather than failing on the first miss.
      */
     async open() {
-        // NOTE: This is a stub. Real implementation requires 'usb' or 'node-hid'
-        // to enumerate and open USB devices with VID/PID matching DFU.VID/DFU.PID.
-        //
-        // Example (not functional without usb library):
-        // const usb = require('usb');
-        // const device = usb.findByIds(DFU.VID, DFU.PID);
-        // if (!device) throw new Error('DFU device not found');
-        // device.open();
-        // this.device = device;
-        // this.interface = device.interface(0);
-        // this.interface.claim();
-        // await delay(450);
-        // this.parseMemorySegments(this.interface.descriptor.iInterface);
+        const usb = require('usb');
+        const { WebUSBDevice } = usb;
 
-        throw new Error('DFU.open() requires USB library integration (node-usb). Not implemented in Node.js backend.');
+        const findDeviceWithRetries = async (retries = 6, intervalMs = 1000) => {
+            for (let attempt = 0; attempt < retries; attempt += 1) {
+                const found = usb.findByIds(DFU.VID, DFU.PID);
+                if (found) {
+                    return found;
+                }
+                await delay(intervalMs);
+            }
+            return null;
+        };
+
+        const usbDevice = await findDeviceWithRetries();
+        if (!usbDevice) {
+            throw new Error(
+                `DFU device not found (VID=0x${DFU.VID.toString(16)}, PID=0x${DFU.PID.toString(16)}) after retrying. `
+                + 'Is the board in DFU mode? On Windows, confirm the device is bound to WinUSB (via Zadig), not the ST DfuSe driver.'
+            );
+        }
+
+        this.device = await WebUSBDevice.createInstance(usbDevice);
+        await this.device.open();
+        await delay(450);
+
+        const configuration = this.device.configuration || this.device.configurations[0];
+        if (!this.device.configuration) {
+            await this.device.selectConfiguration(configuration.configurationValue);
+        }
+
+        const iface = configuration.interfaces[0];
+        await this.device.claimInterface(iface.interfaceNumber);
+        this.interfaceNumber = iface.interfaceNumber;
+
+        const alternate = iface.alternates[0];
+        if (iface.alternates.length > 1) {
+            await this.device.selectAlternateInterface(iface.interfaceNumber, alternate.alternateSetting);
+        }
+
+        this.parseMemorySegments(alternate.interfaceName);
     }
 
     /**
@@ -148,8 +180,12 @@ class DFU extends EventEmitter {
      */
     async close() {
         if (this.device) {
-            // this.interface?.release();
-            // this.device.close();
+            try {
+                await this.device.close();
+            } catch (e) {
+                // Device may already be gone -- e.g. it just reset into the newly
+                // flashed application firmware and re-enumerated as CDC. Not fatal.
+            }
             this.device = null;
         }
     }
@@ -158,16 +194,36 @@ class DFU extends EventEmitter {
      * Send a DFU control IN request.
      */
     async requestIn(bRequest, wLength, wValue = 0) {
-        // Stub: requires USB controlTransfer
-        throw new Error('DFU.requestIn() requires USB library integration.');
+        const result = await this.device.controlTransferIn({
+            requestType: 'class',
+            recipient: 'interface',
+            request: bRequest,
+            value: wValue,
+            index: this.interfaceNumber,
+        }, wLength);
+
+        if (result.status !== 'ok') {
+            throw new Error(`DFU control IN transfer failed (bRequest=0x${bRequest.toString(16)}): ${result.status}`);
+        }
+        return result.data;
     }
 
     /**
      * Send a DFU control OUT request.
      */
-    async requestOut(bRequest, data, wValue = 0) {
-        // Stub: requires USB controlTransfer
-        throw new Error('DFU.requestOut() requires USB library integration.');
+    async requestOut(bRequest, data = undefined, wValue = 0) {
+        const result = await this.device.controlTransferOut({
+            requestType: 'class',
+            recipient: 'interface',
+            request: bRequest,
+            value: wValue,
+            index: this.interfaceNumber,
+        }, data);
+
+        if (result.status !== 'ok') {
+            throw new Error(`DFU control OUT transfer failed (bRequest=0x${bRequest.toString(16)}): ${result.status}`);
+        }
+        return result.bytesWritten;
     }
 
     /**

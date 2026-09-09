@@ -249,10 +249,17 @@ class CNCEngine extends EventEmitter {
 
             // ─── Firmware Flashing ───────────────────────────────
             socket.on('firmware:flash', async (options, callback) => {
-                const { port, boardType, hexPath } = options || {};
+                const { port, boardType, hexPath, hexData } = options || {};
                 try {
                     const FirmwareFlashing = require('../lib/Firmware/Flashing/firmwareflashing');
-                    await FirmwareFlashing.flash(port, boardType, { hexPath, socket });
+                    // EASYCNC's no-BOOT0 DFU path drives the bootloader jump
+                    // over the existing RSP link, so it needs the live bound
+                    // controller, not just the port string the other board
+                    // types use (avrgirl / DTR-RTS serial bootloader). It
+                    // also always sends hexData (raw text read client-side
+                    // from the file the user picked) rather than hexPath --
+                    // the backend never needs its own copy of that file.
+                    await FirmwareFlashing.flash(port, boardType, { hexPath, hexData, socket, controller: this.controller });
                     if (typeof callback === 'function') callback(null, { success: true });
                 } catch (err) {
                     logger.error(err);
