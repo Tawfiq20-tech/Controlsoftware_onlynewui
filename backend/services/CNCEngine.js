@@ -20,7 +20,6 @@ const { createController } = require('./controllers');
 const { createSessionLogger } = require('./SessionLogger');
 const { ConfigStore } = require('./ConfigStore');
 const { isRotaryFile } = require('../lib/rotary');
-const { validateToolpath, defaultMachineLimits } = require('./SafetyValidator');
 const remoteDiagMirror = require('./RemoteDiagMirror');
 const logger = require('../logger');
 
@@ -583,9 +582,6 @@ class CNCEngine extends EventEmitter {
                     dbg_steps_total: status.dbgStepsTotal,
                 });
             }
-            // ECSS — re-validate if the WCO has changed since last run.
-            const wco = status?.wco || this.controller?._wco;
-            if (wco) this._maybeRevalidateOnWcoChange(wco);
         });
 
         // Parser state
@@ -869,39 +865,6 @@ class CNCEngine extends EventEmitter {
             return;
         }
 
-        // ECSS Module 1 — block Start when the loaded toolpath fails validation.
-        // A one-shot override (set via 'safety:overrideOnce' socket command)
-        // bypasses the block for the next Start and then auto-clears. Used for
-        // diagnostic moves on a machine with known-bad offsets; Module 3
-        // (Z runaway watchdog) still fires at the motion layer regardless.
-        const startCmds = new Set(['gcode:start', 'gcode:resume', 'cyclestart', 'sender:start']);
-        if (startCmds.has(cmd) && this._loadedGcodeContent) {
-            this._runSafetyValidation();
-        }
-        if (startCmds.has(cmd) && this._lastSafetyVerdict?.blocked) {
-            if (this._safetyOverrideOnce) {
-                logger.warn(`[ECSS] Pre-flight BLOCK overridden by user — proceeding with ${cmd}. (Module 3 Z watchdog still active.)`);
-                this._safetyOverrideOnce = false;
-                this.io.emit('safety:overrideConsumed', { command: cmd });
-            } else {
-                const reasons = (this._lastSafetyVerdict.issues || []).slice(0, 3).map(i => i.message).join(' ');
-                logger.warn(`[ECSS] Start BLOCKED by pre-flight: ${reasons}`);
-                socket.emit('safety:blocked', {
-                    command: cmd,
-                    verdict: this._lastSafetyVerdict,
-                });
-                return;
-            }
-        }
-
-        // Override toggle command (one-shot, allows next Start only).
-        if (cmd === 'safety:overrideOnce') {
-            this._safetyOverrideOnce = true;
-            logger.warn('[ECSS] Pre-flight override armed — next Start will bypass validator.');
-            this.io.emit('safety:overrideArmed', { armed: true });
-            return;
-        }
-
         // ECSS Commit E — Remote diagnostic mirror toggle (intercept before
         // routing to controller, otherwise RTSController treats it as an
         // unknown command and logs a warning).
@@ -1008,57 +971,10 @@ class CNCEngine extends EventEmitter {
 
         this.io.emit('file:load', this.loadedFile);
 
-        // ECSS Module 1 — toolpath is stored for validation, but the check
-        // itself no longer runs here. It used to fire immediately on every
-        // upload (_runSafetyValidation() below), which meant its
-        // '[ECSS] Pre-flight PASS' banner/log popped for every file the
-        // instant it loaded, before Start was ever pressed and often before
-        // the machine had even been homed (Tawfiq msg11358 item 6: "a
-        // caution message which is useless ... shows even when the carve
-        // is not started"). It now runs once, on demand, right at the
-        // Start-attempt gate in _handleCommand() below -- see the
-        // `this._runSafetyValidation();` call there.
         this._loadedGcodeContent = gcodeContent;
 
         if (this.sessionLogger) {
             this.sessionLogger.logJob({ event: 'loaded', name: fileName, total: senderTotal });
-        }
-    }
-
-    /**
-     * ECSS Module 1 — runs every time the loaded G-code, the active WCS, or
-     * the selected machine profile changes. Emits `safety:validation` with the
-     * verdict so the frontend can enable/disable Start and surface the reason.
-     */
-    _runSafetyValidation() {
-        if (!this._loadedGcodeContent) return;
-        const ctrl = this.controller;
-        if (!ctrl) return;
-
-        const wco = (typeof ctrl.getWorkOffset === 'function')
-            ? ctrl.getWorkOffset()
-            : (ctrl._wco || { x: 0, y: 0, z: 0 });
-
-        const profile = this._activeMachineProfile ||
-            (this.config?.get?.('machineProfiles') || []).find(p => p?.id === this.config?.get?.('activeMachineProfile'));
-        const machineLimits = defaultMachineLimits(profile);
-
-        try {
-            const verdict = validateToolpath({
-                gcode: this._loadedGcodeContent,
-                wco,
-                machineLimits,
-            });
-            this._lastSafetyVerdict = verdict;
-            this.io.emit('safety:validation', verdict);
-            if (verdict.blocked) {
-                logger.warn(`[ECSS] Pre-flight BLOCKED — ${verdict.issues.length} issue(s). probableCorruptWCS=${verdict.probableCorruptWCS}`);
-                verdict.issues.forEach(i => logger.warn(`[ECSS]   ${i.message}`));
-            } else {
-                logger.info('[ECSS] Pre-flight PASS — toolpath fits machine envelope.');
-            }
-        } catch (err) {
-            logger.error(`[ECSS] validator threw: ${err.message}`);
         }
     }
 
@@ -1068,23 +984,7 @@ class CNCEngine extends EventEmitter {
         }
         this.loadedFile = null;
         this._loadedGcodeContent = null;
-        this._lastSafetyVerdict = null;
-        this._lastValidatedWco = null;
         this.io.emit('file:unload');
-        this.io.emit('safety:validation', { blocked: false, issues: [], cleared: true });
-    }
-
-    _maybeRevalidateOnWcoChange(wco) {
-        if (!this._loadedGcodeContent) return;
-        const last = this._lastValidatedWco;
-        if (last
-            && Math.abs((last.x || 0) - (wco.x || 0)) < 0.01
-            && Math.abs((last.y || 0) - (wco.y || 0)) < 0.01
-            && Math.abs((last.z || 0) - (wco.z || 0)) < 0.01) {
-            return;
-        }
-        this._lastValidatedWco = { x: wco.x, y: wco.y, z: wco.z };
-        this._runSafetyValidation();
     }
 
     // ─── Public API ──────────────────────────────────────────────────

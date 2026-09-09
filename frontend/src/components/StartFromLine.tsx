@@ -116,7 +116,6 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
         ].join('\n');
 
         addConsoleLog('info', `Starting from line ${lineNumber} with safe height ${safeHeight}mm`);
-        addConsoleLog('warning', 'Ensure spindle/tool is at correct height before continuing');
 
         // Load modified gcode starting from target line
         const gcodeFromLine = gcodeLines.slice(targetIdx).join('\n');
