@@ -38,9 +38,25 @@ if not errorlevel 1 (
     echo [WARNING] Port 4000 is currently in use by an existing process.
     echo Freeing port 4000 to ensure a clean start...
     for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":4000 .*LISTENING"') do (
-        taskkill /F /PID %%a >nul 2>&1
+        taskkill /F /T /PID %%a
     )
     timeout /t 1 >nul
+
+    rem Targeted kill can fail (a second RUN.bat window still open re-grabs
+    rem the port the instant it's freed, a PID already gone by the time
+    rem taskkill runs, etc.) -- 2026-09-09 Tawfiq hit exactly this, the
+    rem original >nul 2>&1 swallowed the failure silently and left him
+    rem staring at "port already in use" with no clue why. Re-check, and if
+    rem still occupied, fall back to killing every node.exe (this package
+    rem ships its own runtime\node.exe and isn't expected to share the
+    rem machine with an unrelated Node app) instead of just failing.
+    netstat -ano | findstr /R /C:":4000 .*LISTENING" >nul 2>&1
+    if not errorlevel 1 (
+        echo [WARNING] Port 4000 still in use after targeted kill.
+        echo Stopping all node.exe processes to recover...
+        taskkill /F /IM node.exe
+        timeout /t 1 >nul
+    )
 )
 
 rem Open the browser a couple seconds after launch, giving the server time
