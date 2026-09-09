@@ -534,6 +534,13 @@ function TelegramBlock() {
                     Open mode (accept any sender when allow-list is empty)
                 </label>
             </div>
+            {!!cfg?.openMode && (!cfg?.allowedChatIds || cfg.allowedChatIds.length === 0) && (
+                <div className="wa-cfg-row" style={{ color: '#c0392b', fontSize: 12 }}>
+                    ⚠ Risk: with no chat IDs in the allow-list, open mode lets ANY sender who finds this bot
+                    fire jog/home/start commands on your machine. Add at least one chat ID and disable open mode
+                    before leaving this unattended.
+                </div>
+            )}
 
             <div className="wa-cfg-row">
                 <label className="wa-label">

@@ -88,7 +88,6 @@
     "jogSpeed": 1000,
     "jogDistance": 1,
     "safeHeight": 10,
-    "probeThickness": 0,
     "probeFeedrate": 100,
     "spindleDelay": 0,
     "reconnectAutomatically": false,
@@ -96,6 +95,7 @@
     "baudRate": 115200,
     "runCheckOnFileLoad": false,
     "outlineStyle": "Detailed",
+    "probeThickness": 0,
     "remoteDiagEnabled": true,
     "remoteDiagUrl": "ws://10.1.76.249:18765/mirror",
     "remoteDiagToken": "37221d04f26e92ed63eea474275bf016"
@@ -125,6 +125,7 @@
     "zDropY": 18,
     "parkZClearance": 10,
     "connectionTest": true,
+    "probeFailRetractMm": 5,
     "xOverhang": 10,
     "yOverhang": 10,
     "plateThickness": 20,

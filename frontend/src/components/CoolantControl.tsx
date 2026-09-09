@@ -4,18 +4,30 @@ import { sendBackendCommand } from '../utils/backendConnection';
 import './CoolantControl.css';
 
 export default function CoolantControl() {
-    const { connected, coolantState, setCoolantState, addConsoleLog } = useCNCStore();
+    const { connected, firmwareType, coolantState, setCoolantState, addConsoleLog } = useCNCStore();
+
+    // RSP boards have no coolant hardware wired -- M7/M8/M9 always throw now
+    // (Finding #8 fix, RSPController.js case 'gcode'). There is no per-command
+    // ack anywhere in this app, so for RSP we don't flip the mist/flood badge
+    // at all -- the real failure surfaces via the existing controller:error ->
+    // console log path instead of a badge that lies. GRBL-family boards
+    // genuinely execute these M-codes, so the optimistic flip stays for them.
+    const canTrustOptimisticState = firmwareType !== 'RSP';
 
     const handleMist = () => {
         if (!connected) return;
         if (coolantState === 'mist') {
             sendBackendCommand('M9');
-            setCoolantState('off');
-            addConsoleLog('info', 'Coolant: Mist OFF (M9)');
+            if (canTrustOptimisticState) {
+                setCoolantState('off');
+                addConsoleLog('info', 'Coolant: Mist OFF (M9)');
+            }
         } else {
             sendBackendCommand('M7');
-            setCoolantState('mist');
-            addConsoleLog('info', 'Coolant: Mist ON (M7)');
+            if (canTrustOptimisticState) {
+                setCoolantState('mist');
+                addConsoleLog('info', 'Coolant: Mist ON (M7)');
+            }
         }
     };
 
@@ -23,20 +35,26 @@ export default function CoolantControl() {
         if (!connected) return;
         if (coolantState === 'flood') {
             sendBackendCommand('M9');
-            setCoolantState('off');
-            addConsoleLog('info', 'Coolant: Flood OFF (M9)');
+            if (canTrustOptimisticState) {
+                setCoolantState('off');
+                addConsoleLog('info', 'Coolant: Flood OFF (M9)');
+            }
         } else {
             sendBackendCommand('M8');
-            setCoolantState('flood');
-            addConsoleLog('info', 'Coolant: Flood ON (M8)');
+            if (canTrustOptimisticState) {
+                setCoolantState('flood');
+                addConsoleLog('info', 'Coolant: Flood ON (M8)');
+            }
         }
     };
 
     const handleStop = () => {
         if (!connected) return;
         sendBackendCommand('M9');
-        setCoolantState('off');
-        addConsoleLog('info', 'Coolant: All OFF (M9)');
+        if (canTrustOptimisticState) {
+            setCoolantState('off');
+            addConsoleLog('info', 'Coolant: All OFF (M9)');
+        }
     };
 
     return (

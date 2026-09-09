@@ -56,7 +56,11 @@ const {
 // honors execution credits (JobStream.depth) so we never overrun the
 // device planner -- ACK means "accepted", not "slot freed".
 const DEFAULT_WINDOW = 16;
-const DEFAULT_RTO_S = 0.10;
+// Widened from 0.10 to 0.25 (2026-09-09): at 115200 baud on Windows USB-CDC,
+// 16 frames in flight (~800 bytes outbound + 320 bytes ACK inbound) takes >120-150ms
+// round-trip. A 100ms RTO caused spurious retransmission storms on every multi-frame
+// burst, clogging the serial link.
+const DEFAULT_RTO_S = 0.25;
 const MAX_RETRIES = 8;
 const DEFAULT_HEARTBEAT_S = 1.0;
 // Absolute cap on how long any single command may sit unresolved, regardless
@@ -179,8 +183,9 @@ class ReliableStream extends EventEmitter {
         this._linkDownReason = '';
         this._lastGapNak = 0.0;
 
-        // blocking reply waiters -> Promise resolvers
         this._replyWaiters = new Map(); // seq -> {resolve, reject, timer}
+
+        this._rejectThrottle = { lastTime: 0, count: 0, lastKey: '' };
 
         this._tickTimer = null;
         this._onData = this._onData.bind(this);
@@ -668,12 +673,31 @@ class ReliableStream extends EventEmitter {
                 }
             }
         } else {
-            // job-63998 stall investigation (2026-09-04): real rejection
-            // (not flow-control/reorder chatter) -- same visibility gap as
-            // the retry-exhaustion path above, same fix.
-            this.emit('console', `⚠️ RSP: seq ${f.seq} (${opName}) rejected -- ${reasonName}.`);
+            // Real rejection (not flow-control/reorder chatter):
+            // Throttle console output to prevent UI freezes/event loop lockup when
+            // bursts of rejections happen (e.g. invalid state). Emit 'reject' so
+            // JobStream can immediately abort instead of blasting hundreds more frames.
+            this._throttleRejectConsole(f.seq, opName, reasonName);
             this._sent.delete(f.seq);
+            this.emit('reject', { seq: f.seq, op, reason, opName, reasonName });
         }
+    }
+
+    _throttleRejectConsole(seq, opName, reasonName) {
+        const n = now();
+        const key = `${opName}:${reasonName}`;
+        if (key === this._rejectThrottle.lastKey && (n - this._rejectThrottle.lastTime) < 1.0) {
+            this._rejectThrottle.count++;
+            return;
+        }
+        let countSuffix = '';
+        if (this._rejectThrottle.count > 0 && key === this._rejectThrottle.lastKey) {
+            countSuffix = ` (${this._rejectThrottle.count} similar rejections suppressed)`;
+        }
+        this._rejectThrottle.lastTime = n;
+        this._rejectThrottle.count = 0;
+        this._rejectThrottle.lastKey = key;
+        this.emit('console', `⚠️ RSP: seq ${seq} (${opName}) rejected -- ${reasonName}.${countSuffix}`);
     }
 }
 

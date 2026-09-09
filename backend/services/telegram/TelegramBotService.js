@@ -39,7 +39,9 @@ const path = require('path');
 const DEFAULT_CONFIG = {
     token: '',                  // BotFather HTTP token
     allowedChatIds: [],         // numeric Telegram chat IDs (positive for users, negative for groups)
-    openMode: true,             // if allowedChatIds empty → accept commands from any chat (first-run friendly)
+    openMode: false,            // if allowedChatIds empty → accept commands from any chat. Defaults OFF: an
+                                 // empty allow-list otherwise means ANY stranger who finds the bot username can
+                                 // fire /jog, /home, /start (Finding #24). Operator must explicitly opt in.
     botEnabled: true,           // bot accepts slash commands
     botEyeCameraId: null,       // webcam id used for /jog snapshots
     enabled: false,             // service polling running?
@@ -422,11 +424,33 @@ class TelegramBotService {
         }
     }
 
+    // Routes through CNCEngine._handleCommand() instead of calling the
+    // controller directly, so /home and /start pick up the same ECSS
+    // pre-flight (toolpath validation) gate the frontend JobControlBar goes
+    // through (Finding #25) -- ctl.command() alone has no gate of its own.
+    _dispatchEngineCommand(cmd) {
+        const engine = this.getEngine?.();
+        if (!engine || !engine.controller) return { ok: false, error: 'No controller connected.' };
+        let blocked = null;
+        const fakeSocket = {
+            emit: (evt, data) => {
+                if (evt === 'safety:blocked') blocked = (data.verdict?.issues || []).slice(0, 2).map(i => i.message).join(' ') || 'safety pre-flight blocked this command.';
+                else if (evt === 'serialport:error') blocked = data.error;
+            },
+        };
+        engine._handleCommand(fakeSocket, null, cmd);
+        if (blocked) return { ok: false, error: blocked };
+        return { ok: true };
+    }
+
     async _cmdHomeRun(chatId) {
-        const ctl = this.getController?.();
-        if (!ctl) { await this._reply(chatId, 'No controller connected.'); return; }
         try {
-            ctl.command?.('homing');
+            const result = this._dispatchEngineCommand('homing');
+            if (!result.ok) {
+                await this._reply(chatId, `Home blocked: ${result.error}`);
+                this._auditWrite({ chatId, cmd: '/home', ok: false, error: result.error });
+                return;
+            }
             await this._reply(chatId, 'Homing all axes…');
             this._auditWrite({ chatId, cmd: '/home', ok: true, stage: 'fired' });
         } catch (err) {
@@ -436,10 +460,13 @@ class TelegramBotService {
     }
 
     async _cmdStartRun(chatId) {
-        const ctl = this.getController?.();
-        if (!ctl) { await this._reply(chatId, 'No controller connected.'); return; }
         try {
-            ctl.command?.('cyclestart');
+            const result = this._dispatchEngineCommand('cyclestart');
+            if (!result.ok) {
+                await this._reply(chatId, `Start blocked: ${result.error}`);
+                this._auditWrite({ chatId, cmd: '/start', ok: false, error: result.error });
+                return;
+            }
             await this._reply(chatId, '▶ Starting…');
             this._auditWrite({ chatId, cmd: '/start', ok: true, stage: 'fired' });
         } catch (err) {

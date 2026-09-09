@@ -398,13 +398,31 @@ class CNCEngine extends EventEmitter {
             return;
         }
 
-        // Close existing connection if any
+        // FIX-10 (Tawfiq fix-plan item 6): the frontend's useAutoConnect hook
+        // resets its "connected" state to false on every page reload and, on
+        // a race against the backend's serialport:open replay to the new
+        // socket, re-issues an 'open' for the same port that's already live
+        // -- even mid-job. Tearing down and recreating the connection here
+        // re-runs Connection.js's firmware-detection probe, which sends a
+        // real soft-reset byte to the board, killing whatever was running.
+        // If it's the exact same already-open port, this is just the new
+        // socket asking to attach to what's already there -- do that instead
+        // of resetting the link.
+        if (this.connection && this.connection.isOpen && this.port === portPath) {
+            this.connection.addConnection(socket);
+            socket.emit('serialport:open', { port: this.port, controllerType: this.connection.controllerType });
+            if (typeof callback === 'function') callback(null);
+            return;
+        }
+
+        // Close existing connection if any (different port, or a stale one)
         if (this.connection && this.connection.isOpen) {
             this._closeConnection();
         }
 
         const baudRate = options.baudRate || 115200;
         const network = options.network || false;
+        const networkPort = options.networkPort || undefined;
         const rtscts = options.rtscts || false;
 
         logger.info(`Opening connection: ${portPath} (baud: ${baudRate}, network: ${network}, rtscts: ${rtscts})`);
@@ -414,6 +432,7 @@ class CNCEngine extends EventEmitter {
             path: portPath,
             baudRate,
             network,
+            networkPort,
             rtscts,
         });
         this.port = portPath;
@@ -477,6 +496,14 @@ class CNCEngine extends EventEmitter {
 
         // Notify all clients
         this.io.emit('controller:type', firmware);
+
+        // Internal (non-socket) event so services holding a stale
+        // getController() closure (e.g. JobHistoryService) can re-attach
+        // their own listeners to this fresh controller instance. A new
+        // controller object is created on every connect/reconnect, so a
+        // one-time wire-up in a service constructor goes stale after the
+        // first bind (FIXFILE.html FIX-20).
+        this.emit('controller:bound', this.controller);
 
         // [GENERIC MODE] GenericController has no runner — skip replay
         // [RTS] RTSController has no runner — skip replay
@@ -714,6 +741,28 @@ class CNCEngine extends EventEmitter {
 
     _closeConnection() {
         if (this.controller) {
+            // FIX-10: this path (explicit disconnect, or _handleOpen tearing
+            // down a stale/different-port connection) used to unbind()
+            // straight away, silently discarding an in-flight job with no
+            // checkpoint and no frontend notice -- unlike the genuine
+            // transport-drop path below in _onConnectionClose(), which
+            // already does this. Mirror that here so a job survives an
+            // open-a-different-port or manual-disconnect the same way it
+            // survives a real USB drop.
+            let lostJob = null;
+            if (typeof this.controller.notifyConnectionLost === 'function') {
+                try {
+                    lostJob = this.controller.notifyConnectionLost();
+                } catch (err) {
+                    logger.warn(`notifyConnectionLost failed: ${err.message}`);
+                }
+            }
+            if (lostJob && lostJob.jobWasActive) {
+                this.io.emit('connection:lost', {
+                    port: this.port,
+                    resumeLine: lostJob.resumeLine,
+                });
+            }
             this.controller.unbind();
             this.controller.removeAllListeners();
             this.controller = null;
@@ -913,8 +962,12 @@ class CNCEngine extends EventEmitter {
             return;
         }
 
-        // Load into controller's sender
-        this.controller.command('gcode:load', fileName, gcodeContent);
+        // Load into controller's sender. spindleDelay is read here (not
+        // inside the controller, which has no ConfigStore reference) and
+        // passed through so RSPController can inject a spin-up dwell after
+        // every M3/M4 -- see FIXFILE.html FIX-16.
+        const spindleDelay = Number(this.config.get('preferences.spindleDelay', 0)) || 0;
+        this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay);
 
         // Store file info for reconnecting clients
         const senderTotal = this.controller.sender?.total || gcodeContent.split('\n').filter(l => l.trim()).length;

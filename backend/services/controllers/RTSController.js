@@ -913,14 +913,12 @@ class RTSController extends EventEmitter {
         }
 
         // ECSS Module 3 — Z runaway watchdog.
-        // DISABLED on vendor-pcap-v1 branch per Tawfiq msg 7097 — was
-        // false-positive firing on his uncalibrated Z (board reports
-        // ~4x commanded feed = steps/mm off, but vendor RTS-X presumably
-        // tolerates this so we should too for diagnostic test runs).
-        // CAUTION: bit can crash into bed/material with no host-side
-        // protection. Re-enable in a future commit once calibration is
-        // sorted OR replace with a "deviation-from-commanded-Z" check.
-        if (process.env.EASYCNC_Z_RUNAWAY_ENABLE === '1') {
+        // RE-ENABLED by default per Tawfiq msg12190 (2026-09-09) — was disabled after
+        // false-firing on his uncalibrated Z (msg 7097). Default is now ON; set
+        // EASYCNC_Z_RUNAWAY_ENABLE=0 to opt back out if it false-fires again mid-job.
+        // CAUTION: without this, a runaway Z can crash into bed/material with no
+        // host-side protection at all.
+        if (process.env.EASYCNC_Z_RUNAWAY_ENABLE !== '0') {
             const prevZ = this._mpos.z;
             const newZ = this._roundPos(z);
             if (this._running && typeof prevZ === 'number' && typeof newZ === 'number') {

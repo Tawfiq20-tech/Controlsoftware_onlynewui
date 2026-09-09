@@ -222,7 +222,7 @@ class SerialConnection extends EventEmitter {
      */
     open(callback) {
         this._openCallback = callback || (() => {});
-        const { path, baudRate, network, ...rest } = this.settings;
+        const { path, baudRate, network, networkPort, ...rest } = this.settings;
 
         const looksLikeIP = isNetworkPath(path);
 
@@ -243,7 +243,7 @@ class SerialConnection extends EventEmitter {
         }
 
         if (network || looksLikeIP) {
-            this._openNetwork(path, callback);
+            this._openNetwork(path, callback, networkPort);
         } else {
             this._openSerial(path, baudRate, rest, callback);
         }
@@ -253,7 +253,7 @@ class SerialConnection extends EventEmitter {
      * Open a TCP/Telnet network connection.
      * @private
      */
-    _openNetwork(host, callback) {
+    _openNetwork(host, callback, port) {
         this.type = 'network';
         this.port = new net.Socket();
 
@@ -275,7 +275,7 @@ class SerialConnection extends EventEmitter {
         });
 
         this._addPortListeners();
-        this.port.connect(TELNET_PORT, host);
+        this.port.connect(port || TELNET_PORT, host);
     }
 
     /**
@@ -392,7 +392,7 @@ class SerialConnection extends EventEmitter {
      * @param {object} [context] - Optional context passed to the writeFilter
      */
     write(data, context) {
-        if (!this.port || !this.port.isOpen) return;
+        if (!this.isOpen) return;
 
         const filtered = this.writeFilter(data, context);
         const outBuf = Buffer.from(filtered);
@@ -413,7 +413,7 @@ class SerialConnection extends EventEmitter {
      * @param {string|Buffer} data - Raw data to send immediately
      */
     writeImmediate(data) {
-        if (!this.port || !this.port.isOpen) return;
+        if (!this.isOpen) return;
         // ECSS-E: mirror immediate writes too (E-Stop, abort bytes, etc.)
         try { require('./RemoteDiagMirror').mirrorTx(data); } catch (_) {}
         this.port.write(data, (err) => {

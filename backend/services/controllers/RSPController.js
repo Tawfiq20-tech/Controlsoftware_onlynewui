@@ -34,9 +34,10 @@ const { EventEmitter } = require('events');
 const logger = require('../../logger');
 const defs = require('../rsp/defs');
 const codec = require('../rsp/codec');
-const { ReliableStream, LinkLost } = require('../rsp/stream');
+const { ReliableStream, LinkLost, RspTimeoutError } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
+const injectSpindleDelay = require('../../lib/injectSpindleDelay');
 
 // Power-cut survival: durable checkpoint persistence is now handled
 // entirely by JobResumeService (services/jobresume/), which owns the
@@ -67,6 +68,15 @@ const FEED_OVERRIDE_MIN = 50.0;
 const FEED_OVERRIDE_MAX = 150.0;
 const FEED_OVERRIDE_COARSE = 10.0;
 const FEED_OVERRIDE_FINE = 1.0;
+
+// FIX-7: on a failed ad-hoc probe (no contact within maxTravelMm, rejected
+// status, or a timed-out/lost reply), the tool is left wherever it stopped --
+// at/near the workpiece with no automatic retreat. This dispatch path (the
+// single quick-probe UI action, not the multi-step corner routine in
+// ProbingService.js) has no configStore wired in, so use a small, always-safe
+// hardcoded Z retreat rather than plumbing config through for one constant.
+const PROBE_FAIL_RETRACT_MM = 5.0;
+const PROBE_FAIL_RETRACT_FEED = 500;
 
 /**
  * Transport adapter bridging AXIO's Connection (rawData events / writeRaw)
@@ -297,8 +307,15 @@ class RSPController extends EventEmitter {
         });
         this.job.on('done', ({ jobId, failReason }) => {
             if (failReason) {
+                this._resumeLine = 0;
+                this._resumeGcode = null;
                 this.emit('sender:error', { jobId, reason: failReason });
-                this.emit('error', new Error(`RSP job ${jobId} failed: ${failReason}`));
+                // Plain Error instances lose .message when JSON-serialized over
+                // Socket.IO (Error.message is non-enumerable -- JSON.stringify(new
+                // Error('x')) === '{}'), so the frontend's controller:error handler
+                // renders "Error undefined: undefined". Emit a plain object instead,
+                // matching the convention already used in RTSController.js.
+                this.emit('error', { message: `RSP job ${jobId} failed: ${failReason}` });
             } else {
                 // Clean finish -- clear any resume point so a later START on
                 // the same file runs from line 1, not "resume from the end".
@@ -311,16 +328,16 @@ class RSPController extends EventEmitter {
             this.emit('sender:end', { aborted: true });
         });
         this.job.on('failed', (reason) => {
-            // A link-loss/stall failure never reaches gcode:stop's explicit
-            // stopLine capture, and may land between two periodic
-            // RESUME_PERSIST_EVERY_N_LINES checkpoints -- persist right now
-            // so a reconnect + reload offers resume as close to the real
-            // stop point as possible, not up to N lines stale.
             const stopLine = this.job ? this.job.nextLineToRun() : 0;
-            if (stopLine > 1) {
+            const totalLines = (this.job && this.job.totalLineCount) || 0;
+            if (stopLine > 1 && totalLines > 0 && stopLine < totalLines) {
                 this._resumeLine = stopLine;
                 this._resumeGcode = this._loadedGcode;
+            } else {
+                this._resumeLine = 0;
+                this._resumeGcode = null;
             }
+            this.emit('console', `⚠️ Job failed: ${reason}`);
             this.emit('sender:error', { reason });
         });
     }
@@ -421,11 +438,40 @@ class RSPController extends EventEmitter {
         this.state.parserstate.spindle = dict.spindle_speed;
 
         // Alarm / Fault / E-Stop detection: surface telemetry alarm states to frontend UI
+        //
+        // limit_flags/fault_flags come off the wire (Telemetry.asDict()) but were
+        // never checked here -- only the coarse `state` enum and the estop_active
+        // bit were. If firmware sets a fault bit without also flipping `state` to
+        // ST_ALARM/ST_ESTOP/ST_FAULT, the alarm was silently never detected/
+        // emitted -- matching the "alarm only visible after a refresh" report
+        // (Tawfiq msg12053/12060).
+        //
+        // Both limit_flags AND fault_flags are now intentionally NOT used as
+        // triggers here. limit_flags was dropped first (Tawfiq msg12074:
+        // unwired switches float, stuck at 0x0f at rest). fault_flags was
+        // believed to be a trustworthy driver/motor ALM signal -- until
+        // Tawfiq's msg12208 session log (2026-09-09T05-11-03-243Z_COM12.ndjson)
+        // proved otherwise: `state` stayed ST_RUNNING(5) the entire time (per
+        // rsp/defs.js, confirmed never ST_ALARM/ST_ESTOP/ST_FAULT) and
+        // estop_active was false throughout, so fault_flags was the only
+        // possible trigger for the repeated "Job paused by FAULT" messages --
+        // yet dbg_steps_done/dbg_tim2_isr_count kept climbing the whole time
+        // (motion never actually stalled) and job.pause() doesn't reach into
+        // firmware to halt real stepping anyway, so each flap just spammed a
+        // pause+resume-point capture (_lastAlarmEmitted resets to null on any
+        // non-alarm poll -- see the `else` branch below -- so a bouncing bit
+        // re-fires as a "new" alarm every time it toggles back on) until the
+        // job was force-aborted well before completion. Same class of noisy/
+        // unverified GPIO bug as limit_flags, just a different pin. Still
+        // decoded and included in the alarm payload for diagnostics; re-enable
+        // as a trigger once Tawfiq confirms the ALM lines are actually wired
+        // to the drivers and a real fault event has been reproduced cleanly.
         if (dict.state === defs.ST_ALARM || dict.state === defs.ST_ESTOP || dict.state === defs.ST_FAULT || dict.estop_active) {
-            const alarmType = dict.estop_active ? 'estop' : (dict.state_name ? dict.state_name.toLowerCase() : 'alarm');
+            const alarmType = dict.estop_active ? 'estop'
+                : (dict.state_name ? dict.state_name.toLowerCase() : 'alarm');
             if (!this._lastAlarmEmitted || this._lastAlarmEmitted !== alarmType) {
                 this._lastAlarmEmitted = alarmType;
-                logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active})`);
+                logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active}, limit_flags=${dict.limit_flags}, fault_flags=${dict.fault_flags})`);
                 
                 // If a job was running, capture the resume line immediately and pause!
                 if (this.job && this.job.active) {
@@ -452,8 +498,11 @@ class RSPController extends EventEmitter {
                 this.emit('alarm', {
                     type: alarmType,
                     code: dict.error_code || 0,
-                    message: dict.estop_active ? 'E-Stop / Limit Switch Triggered' : `${dict.state_name || 'Alarm'} state`,
-                    description: 'Machine hit limit switch, motor faulted, or E-Stop was engaged. Click Clear / Unlock to reset.',
+                    message: dict.estop_active ? 'E-Stop Triggered'
+                        : `${dict.state_name || 'Alarm'} state`,
+                    description: 'E-Stop was engaged or the controller entered an alarm/fault state. Click Clear / Unlock to reset.',
+                    limitFlags: dict.limit_flags || 0,
+                    faultFlags: dict.fault_flags || 0,
                 });
             }
         } else {
@@ -464,7 +513,7 @@ class RSPController extends EventEmitter {
             // EV_EXECUTED is fire-and-forget/lossy (see job.js noteProgress
             // doc) -- telemetry's last_executed_line is the ground truth
             // that self-heals past any dropped event.
-            this.job.noteProgress(dict.last_executed_line);
+            this.job.noteProgress(dict.last_executed_line, dict.job_id);
         }
         this.emit('status', this.state.status);
     }
@@ -476,7 +525,7 @@ class RSPController extends EventEmitter {
         if (this.connection) this.connection.emitToSockets('serialport:read', msg);
         this.emit('console', msg);
         if (!ok) {
-            this.emit('error', new Error(msg));
+            this.emit('error', { message: msg });
         }
     }
 
@@ -566,7 +615,10 @@ class RSPController extends EventEmitter {
             this._dispatch(cmd, args);
         } catch (exc) {
             logger.error(`[RSP] command "${cmd}" failed: ${exc.message || exc}`);
-            this.emit('error', exc);
+            // Emit a plain object, not the raw Error -- Error.message is
+            // non-enumerable so it vanishes over Socket.IO's JSON encoding
+            // (frontend would render "Error undefined: undefined").
+            this.emit('error', { message: exc.message || String(exc) });
         }
     }
 
@@ -616,7 +668,6 @@ class RSPController extends EventEmitter {
                 this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL));
                 break;
 
-            case 'unlock':
             // 'motor:reset'/'motor:resetAll'/'estop:clear'/'limit:clear' used
             // to fall through to the unknown-command default (silently
             // ignored -- confirmed by re-reading this switch end to end,
@@ -637,14 +688,29 @@ class RSPController extends EventEmitter {
             case 'motor:reset':
             case 'motor:resetAll':
             case 'estop:clear':
-            case 'limit:clear':
-                this._lastAlarmEmitted = null;
-                this._fireAndForget(defs.OP_UNLOCK, Buffer.alloc(0));
-                this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
-                if (this._resumeLine > 1) {
-                    this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+            case 'limit:clear': {
+                // FW-3: this used to be _fireAndForget + an unconditional
+                // "Alarm cleared / unlocked" console line -- claiming success
+                // even when the device NAK'd or never replied. sendCommand()
+                // resolves only on a real ACK for this seq and rejects on
+                // NAK/timeout/LinkLost, so use that instead of guessing.
+                if (!this.stream) {
+                    this.emit('console', '⚠️ [RSP] Unlock not sent -- controller not bound.');
+                    break;
                 }
+                this.stream.sendCommand(defs.OP_UNLOCK, Buffer.alloc(0), { timeout: 3.0 })
+                    .then(() => {
+                        this._lastAlarmEmitted = null;
+                        this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
+                        if (this._resumeLine > 1) {
+                            this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+                        }
+                    })
+                    .catch((exc) => {
+                        this.emit('console', `⚠️ [RSP] Unlock command failed: ${exc.message || exc}. Machine may still be alarmed -- do not assume it is safe to run.`);
+                    });
                 break;
+            }
 
             case 'reset':
                 this._lastAlarmEmitted = null;
@@ -677,7 +743,7 @@ class RSPController extends EventEmitter {
                 break;
 
             case 'gcode:load': {
-                const [name, gcode] = args;
+                const [name, gcode, spindleDelaySeconds] = args;
                 const incoming = gcode || '';
                 // If a job is still active (e.g. user stopped mid-carve but
                 // the JobStream hasn't fully wound down yet), abort it now so
@@ -695,11 +761,21 @@ class RSPController extends EventEmitter {
                 // rewrites the in-memory copy sent to firmware, never the
                 // user's original file on disk.
                 try {
-                    const { text, arcCount, segmentCount } = linearizeArcs(incoming);
+                    const { text: linearized, arcCount, segmentCount } = linearizeArcs(incoming);
+                    // Same host-side rewrite pattern as arc linearization:
+                    // insert a spin-up dwell after every M3/M4 so the tool
+                    // isn't plunging before the spindle is at speed. Without
+                    // this, preferences.spindleDelay was stored but never
+                    // read anywhere (FIXFILE.html FIX-16).
+                    const { text, insertedCount } = injectSpindleDelay(linearized, spindleDelaySeconds);
                     this._loadedGcode = text;
                     if (arcCount > 0) {
                         logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
                         this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
+                    }
+                    if (insertedCount > 0) {
+                        logger.info(`[RSP] gcode:load inserted ${insertedCount} spindle spin-up dwell(s) (G4 P${spindleDelaySeconds}) after M3/M4`);
+                        this.emit('console', `ℹ️ Added a ${spindleDelaySeconds}s spindle spin-up dwell after each M3/M4 (your file is unchanged).`);
                     }
                 } catch (err) {
                     logger.warn(`[RSP] gcode:load arc linearization failed: ${err.message}`);
@@ -726,15 +802,24 @@ class RSPController extends EventEmitter {
                 this._resumeGcode = null;
                 break;
 
-            case 'gcode:start':
+            case 'gcode:start': {
+                const totalLines = (this.job && this.job.totalLineCount) || 0;
                 if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
-                    logger.info(`[RSP] gcode:start resuming stopped job at line ${this._resumeLine}`);
-                    this.emit('console', `▶️ Resuming from line ${this._resumeLine} (where it was stopped).`);
-                    this._startJob(this._loadedGcode, this._resumeLine);
+                    if (totalLines > 0 && this._resumeLine > totalLines) {
+                        logger.info(`[RSP] resumeLine ${this._resumeLine} exceeds total lines ${totalLines}, starting fresh from line 1`);
+                        this._resumeLine = 0;
+                        this._resumeGcode = null;
+                        this._startJob(this._loadedGcode);
+                    } else {
+                        logger.info(`[RSP] gcode:start resuming stopped job at line ${this._resumeLine}`);
+                        this.emit('console', `▶️ Resuming from line ${this._resumeLine} (where it was stopped).`);
+                        this._startJob(this._loadedGcode, this._resumeLine);
+                    }
                 } else {
                     this._startJob(this._loadedGcode);
                 }
                 break;
+            }
 
             case 'gcode:startFromLine': {
                 const lineNumber = args[0];
@@ -759,8 +844,9 @@ class RSPController extends EventEmitter {
                 // doesn't touch it, but the NEXT upload() (a fresh start)
                 // would reset it to 1, so it has to be saved out here.
                 const stopLine = this.job ? this.job.nextLineToRun() : 0;
+                const totalLines = (this.job && this.job.totalLineCount) || 0;
                 if (this.job) this.job.abort();
-                if (stopLine > 1) {
+                if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
                     this._resumeLine = stopLine;
                     this._resumeGcode = this._loadedGcode;
                     this.emit('console', `⏹️ Stopped at line ${stopLine}. Press START to resume from here, or load a new file to restart.`);
@@ -781,9 +867,20 @@ class RSPController extends EventEmitter {
                 const dirNeg = p.dirNeg ? 1 : 0;
                 const maxTravelMm = Number(p.maxTravelMm || p.distance || 25);
                 const feed = Number(p.feed || p.feedRate || 100);
-                this.probeAxis(axis, dirNeg, maxTravelMm, feed).catch((exc) => {
-                    logger.warn(`[RSP] probe failed: ${exc.message || exc}`);
-                    this.emit('probe', { success: false, error: exc.message || String(exc) });
+                this.probeAxis(axis, dirNeg, maxTravelMm, feed).then((out) => {
+                    // FIX-7: contact:false is a normal resolution (firmware
+                    // ran out of travel without triggering), not a thrown
+                    // error -- still needs the same retract-on-fail as a
+                    // rejected/timed-out probe, or the bit is left sitting at
+                    // the far end of maxTravelMm with no automatic retreat.
+                    if (!out.contact) this._probeFailRetract('no contact within travel');
+                }).catch((exc) => {
+                    const msg = (exc instanceof RspTimeoutError)
+                        ? 'no reply from firmware before timeout -- check link/wiring'
+                        : (exc.message || String(exc));
+                    logger.warn(`[RSP] probe failed: ${msg}`);
+                    this.emit('probe', { success: false, error: msg });
+                    this._probeFailRetract(msg);
                 });
                 break;
             }
@@ -827,6 +924,39 @@ class RSPController extends EventEmitter {
             case 'macro:run': {
                 const [content] = args;
                 this._startJob(content || '');
+                break;
+            }
+
+            // Finding #8: SpindleLaserControl.tsx / CoolantControl.tsx send bare
+            // M-codes via sendBackendCommand() -> sendGcode() -> command('gcode',
+            // line) -- there was no case 'gcode' at all, so every click fell
+            // straight to the silent unknown-command default: no OP sent, no
+            // error surfaced, while the UI optimistically flipped its own
+            // running/coolant badges as if it had worked. This board has no
+            // spindle/coolant/laser hardware wired (Tawfiq confirmed), so there
+            // is no OP to send -- but a real, visible failure is a fix in
+            // itself: it stops the panel from lying about machine state, and
+            // for the M5/M9 stop commands it tells the operator to use a
+            // physical stop instead of trusting a software stop that never
+            // reached the board.
+            // Scoped narrowly to the M-codes this panel actually sends --
+            // any other single-line 'gcode' traffic (MDI console, etc.) is a
+            // separate, wider RSP gcode-passthrough gap left untouched here.
+            case 'gcode': {
+                const line = String(args[0] || '').trim().toUpperCase();
+                if (/^M0*3\b/.test(line) || /^M0*4\b/.test(line)) {
+                    throw new Error(`RSP firmware does not support spindle/laser control -- no spindle or laser hardware wired on this board ("${line}" was not sent).`);
+                }
+                if (/^M0*5\b/.test(line)) {
+                    throw new Error(`RSP firmware does not support spindle/laser control -- M5 was not sent to the board. If the spindle or laser is running, stop it physically.`);
+                }
+                if (/^M0*7\b/.test(line) || /^M0*8\b/.test(line)) {
+                    throw new Error(`RSP firmware does not support coolant control -- no coolant hardware wired on this board ("${line}" was not sent).`);
+                }
+                if (/^M0*9\b/.test(line)) {
+                    throw new Error(`RSP firmware does not support coolant control -- M9 was not sent to the board. If coolant is running, stop it physically.`);
+                }
+                logger.warn(`[RSP] command "gcode" ignored -- unsupported line "${line}"`);
                 break;
             }
 
@@ -979,6 +1109,30 @@ class RSPController extends EventEmitter {
         });
     }
 
+    /**
+     * FIX-7: best-effort Z-only retreat after a failed ad-hoc probe (no
+     * contact, rejected status, timeout, or link loss), so the bit doesn't
+     * sit at the far end of maxTravelMm -- often at or just above the
+     * workpiece -- until the next unrelated move happens to clear it. Only
+     * moves Z (not X/Y) since a failed probe gives no information about
+     * whether a lateral move is obstructed. Deliberately swallows its own
+     * failure (e.g. link genuinely down) rather than throwing -- this runs
+     * inside a .then()/.catch() tail with nothing left to propagate to, and
+     * a failed safety retreat is not itself a new user-facing error.
+     */
+    _probeFailRetract(reason) {
+        if (!this.stream) return;
+        const mpos = this.state.status.mpos || { x: 0, y: 0, z: 0 };
+        this._moveAbsolute(mpos.x, mpos.y, mpos.z + PROBE_FAIL_RETRACT_MM, PROBE_FAIL_RETRACT_FEED)
+            .then(() => {
+                this.emit('console', `⚠️ Probe failed (${reason}) -- retracted Z ${PROBE_FAIL_RETRACT_MM}mm as a precaution.`);
+            })
+            .catch((exc) => {
+                logger.warn(`[RSP] probe-fail retract could not complete: ${exc.message || exc}`);
+                this.emit('console', `⚠️ Probe failed (${reason}) -- automatic retract ALSO failed (${exc.message || exc}). Check machine position before jogging.`);
+            });
+    }
+
     _setFeedOverride(pct) {
         const clamped = Math.min(FEED_OVERRIDE_MAX, Math.max(FEED_OVERRIDE_MIN, pct));
         this._feedOverridePct = clamped;
@@ -990,23 +1144,47 @@ class RSPController extends EventEmitter {
      * @param {number} [resumeLine] if > 1, skip lines 1..resumeLine-1 (already
      *   run) and start sending from resumeLine instead of line 1.
      */
-    _startJob(gcodeText, resumeLine = 0) {
+    async _startJob(gcodeText, resumeLine = 0) {
         if (!this.job) return;
         if (!gcodeText || !String(gcodeText).trim()) {
             logger.warn('[RSP] gcode:start called but no G-code is loaded -- START is a no-op. Did file:load fire?');
             this.emit('console', '⚠️ START pressed but no G-code is loaded on the controller — re-upload the file.');
             return;
         }
+        if (this.state && this.state.status && (this.state.status.state === defs.ST_ALARM || this.state.status.state === defs.ST_ESTOP)) {
+            this.emit('console', '⚠️ Cannot start job: Machine is in ALARM or E-STOP state. Clear alarm ($X) first.');
+            return;
+        }
         if (this.job.active) {
             logger.info('[RSP] gcode:start aborting previous active/paused job to restart/resume cleanly');
             this.job.abort();
+            await new Promise(r => setTimeout(r, 100));
+        }
+        // If the machine is still running (e.g. decelerating previous moves), wait for ST_IDLE
+        if (this.state && this.state.status && (this.state.status.state === defs.ST_RUNNING || this.state.status.state === defs.ST_STREAMING)) {
+            logger.info(`[RSP] Machine is still in state ${this.state.status.activeState || this.state.status.state} -- waiting for motion to complete before starting job...`);
+            const startWait = Date.now();
+            while (this.state.status && (this.state.status.state === defs.ST_RUNNING || this.state.status.state === defs.ST_STREAMING)) {
+                if (Date.now() - startWait > 3000) {
+                    logger.warn('[RSP] Timed out waiting for machine to become idle before starting job.');
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 100));
+            }
         }
         const lines = String(gcodeText || '').split(/\r?\n/);
         // Reset so the G-code panel doesn't show the previous job's last
         // highlighted line for the brief window before the first EV_EXECUTED
         // of this job arrives.
         this._currentLine = resumeLine > 1 ? resumeLine - 1 : 0;
-        const jobId = this.job.upload(lines);
+        let jobId;
+        try {
+            jobId = this.job.upload(lines);
+        } catch (uploadErr) {
+            logger.error(`[RSP] Failed to upload job: ${uploadErr.message || uploadErr}`);
+            this.emit('console', `⚠️ Failed to upload job: ${uploadErr.message || uploadErr}`);
+            return;
+        }
         // Must resume() BEFORE start() kicks the async sender loop -- see
         // JobStream.resume()'s completion-detection fix (job.js) for why
         // lines before resumeLine are marked executed, not just skipped.

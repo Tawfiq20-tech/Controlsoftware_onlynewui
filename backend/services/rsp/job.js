@@ -125,9 +125,15 @@ class JobStream extends EventEmitter {
         // JobStream self-contained).
         this._onStreamEvent = this._onStreamEvent.bind(this);
         this.stream.on('event', this._onStreamEvent);
+        this._onStreamReject = this._onStreamReject.bind(this);
+        this.stream.on('reject', this._onStreamReject);
     }
 
     // ------------------------------------------------------------------
+    get totalLineCount() {
+        return this._totalLineCount;
+    }
+
     get active() {
         return this._active;
     }
@@ -354,6 +360,7 @@ class JobStream extends EventEmitter {
     destroy() {
         this._stopTick();
         this.stream.removeListener('event', this._onStreamEvent);
+        this.stream.removeListener('reject', this._onStreamReject);
     }
 
     // ------------------------------------------------------------------
@@ -496,7 +503,15 @@ class JobStream extends EventEmitter {
     async _sendJobStart() {
         const op = defs.OP_JOB_START;
         const payload = codec.buildJobStart(this._jobId, this._lines.length);
-        await this.stream.sendCommand(op, payload);
+        const rsp = await this.stream.sendCommand(op, payload, { timeout: 3.0 });
+        if (!rsp || !rsp.payload || rsp.payload.length < 2) {
+            throw new Error('Device returned invalid or empty reply to OP_JOB_START');
+        }
+        const status = rsp.payload[1];
+        if (status !== defs.ST_OK) {
+            const statusName = defs.ST_ERR_NAMES[status] || `0x${status.toString(16).padStart(2, '0')}`;
+            throw new Error(`Device rejected OP_JOB_START: ${statusName} (status 0x${status.toString(16).padStart(2, '0')})`);
+        }
     }
 
     /**
@@ -591,6 +606,19 @@ class JobStream extends EventEmitter {
         }
     }
 
+    _onStreamReject({ seq, op, reason, opName, reasonName }) {
+        if (!this._active || this._aborted) return;
+        if (op === defs.OP_JOB_LINE) {
+            this._log.warn(`OP_JOB_LINE rejected by device: ${reasonName} (seq ${seq}) -- aborting job`);
+            this._stopTick();
+            this._aborted = true;
+            this._active = false;
+            this._failReason = `Device rejected job line: ${reasonName}`;
+            this.emit('failed', this._failReason);
+            this.emit('done', { jobId: this._jobId, failReason: this._failReason });
+        }
+    }
+
     /** Called on EV_EXECUTED. */
     _onExecuted(f) {
         let parsed;
@@ -654,19 +682,29 @@ class JobStream extends EventEmitter {
      * walks forward from the last-seen watermark, so repeated calls with
      * the same or stale lastLine are cheap no-ops.
      */
-    noteProgress(lastLine) {
-        if (lastLine <= this._reconciledUpto) return;
+    noteProgress(lastLine, telemetryJobId = null) {
+        if (!this._active || this._aborted) return;
+        // If telemetry specifies a job_id, ensure it matches this active job;
+        // stale telemetry from a previous job or old session must not be applied.
+        if (telemetryJobId !== null && telemetryJobId !== undefined && telemetryJobId !== this._jobId) {
+            return;
+        }
+        // A device cannot have executed lines beyond what the host has actually sent.
+        // Stale telemetry from a finished previous job (e.g. line 706) must not be applied
+        // to a brand-new job that hasn't sent that far yet.
+        const effectiveLastLine = Math.min(lastLine, this._sentUpTo);
+        if (effectiveLastLine <= this._reconciledUpto) return;
         const start = this._reconciledUpto + 1;
-        this._reconciledUpto = Math.max(this._reconciledUpto, lastLine);
+        this._reconciledUpto = Math.max(this._reconciledUpto, effectiveLastLine);
         let changed = false;
-        for (let ln = start; ln <= lastLine; ln++) {
+        for (let ln = start; ln <= effectiveLastLine; ln++) {
             if (!this._executed.has(ln)) {
                 this._executed.add(ln);
                 changed = true;
             }
         }
-        if (lastLine + 1 > this._nextLine) {
-            this._nextLine = lastLine + 1;
+        if (effectiveLastLine + 1 > this._nextLine) {
+            this._nextLine = effectiveLastLine + 1;
         }
         if (changed) {
             this._lastProgressAt = now();

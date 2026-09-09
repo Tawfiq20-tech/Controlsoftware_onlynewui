@@ -34,6 +34,7 @@ class ProbingService extends EventEmitter {
         if (this.activeRun) throw new Error('Probing already in progress');
         const ctl = this.getController?.();
         if (!ctl) throw new Error('No active controller');
+        if (ctl.job && ctl.job.active) throw new Error('Cannot start probing while a job is active');
         const probeSettings = { ...this.configStore.get('probeSettings'), ...(settings || {}) };
 
         // RSP firmware's job-line gcode parser has no G38.x/G10 support (see
@@ -275,10 +276,44 @@ class ProbingService extends EventEmitter {
             });
             return { success: true, reports: this.activeRun.reports };
         } catch (err) {
+            // FIX-7: a failed probe leg (no contact, rejected status, or a
+            // timed-out/lost reply -- same causes doProbe()'s `if
+            // (!r.contact) throw` and any rejected ctl.probeAxis()/
+            // _moveAbsolute() promise can produce) used to leave the bit
+            // exactly where the sequence stopped -- which, mid-routine, can
+            // be right after a "drop Z below top surface" step (e.g. steps
+            // 4/9 above), i.e. buried near/in the stock with no automatic
+            // retreat. Best-effort Z-only retract before surfacing the
+            // failure; swallow retract errors (e.g. link genuinely down) so
+            // they don't mask the real failure reason.
+            await this._probeFailRetract(ctl);
             this.io.emit('probing:result', { strategy, wcs, success: false, error: err.message });
             throw err;
         } finally {
             this.activeRun = null;
+        }
+    }
+
+    /**
+     * FIX-7: best-effort Z-only retreat after any RSP probe-routine failure.
+     * Uses the controller's own last-known telemetry position (not a report
+     * from the failed leg, which may not exist e.g. on a rejected/timed-out
+     * command) so this works regardless of which step failed. Only moves Z,
+     * matching RSPController._probeFailRetract()'s reasoning: a failed probe
+     * gives no information about whether a lateral move is safe.
+     */
+    async _probeFailRetract(ctl) {
+        if (typeof ctl?._moveAbsolute !== 'function') return;
+        const s = this.configStore.get('probeSettings') || {};
+        const retractMm = s.probeFailRetractMm ?? 5;
+        const feed = s.traverseFeed || 2500;
+        const mpos = ctl.state?.status?.mpos;
+        if (!mpos) return;
+        try {
+            await ctl._moveAbsolute(mpos.x, mpos.y, mpos.z + retractMm, feed);
+            this.logger.info?.(`[ProbingService] probe failed -- retracted Z ${retractMm}mm as a precaution`);
+        } catch (exc) {
+            this.logger.warn?.(`[ProbingService] probe-fail retract could not complete: ${exc.message || exc}`);
         }
     }
 
@@ -291,6 +326,7 @@ class ProbingService extends EventEmitter {
         if (this.activeRun) throw new Error('Probing already in progress');
         const ctl = this.getController?.();
         if (!ctl) throw new Error('No active controller');
+        if (ctl.job && ctl.job.active) throw new Error('Cannot start probing while a job is active');
         if (typeof ctl._moveAbsolute !== 'function') throw new Error('Controller has no RSP-native move primitive');
         const s = this.configStore.get('probeSettings') || {};
         const TRAVERSE = (s.traverseFeed || 2500);

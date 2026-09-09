@@ -124,12 +124,20 @@ function validateToolpath({ gcode, wco, machineLimits }) {
         }
     }
 
-    // Pre-flight check disabled per Tawfiq msg 6800: vendor RTS doesn't
-    // have a pre-flight blocker, and ours kept false-positive blocking
-    // because the firmware reports max_travel = 0 for some axes before
-    // the user configures $130-132. Banner removed, blocking removed.
-    // Issues are still computed and returned so the UI summary can show
-    // them, but `blocked` is hardcoded false.
+    // Reverted per Tawfiq msg12204 -- re-investigated after he reported the
+    // block firing on a normal job. Root cause: defaultMachineLimits() below
+    // is NOT a real reported limit from the firmware; it's a hardcoded guess
+    // (max always 0, min = -workArea size) baked in for one homing convention
+    // (top/right corner, all-negative travel). It never queries $130-132 or
+    // any real soft-limit, and it ignores how/where the operator actually
+    // zeroed G54 for this job. So "exceeds limit" here means "doesn't match
+    // our guessed corner", not "will crash the machine" -- same class of
+    // false positive as the original msg 6800 report, just a different axis
+    // combination. Hard-blocking Start on an ungrounded guess does more harm
+    // (stops real jobs) than good. Issues are still computed so a future,
+    // real fix (query actual limits, or make the corner/convention
+    // configurable per machine profile) has data to work from -- just not
+    // wired to block.
     const blocked = false;
     const probableCorruptWCS = false;
 

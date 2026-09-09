@@ -32,6 +32,17 @@ echo Starting backend server on http://localhost:4000 ...
 echo (Leave this window open. Closing it stops the server.)
 echo.
 
+rem Check if port 4000 is already in use by an orphaned process
+netstat -ano | findstr /R /C:":4000 .*LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    echo [WARNING] Port 4000 is currently in use by an existing process.
+    echo Freeing port 4000 to ensure a clean start...
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":4000 .*LISTENING"') do (
+        taskkill /F /PID %%a >nul 2>&1
+    )
+    timeout /t 1 >nul
+)
+
 rem Open the browser a couple seconds after launch, giving the server time
 rem to bind the port. If it opens too early the user just refreshes once.
 start "" cmd /c "timeout /t 3 >nul & start http://localhost:4000"

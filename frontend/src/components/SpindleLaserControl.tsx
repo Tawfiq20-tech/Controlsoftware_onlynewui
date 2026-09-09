@@ -9,12 +9,23 @@ type MachineMode = 'spindle' | 'laser';
 export default function SpindleLaserControl() {
     const {
         connected,
+        firmwareType,
         spindleMode, setSpindleMode,
         spindleRpm, setSpindleRpm,
         spindleRunning, setSpindleRunning,
         laserPower, setLaserPower,
         addConsoleLog,
     } = useCNCStore();
+
+    // RSP boards have no spindle/coolant/laser hardware wired -- M3/M4/M5
+    // always throw now (Finding #8 fix, RSPController.js case 'gcode').
+    // There is no per-command ack anywhere in this app (sendBackendCommand
+    // always resolves immediately), so for RSP we don't flip the running
+    // badge at all -- the real failure now surfaces via the existing
+    // controller:error -> console log path instead of a badge that lies.
+    // GRBL-family boards genuinely execute these M-codes, so the optimistic
+    // flip stays for them -- it's the only visual feedback that path has.
+    const canTrustOptimisticState = firmwareType !== 'RSP';
 
     const [showModeWarning, setShowModeWarning] = useState(false);
     const [pendingMode, setPendingMode] = useState<MachineMode | null>(null);
@@ -44,10 +55,14 @@ export default function SpindleLaserControl() {
 
     const applyModeSwitch = (mode: MachineMode) => {
         setSpindleMode(mode);
-        setSpindleRunning(false);
         // Stop spindle/laser when switching
         sendBackendCommand('M5');
-        addConsoleLog('info', `Switched to ${mode === 'spindle' ? 'Spindle' : 'Laser'} mode`);
+        if (canTrustOptimisticState) {
+            setSpindleRunning(false);
+            addConsoleLog('info', `Switched to ${mode === 'spindle' ? 'Spindle' : 'Laser'} mode`);
+        } else {
+            addConsoleLog('info', `Switched to ${mode === 'spindle' ? 'Spindle' : 'Laser'} mode (stop command not supported on this board -- see error log if it was running)`);
+        }
         setShowModeWarning(false);
         setPendingMode(null);
     };
@@ -57,23 +72,29 @@ export default function SpindleLaserControl() {
         if (!connected) return;
         const rpm = Math.max(minRpm, Math.min(maxRpm, spindleRpm));
         sendBackendCommand(`M3 S${rpm}`);
-        setSpindleRunning(true);
-        addConsoleLog('info', `Spindle CW @ ${rpm} RPM (M3 S${rpm})`);
+        if (canTrustOptimisticState) {
+            setSpindleRunning(true);
+            addConsoleLog('info', `Spindle CW @ ${rpm} RPM (M3 S${rpm})`);
+        }
     };
 
     const handleSpindleCCW = () => {
         if (!connected) return;
         const rpm = Math.max(minRpm, Math.min(maxRpm, spindleRpm));
         sendBackendCommand(`M4 S${rpm}`);
-        setSpindleRunning(true);
-        addConsoleLog('info', `Spindle CCW @ ${rpm} RPM (M4 S${rpm})`);
+        if (canTrustOptimisticState) {
+            setSpindleRunning(true);
+            addConsoleLog('info', `Spindle CCW @ ${rpm} RPM (M4 S${rpm})`);
+        }
     };
 
     const handleSpindleStop = () => {
         if (!connected) return;
         sendBackendCommand('M5');
-        setSpindleRunning(false);
-        addConsoleLog('info', 'Spindle stopped (M5)');
+        if (canTrustOptimisticState) {
+            setSpindleRunning(false);
+            addConsoleLog('info', 'Spindle stopped (M5)');
+        }
     };
 
     // ─── Laser Controls ──────────────────────────────────────────
@@ -82,15 +103,19 @@ export default function SpindleLaserControl() {
         // Convert power % to S value (0-1000 for GRBL default $30=1000)
         const sValue = Math.round((laserPower / 100) * 1000);
         sendBackendCommand(`M3 S${sValue}`);
-        setSpindleRunning(true);
-        addConsoleLog('info', `Laser ON @ ${laserPower}% power (M3 S${sValue})`);
+        if (canTrustOptimisticState) {
+            setSpindleRunning(true);
+            addConsoleLog('info', `Laser ON @ ${laserPower}% power (M3 S${sValue})`);
+        }
     };
 
     const handleLaserOff = () => {
         if (!connected) return;
         sendBackendCommand('M5');
-        setSpindleRunning(false);
-        addConsoleLog('info', 'Laser OFF (M5)');
+        if (canTrustOptimisticState) {
+            setSpindleRunning(false);
+            addConsoleLog('info', 'Laser OFF (M5)');
+        }
     };
 
     const handleTestFire = () => {
@@ -102,11 +127,15 @@ export default function SpindleLaserControl() {
         }
         const sValue = Math.round((laserPower / 100) * 1000);
         sendBackendCommand(`M3 S${sValue}`);
-        addConsoleLog('info', `Laser test fire: ${testFireDuration}ms @ ${laserPower}%`);
+        if (canTrustOptimisticState) {
+            addConsoleLog('info', `Laser test fire: ${testFireDuration}ms @ ${laserPower}%`);
+        }
         testFireTimerRef.current = setTimeout(() => {
             testFireTimerRef.current = null;
             sendBackendCommand('M5');
-            addConsoleLog('info', 'Laser test fire complete');
+            if (canTrustOptimisticState) {
+                addConsoleLog('info', 'Laser test fire complete');
+            }
         }, testFireDuration);
     };
 

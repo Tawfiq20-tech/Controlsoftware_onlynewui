@@ -4,6 +4,7 @@ const assert = require('assert');
 const { EventEmitter } = require('events');
 const defs = require('../services/rsp/defs');
 const codec = require('../services/rsp/codec');
+const { FT_RSP, buildFrame } = require('../services/rsp/frame');
 const { ReliableStream } = require('../services/rsp/stream');
 const { JobStream } = require('../services/rsp/job');
 const { RSPController } = require('../services/controllers/RSPController');
@@ -62,7 +63,13 @@ async function runTests() {
     assert.strictEqual(ctrl._resumeGcode, gcode, 'Resume G-code should match loaded G-code');
 
     // 2. Test Unlock and Resume
+    // FW-3: Clear Alarm now waits for a real device ack (FT_RSP) before
+    // reporting success, instead of the old _fireAndForget optimistic
+    // messaging -- simulate the device's reply here.
     ctrl.command('unlock');
+    const unlockSeq = [...ctrl.stream._sent.keys()].pop();
+    conn.emit('rawData', buildFrame(FT_RSP, 0, unlockSeq, Buffer.alloc(0)));
+    await new Promise((resolve) => setImmediate(resolve));
     const hasUnlockMsg = consoleMessages.some(m => m.includes('Alarm cleared / unlocked'));
     const hasResumePrompt = consoleMessages.some(m => m.includes('Press START to resume from line 4'));
     assert(hasUnlockMsg, 'Should emit alarm cleared message');

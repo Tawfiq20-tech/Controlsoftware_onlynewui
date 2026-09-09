@@ -228,7 +228,7 @@ function Tooltip({ text, children }: TooltipProps) {
 // ── Main ProbeWizard Component ────────────────────────────────────────────────
 
 export default function ProbeWizard() {
-    const { connected, probeSettings, setProbeSettings, addConsoleLog, setProbeWizardStatus } = useCNCStore();
+    const { connected, jobActive, probeSettings, setProbeSettings, addConsoleLog, setProbeWizardStatus } = useCNCStore();
 
     const [wizard, setWizard] = useState<WizardState>({
         step: 'select-type',
@@ -319,6 +319,10 @@ export default function ProbeWizard() {
     const handleRunProbe = useCallback(async () => {
         if (!connected) {
             setProbeRun(prev => ({ ...prev, status: 'error', message: 'Machine not connected.' }));
+            return;
+        }
+        if (jobActive) {
+            setProbeRun(prev => ({ ...prev, status: 'error', message: 'Cannot probe while a job is running.' }));
             return;
         }
 
@@ -777,10 +781,17 @@ export default function ProbeWizard() {
                                     </div>
                                 )}
 
+                                {connected && jobActive && (
+                                    <div className="pw-error-banner" role="alert">
+                                        <X size={13} />
+                                        <span>A job is running. Cannot run probe routine.</span>
+                                    </div>
+                                )}
+
                                 <button
                                     className="pw-run-btn"
                                     onClick={handleRunProbe}
-                                    disabled={!connected}
+                                    disabled={!connected || jobActive}
                                     aria-label="Start probe routine"
                                 >
                                     <Play size={16} />

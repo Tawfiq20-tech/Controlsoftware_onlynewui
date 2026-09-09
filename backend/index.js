@@ -83,7 +83,7 @@ const webcamService     = new WebcamService({     configStore: engine.config, io
 const gamepadService    = new GamepadService({    configStore: engine.config, io, logger, getController });
 const watchdirService   = new WatchDirService({   configStore: engine.config, io, logger });
 const probingService    = new ProbingService({    configStore: engine.config, io, logger, getController });
-const jobHistoryService = new JobHistoryService({ dataDir,                    io, logger, getController });
+const jobHistoryService = new JobHistoryService({ dataDir,                    io, logger, getController, getEngine: () => engine });
 const jobResumeService  = new JobResumeService({  dataDir, io, logger, getController,
                                                   getConfig: () => engine.config });
 const toolLibrary       = new ToolLibrary({       configStore: engine.config, io, logger });
@@ -151,6 +151,7 @@ app.post('/api/connect', (req, res) => {
     const path = req.body.path || req.body.port;
     const baudRate = req.body.baudRate || 115200;
     const network = req.body.network || false;
+    const networkPort = req.body.networkPort || undefined;
     if (!path) {
         return res.status(400).json({ error: 'Missing path, port, or IP address' });
     }
@@ -161,7 +162,7 @@ app.post('/api/connect', (req, res) => {
         emit: () => {},
     };
 
-    engine._handleOpen(fakeSocket, path, { baudRate, network }, (err) => {
+    engine._handleOpen(fakeSocket, path, { baudRate, network, networkPort }, (err) => {
         if (err) {
             logger.error(err);
             return res.status(500).json({ error: err.message });
@@ -357,7 +358,7 @@ app.post('/api/probing/abort', (req, res) => {
     probingService.abort(); res.json({ ok: true });
 });
 // msg11601 item 4: operator confirms the probe/touch-plate has been
-// physically removed, THEN this drops Z by plateThickness and re-zeros --
+// physically removed, THEN this drops Z by probeSettings.blockThickness and re-zeros --
 // see ProbingService.finalizeCornerZero() doc comment for why this is a
 // separate human-triggered step and not part of /api/probing/run.
 app.post('/api/probing/finalize-corner', async (req, res) => {
@@ -533,6 +534,17 @@ app.use(errnotfound());
 app.use(errlog);
 app.use(errclient);
 app.use(errserver());
+
+// Handle server port errors gracefully
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        logger.error(`Port ${PORT} is already in use by another process.`);
+        logger.error(`Please close any existing server window or terminate the process using port ${PORT}.`);
+    } else {
+        logger.error(`Server error: ${err.message}`);
+    }
+    process.exit(1);
+});
 
 // Start server
 const HOST = process.env.HOST || '0.0.0.0';

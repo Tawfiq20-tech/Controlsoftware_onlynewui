@@ -41,6 +41,7 @@ class Connection extends EventEmitter {
         this.path = options.path;
         this.baudRate = options.baudRate || 115200;
         this.network = options.network || false;
+        this.networkPort = options.networkPort || undefined;
         this.rtscts = options.rtscts || false;
         this.rawMode = options.rawMode || false;
         // [GENERIC MODE] Default to Generic instead of Grbl when detection fails
@@ -92,6 +93,7 @@ class Connection extends EventEmitter {
                 path: this.path,
                 baudRate: this.baudRate,
                 network: this.network,
+                networkPort: this.networkPort,
                 rtscts: this.rtscts,
                 rawMode: this.rawMode,
                 writeFilter: this._writeFilter,
@@ -278,8 +280,14 @@ class Connection extends EventEmitter {
         const line = typeof data === 'string' ? data.trim() : String(data).trim();
         if (!line) return;
 
-        // [GENERIC MODE] Log ALL raw serial data at connection level
-        logger.info(`[SERIAL RX] ${this.path}: ${line}`);
+        // Only log at info level during initial firmware detection.
+        // Once detected (especially for binary protocols like RSP/RTS),
+        // logging every chunk/fragment floods the console and freezes the Windows terminal.
+        if (!this.firmwareDetected) {
+            logger.info(`[SERIAL RX] ${this.path}: ${line}`);
+        } else if (this.controllerType !== 'RSP' && this.controllerType !== 'RTS') {
+            logger.debug(`[SERIAL RX] ${this.path}: ${line}`);
+        }
 
         this.emit('data', line);
 
@@ -298,16 +306,23 @@ class Connection extends EventEmitter {
     _onRawData(data) {
         const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
-        logger.info(`[SERIAL RX RAW] ${this.path}: ${buf.length} bytes | ${buf.toString('hex')}`);
+        // Full hex dump is only useful (and bounded) during the short detection
+        // window; logging it unconditionally for the life of the connection
+        // spams the log file for every RSP telemetry frame a live job produces.
+        if (!this.firmwareDetected) {
+            logger.info(`[SERIAL RX RAW] ${this.path}: ${buf.length} bytes | ${buf.toString('hex')}`);
+        } else {
+            logger.debug(`[SERIAL RX RAW] ${this.path}: ${buf.length} bytes`);
+        }
 
         // Emit raw data for controllers that want binary access
         this.emit('rawData', buf);
 
-        // Also try to emit text lines for firmware detection compatibility
-        this._rawBuffer = Buffer.concat([this._rawBuffer, buf]);
-
-        // Check for binary RTS frames during firmware detection
+        // _rawBuffer only exists to feed _checkBinaryFirmware() during detection --
+        // once firmware is known it has no consumer, so stop accumulating into it
+        // (previously grew unbounded for the life of the connection).
         if (!this.firmwareDetected) {
+            this._rawBuffer = Buffer.concat([this._rawBuffer, buf]);
             this._checkBinaryFirmware();
         }
     }
@@ -339,6 +354,17 @@ class Connection extends EventEmitter {
             this._setFirmware(FIRMWARE_RSP);
             return;
         }
+
+        // The RTS scan below has no checksum to validate against -- RTS's own
+        // wire format (0x01 [len] [cmd] ... 0xFF, see RTSController.js:683)
+        // carries none, so a coincidental 0x01...0xFF byte run inside a
+        // still-incomplete RSP frame (which can legally contain any byte
+        // value in its stuffed body) can match it on the very first chunk.
+        // Give the CRC-validated RSP parser several more chances at the
+        // growing buffer before trusting the loose RTS shape (Finding #28).
+        this._binaryCheckCount = (this._binaryCheckCount || 0) + 1;
+        const RTS_SCAN_MIN_ATTEMPTS = 3;
+        if (this._binaryCheckCount < RTS_SCAN_MIN_ATTEMPTS) return;
 
         for (let i = 0; i < buf.length; i++) {
             if (buf[i] !== 0x01) continue;
@@ -380,6 +406,11 @@ class Connection extends EventEmitter {
         this._detectAttempts = 0;
         this.firmwareDetected = false;
         this._dataBuffer = [];
+        // Reset raw-mode detection state too -- otherwise a reconnect resumes
+        // with stale bytes from the previous session still in _rawBuffer and
+        // the FIX-28 RTS_SCAN_MIN_ATTEMPTS gate already past its grace window.
+        this._rawBuffer = Buffer.alloc(0);
+        this._binaryCheckCount = 0;
 
         // Send initial probe command
         this._sendFirmwareProbe();

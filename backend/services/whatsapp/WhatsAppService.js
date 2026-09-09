@@ -56,7 +56,9 @@ const DEFAULT_CONFIG = {
     includePosition: true,
     botEnabled: true,          // accept slash commands from recipients (Tawfiq msg 7432 → on by default)
     botEyeCameraId: null,      // webcam id used for /jog snapshots
-    botOpenMode: true,         // if recipients[] is empty, accept commands from ANY sender (first-run friendly)
+    botOpenMode: false,        // if recipients[] is empty, accept commands from ANY sender. Defaults OFF: an
+                               // empty allow-list otherwise means ANY stranger who finds the connected number
+                               // can fire /jog, /home, /start (Finding #24). Operator must explicitly opt in.
 };
 
 // Slash-command catalog (Tawfiq msg 7430). Destructive commands need
@@ -678,11 +680,33 @@ class WhatsAppService {
         }
     }
 
+    // Routes through CNCEngine._handleCommand() instead of calling the
+    // controller directly, so /home and /start pick up the same ECSS
+    // pre-flight (toolpath validation) gate the frontend JobControlBar goes
+    // through (Finding #25) -- ctl.command() alone has no gate of its own.
+    _dispatchEngineCommand(cmd) {
+        const engine = this.getEngine?.();
+        if (!engine || !engine.controller) return { ok: false, error: 'No controller connected.' };
+        let blocked = null;
+        const fakeSocket = {
+            emit: (evt, data) => {
+                if (evt === 'safety:blocked') blocked = (data.verdict?.issues || []).slice(0, 2).map(i => i.message).join(' ') || 'safety pre-flight blocked this command.';
+                else if (evt === 'serialport:error') blocked = data.error;
+            },
+        };
+        engine._handleCommand(fakeSocket, null, cmd);
+        if (blocked) return { ok: false, error: blocked };
+        return { ok: true };
+    }
+
     async _cmdHomeRun(phone) {
-        const ctl = this.getController?.();
-        if (!ctl) return this._notifyAll('No controller connected.');
         try {
-            ctl.command?.('homing');
+            const result = this._dispatchEngineCommand('homing');
+            if (!result.ok) {
+                await this._notifySender(phone, `Home blocked: ${result.error}`);
+                this._auditWrite({ phone, cmd: '/home', ok: false, error: result.error });
+                return;
+            }
             await this._notifySender(phone, 'Homing all axes…');
             this._auditWrite({ phone, cmd: '/home', ok: true, stage: 'fired' });
         } catch (err) {
@@ -692,10 +716,13 @@ class WhatsAppService {
     }
 
     async _cmdStartRun(phone) {
-        const ctl = this.getController?.();
-        if (!ctl) return this._notifyAll('No controller connected.');
         try {
-            ctl.command?.('cyclestart');
+            const result = this._dispatchEngineCommand('cyclestart');
+            if (!result.ok) {
+                await this._notifySender(phone, `Start blocked: ${result.error}`);
+                this._auditWrite({ phone, cmd: '/start', ok: false, error: result.error });
+                return;
+            }
             await this._notifySender(phone, '▶ Starting…');
             this._auditWrite({ phone, cmd: '/start', ok: true, stage: 'fired' });
         } catch (err) {
