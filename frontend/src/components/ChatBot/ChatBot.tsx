@@ -25,9 +25,11 @@ import {
     backendJobPause,
     backendJobResume,
     backendJobStop,
+    backendJog,
 } from '../../utils/backendConnection';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { remoteAuthHeaders } from '../../utils/remoteAuth';
 import './ChatBot.css';
 
 /* ── Types ─────────────────────────────────────────────── */
@@ -36,6 +38,11 @@ interface SuggestedAction {
     action: 'home' | 'unlock' | 'job_pause' | 'job_resume' | 'job_stop' | 'jog' | 'probe' | 'job_start';
     label: string;
     autoExec: boolean;
+    // Only present for a successfully-parsed jog action (see ChatbotService.js
+    // parseJogCommand). `label` already renders the exact resolved command
+    // text ("Jog X +10mm @ 1000mm/min") so the confirm button never asks the
+    // operator to trust an inferred move they can't see.
+    params?: { axis: 'x' | 'y' | 'z'; distance: number; feedRate: number };
 }
 
 interface ChatMessage {
@@ -67,9 +74,10 @@ const getBackendBase = (): string => {
 const CHATBOT_API_URL = `${getBackendBase()}/api/chat`;
 const MAX_HISTORY = 6; // Send last N messages as context
 
-// Only actions the v1 allowlist can execute with zero extra parameters.
-// jog/probe/job_start need parameters chat text can't safely supply, so
-// they stay guide-only (answer text only, no confirm button).
+// Parameter-free actions -- "do the thing" is the whole command, so there's
+// nothing an operator needs to double-check beyond the label itself. Jog is
+// handled separately in runAction() below since it needs action.params;
+// probe/job_start stay guide-only (no executor, answer text only).
 const ACTION_EXECUTORS: Partial<Record<SuggestedAction['action'], () => void>> = {
     home: backendHome,
     unlock: backendUnlock,
@@ -160,7 +168,7 @@ export default function ChatBot() {
 
             const res = await fetch(CHATBOT_API_URL, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
                 body: JSON.stringify({ message: trimmed, history, machineContext }),
             });
 
@@ -203,15 +211,30 @@ export default function ChatBot() {
     const cancelConfirm = (index: number) => setActionState(index, 'idle');
 
     const runAction = (index: number, action: SuggestedAction) => {
-        const exec = ACTION_EXECUTORS[action.action];
         // Every other control in this app (Sidebar/JobControlBar/StatusBar/Header)
         // gates its backend calls on `connected` — match that here so a stale
         // confirm button can't silently no-op against a disconnected machine.
-        if (!exec || !connected) {
+        if (!connected) {
             setActionState(index, 'error');
             return;
         }
         try {
+            if (action.action === 'jog' && action.params) {
+                const { axis, distance, feedRate } = action.params;
+                backendJog(
+                    axis === 'x' ? distance : undefined,
+                    axis === 'y' ? distance : undefined,
+                    axis === 'z' ? distance : undefined,
+                    feedRate,
+                );
+                setActionState(index, 'done');
+                return;
+            }
+            const exec = ACTION_EXECUTORS[action.action];
+            if (!exec) {
+                setActionState(index, 'error');
+                return;
+            }
             exec();
             setActionState(index, 'done');
         } catch (err) {

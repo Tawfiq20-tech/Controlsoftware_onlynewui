@@ -2,6 +2,8 @@
  * Settings API client — thin fetch wrappers for the Phase A/B backend routes.
  * One file per section keeps imports cheap.
  */
+import { remoteAuthHeaders } from '../../utils/remoteAuth';
+
 const BASE = (() => {
     const env = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
     if (env) return String(env).replace(/\/$/, '');
@@ -13,21 +15,21 @@ const BASE = (() => {
 })();
 
 async function jget<T>(path: string): Promise<T> {
-    const r = await fetch(`${BASE}${path}`);
+    const r = await fetch(`${BASE}${path}`, { headers: remoteAuthHeaders() });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
 }
 async function jpost<T>(path: string, body: unknown): Promise<T> {
     const r = await fetch(`${BASE}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
         body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
 }
 async function jdelete(path: string): Promise<void> {
-    const r = await fetch(`${BASE}${path}`, { method: 'DELETE' });
+    const r = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: remoteAuthHeaders() });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
 }
 
@@ -191,4 +193,18 @@ export const config = {
     get: (key: string) => jget<{ key: string; value: unknown }>(`/api/config/${key}`),
     set: (key: string, value: unknown) =>
         jpost<{ ok: true }>('/api/config', { key, value }),
+};
+
+// Remote access — LAN parity with gSender's Wireless Control + optional PIN gate.
+export interface RemoteInfo {
+    ips: string[];
+    port: number;
+    pinSet: boolean;
+}
+export const remote = {
+    info: () => jget<RemoteInfo>('/api/remote/info'),
+    qr: (ip?: string) => jget<{ url: string; dataUrl: string }>(`/api/remote/qr${ip ? `?ip=${encodeURIComponent(ip)}` : ''}`),
+    setPin: (pin: string) => jpost<{ ok: true }>('/api/remote/pin', { pin }),
+    clearPin: () => jdelete('/api/remote/pin'),
+    verifyPin: (pin: string) => jpost<{ token: string }>('/api/remote/verify-pin', { pin }),
 };

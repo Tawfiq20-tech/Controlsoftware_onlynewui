@@ -9,7 +9,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
-import { parseGcodeAsync } from '../../utils/gcodeParser';
+import { GCodeParser } from '../../utils/gcodeParser';
+import { remoteAuthHeaders } from '../../utils/remoteAuth';
 import './Library.css';
 
 interface LibraryItem {
@@ -44,16 +45,14 @@ export default function Library() {
     const setRawGcodeContent = useCNCStore((s) => s.setRawGcodeContent);
     const setFileInfo = useCNCStore((s) => s.setFileInfo);
     const setGcode = useCNCStore((s) => s.setGcode);
-    const setParsedToolpath = useCNCStore((s) => s.setParsedToolpath);
     const setToolpathSegments = useCNCStore((s) => s.setToolpathSegments);
-    const cleanupForNewFile = useCNCStore((s) => s.cleanupForNewFile);
     const addConsoleLog = useCNCStore((s) => s.addConsoleLog);
 
     useEffect(() => { reload(); }, []);
 
     async function reload() {
         try {
-            const r = await fetch(`${BACKEND_BASE}/api/library`);
+            const r = await fetch(`${BACKEND_BASE}/api/library`, { headers: remoteAuthHeaders() });
             if (r.ok) setItems(await r.json());
         } catch (_) { /* offline — empty list */ }
     }
@@ -65,7 +64,7 @@ export default function Library() {
         try {
             const r = await fetch(`${BACKEND_BASE}/api/library`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
                 body: JSON.stringify({
                     name: file.name.replace(/\.[^.]+$/, ''),
                     fileName: file.name,
@@ -84,22 +83,22 @@ export default function Library() {
 
     async function loadIntoSender(item: LibraryItem) {
         try {
-            const r = await fetch(`${BACKEND_BASE}/api/library/${item.id}/body`);
+            const r = await fetch(`${BACKEND_BASE}/api/library/${item.id}/body`, { headers: remoteAuthHeaders() });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const body = await r.text();
 
-            // Clean up previous state first
-            cleanupForNewFile();
-
-            // Parse via async parser so Visualizer3D and store see the toolpath
-            const result = await parseGcodeAsync(body);
+            // Mirror Sidebar's upload pipeline: parse via GCodeParser so the
+            // Visualizer3D, sender, and rest of the store actually see the
+            // toolpath. Without this the load is a no-op visually. Tawfiq
+            // msg 7430 — "cant able to load and work on it".
+            const parser = new GCodeParser();
+            const result = parser.parseGCode(body);
             if (!result.lines || result.lines.length === 0) {
                 addConsoleLog('warning', `Library file ${item.fileName} parsed to 0 lines`);
                 return;
             }
 
             setGcode(result.lines);
-            setParsedToolpath(result.parsedToolpath);
             setToolpathSegments(result.segments);
             setRawGcodeContent(body);
             setFileInfo({
@@ -114,7 +113,7 @@ export default function Library() {
     }
 
     async function deleteItem(id: string) {
-        try { await fetch(`${BACKEND_BASE}/api/library/${id}`, { method: 'DELETE' }); }
+        try { await fetch(`${BACKEND_BASE}/api/library/${id}`, { method: 'DELETE', headers: remoteAuthHeaders() }); }
         catch (_) {}
         setItems((prev) => prev.filter((i) => i.id !== id));
     }

@@ -12,9 +12,9 @@
  * Persistence happens via the backend ConfigStore (REST), so settings
  * survive process restarts and roam to all connected browsers.
  */
-
+import { useState } from 'react';
 import {
-    Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu,
+    Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu, Wifi,
 } from 'lucide-react';
 import SectionWebcam from './SectionWebcam';
 import SectionWatchDir from './SectionWatchDir';
@@ -25,10 +25,10 @@ import SectionSurfacing from './SectionSurfacing';
 import SectionNotifications from './SectionNotifications';
 import SectionAppearance from './SectionAppearance';
 import SectionFirmwareUpdate from './SectionFirmwareUpdate';
-import { useCNCStore } from '../../stores/cncStore';
+import SectionRemoteAccess from './SectionRemoteAccess';
 import './Settings.css';
 
-type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware';
+type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware' | 'remote';
 
 interface TabDef { id: Tab; label: string; icon: React.ReactNode; }
 
@@ -53,6 +53,7 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
             { id: 'webcam',   label: 'Cameras',      icon: <Camera size={16} /> },
             { id: 'watchdir', label: 'Watch folder', icon: <FolderOpen size={16} /> },
             { id: 'firmware', label: 'Firmware',     icon: <Cpu size={16} /> },
+            { id: 'remote',   label: 'Remote access', icon: <Wifi size={16} /> },
         ],
     },
     {
@@ -74,8 +75,7 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
 ];
 
 export default function Settings() {
-    const active = (useCNCStore((s) => s.settingsTab) as Tab) || 'appearance';
-    const setActive = (tab: Tab) => useCNCStore.getState().setSettingsTab(tab);
+    const [active, setActive] = useState<Tab>('appearance');
 
     return (
         <div className="settings-root">
@@ -105,6 +105,7 @@ export default function Settings() {
                 {active === 'history'   && <SectionJobHistory />}
                 {active === 'notifications' && <SectionNotifications />}
                 {active === 'appearance'   && <SectionAppearance />}
+                {active === 'remote'       && <SectionRemoteAccess />}
             </div>
         </div>
     );

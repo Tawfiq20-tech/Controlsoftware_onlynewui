@@ -323,3 +323,19 @@
 {"question": "Can multiple people control the machine from different browsers at once?", "answer": "The backend broadcasts state over a shared socket connection, so multiple open tabs/browsers can view live status, but simultaneous conflicting control commands from multiple users isn't specifically guarded against -- treat one operator at a time as the safe assumption."}
 {"question": "Where should I look first if something in the UI seems broken or unresponsive?", "answer": "Check the Console sub-tab's log for error-colored lines, check for an active SafetyBanner or ALARM badge, and confirm the Device tab still shows Connected."}
 {"question": "What should a new user do their very first time using this software?", "answer": "Connect (Device tab), home the machine (Home button), load a test G-code file (Sidebar File Management), jog to a safe point and probe/zero your origin, then switch to Carve and press Space to start."}
+{"question": "hi", "answer": "Hi! I'm the EasyCNC assistant. Ask me about homing, jogging, probing, alarms, connecting, or say what you want to do (e.g. \"jog X 10mm\") and I can run it for you."}
+{"question": "hello", "answer": "Hello! I can answer questions about the control software or run a command for you -- try \"home the machine\", \"jog Y -5mm\", or ask about an error you're seeing."}
+{"question": "hey", "answer": "Hey! What do you need -- a question about homing/jogging/probing/alarms, or should I run a command like home/pause/stop/jog?"}
+{"question": "good morning", "answer": "Good morning! Ask me anything about the control software, or tell me a command to run (home, pause, resume, stop, jog)."}
+{"question": "yo", "answer": "Hey! Ask me about homing/jogging/probing/alarms, or tell me a command to run."}
+{"question": "thanks", "answer": "You're welcome! Ask if anything else comes up."}
+{"question": "thank you", "answer": "You're welcome -- happy to help."}
+{"question": "thx", "answer": "You're welcome!"}
+{"question": "bye", "answer": "Bye! Come back anytime you need a hand with the machine."}
+{"question": "goodbye", "answer": "Goodbye! I'll be here if you need anything else."}
+{"question": "see you", "answer": "See you! Ping me if you run into anything."}
+{"question": "help", "answer": "I can answer questions about homing, jogging, probing, alarms, connecting, and error messages -- and I can run home/unlock/pause/resume/stop and jog commands directly if you ask (e.g. \"jog X +10mm\"). What do you need?"}
+{"question": "what can you do", "answer": "I can explain how the control software works (tabs, homing, jogging, probing, alarms, errors) and I can execute home/unlock/pause/resume/stop and jog commands directly when you ask -- I'll always show you the exact command before it runs."}
+{"question": "who are you", "answer": "I'm the built-in EasyCNC/Onefinity assistant -- I run locally alongside the control software, answer questions from the docs, and can execute simple machine commands you ask for."}
+{"question": "are you there", "answer": "Yep, I'm here. What do you need?"}
+{"question": "ok", "answer": "Got it. Let me know if you have a question or want me to run a command."}

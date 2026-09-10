@@ -1,0 +1,94 @@
+.remote-pin-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-main, #16191e);
+}
+
+.remote-pin-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: 280px;
+    padding: 28px 24px;
+    background: var(--bg-panel, #1d2127);
+    border: 1px solid var(--border-ui, #30363d);
+    border-radius: var(--radius-lg, 8px);
+    color: var(--text-main, #e6edf3);
+    text-align: center;
+}
+
+.remote-pin-card svg {
+    color: var(--industrial-cyan, #0284c7);
+}
+
+.remote-pin-card h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.remote-pin-card p {
+    font-size: 12px;
+    color: var(--text-dim, #8b949e);
+    margin: 0 0 6px;
+}
+
+.remote-pin-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 18px;
+    letter-spacing: 4px;
+    text-align: center;
+    background: var(--bg-input, #181b20);
+    border: 1px solid var(--border-ui, #30363d);
+    border-radius: var(--radius-md, 5px);
+    color: var(--text-main, #e6edf3);
+}
+.remote-pin-input:focus {
+    outline: none;
+    border-color: var(--industrial-cyan, #0284c7);
+}
+
+.remote-pin-error {
+    font-size: 12px;
+    color: var(--danger, #ef4444);
+}
+
+.remote-pin-btn {
+    width: 100%;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--primary-accent, #38404d);
+    border: none;
+    border-radius: var(--radius-md, 5px);
+    color: var(--text-bright, #fff);
+    cursor: pointer;
+}
+.remote-pin-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.remote-pin-btn:not(:disabled):hover {
+    background: var(--primary-hover, #272d37);
+}
+
+.remote-session-banner {
+    position: sticky;
+    top: 0;
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--warning, #f59e0b);
+    color: #1a1a1a;
+}

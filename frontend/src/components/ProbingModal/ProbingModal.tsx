@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { X, ArrowLeft, ArrowRight, Play, Check, Crosshair } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
 import { backendJog } from '../../utils/backendConnection';
+import { remoteAuthHeaders } from '../../utils/remoteAuth';
 import zProbeImg from '../../assets/probing/z-probe.jpg';
 import xyzProbeImg from '../../assets/probing/xyz-probe.jpg';
 import './ProbingModal.css';
@@ -95,7 +96,7 @@ export default function ProbingModal({ open, initialType, onClose }: Props) {
         try {
             const r = await fetch(`${BACKEND_BASE}/api/probing/run`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
                 body: JSON.stringify({
                     strategy: probeType === 'z' ? 'z-only' : 'xyz-corner-front-left',
                     settings: { bitDiameter, wcs: 'G54' },
@@ -125,7 +126,7 @@ export default function ProbingModal({ open, initialType, onClose }: Props) {
         setFinalizeState('running');
         setFinalizeError(null);
         try {
-            const r = await fetch(`${BACKEND_BASE}/api/probing/finalize-corner`, { method: 'POST' });
+            const r = await fetch(`${BACKEND_BASE}/api/probing/finalize-corner`, { method: 'POST', headers: remoteAuthHeaders() });
             const data = await r.json().catch(() => ({}));
             if (!r.ok || data.success === false) {
                 throw new Error(data.error || `Backend returned ${r.status}`);

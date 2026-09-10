@@ -3,6 +3,8 @@
  * Use for connection, file, job events and in error boundary / window.onerror.
  */
 
+import { remoteAuthHeaders } from './remoteAuth';
+
 const MAX_BUFFER = 500;
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
@@ -44,7 +46,7 @@ function postToBackend(level: string, message: string, meta?: unknown): void {
     const url = getBackendUrl();
     fetch(`${url}/api/log`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
         body: JSON.stringify({ level, message, meta }),
     }).catch(() => {});
 }

@@ -30,7 +30,8 @@ const { WhatsAppService } = require('./services/whatsapp/WhatsAppService');
 const { TelegramBotService } = require('./services/telegram/TelegramBotService');
 const { LibraryService } = require('./services/library/LibraryService');
 const { ChatbotService } = require('./services/chatbot/ChatbotService');
-const { FirmwareUpdateService } = require('./services/firmware/FirmwareUpdateService');
+const { ConfigStore } = require('./services/ConfigStore');
+const { RemoteAccessService } = require('./services/remoteAccess/RemoteAccessService');
 const errlog = require('./middleware/errlog');
 const errclient = require('./middleware/errclient');
 const errnotfound = require('./middleware/errnotfound');
@@ -39,8 +40,14 @@ const errserver = require('./middleware/errserver');
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
 app.use(cors({ origin: true }));
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+app.use(express.json());
+
+// Remote-access gate — own ConfigStore file so it doesn't depend on
+// CNCEngine's init order. No-op (open LAN, same as gSender) until a PIN is
+// set from Settings on the control PC itself; see RemoteAccessService.js.
+const remoteAccessConfigStore = new ConfigStore(path.join(__dirname, 'data', 'remote-access.json'));
+const remoteAccessService = new RemoteAccessService({ configStore: remoteAccessConfigStore, port: PORT });
+app.use(remoteAccessService.httpGate());
 
 // Request logging
 app.use((req, res, next) => {
@@ -72,8 +79,8 @@ const io = new Server(server, {
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ['websocket', 'polling'],
-    maxHttpBufferSize: 1e8, // 100 MB max payload for large 3D relief G-code files
 });
+io.use(remoteAccessService.socketGate());
 
 // Create CNCEngine (Layer 5)
 const engine = new CNCEngine(io);
@@ -98,15 +105,10 @@ const whatsappService   = new WhatsAppService({   configStore: engine.config, io
 const telegramService   = new TelegramBotService({ configStore: engine.config, io, logger,
                                                    getController, getEngine: () => engine, dataDir,
                                                    libraryService, webcamService });
-const firmwareUpdateService = new FirmwareUpdateService({
-    dataDir: path.join(dataDir, 'firmware'),
-    io,
-    logger,
-});
 
-// Wire services to the CNCEngine so they can be accessed by socket handlers
+// Wire JobResumeService to the CNCEngine so it can be used by the
+// job:conflict/job:resume socket handlers.
 engine.jobResumeService = jobResumeService;
-engine.firmwareUpdateService = firmwareUpdateService;
 
 webcamService.init();
 gamepadService.init();
@@ -135,7 +137,6 @@ io.on('connection', (socket) => {
         socket.emit('telegram:status', { state: ts.state, info: ts.info });
         socket.emit('telegram:config', ts.config);
     }
-    socket.emit('firmware:info', firmwareUpdateService.getFirmwareInfo(engine.state?.version || ''));
     socket.on('gamepad:axes',   (vals) => gamepadService.onAxes(vals));
     socket.on('gamepad:button', ({ index, pressed }) => gamepadService.onButton(index, pressed));
 });
@@ -238,8 +239,66 @@ app.post('/api/chat', async (req, res) => {
         res.json(result);
     } catch (err) {
         logger.error(err);
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: 'Chatbot request failed, try again.' });
     }
+});
+
+// ─── Remote access ────────────────────────────────────────────────
+// LAN parity with gSender's "Wireless Control" (Phase 1) + an optional
+// PIN gate (Phase 2, opt-in). See remote_access_plan.md /
+// plan_chatbot_and_remote_access.md for the full design.
+
+// Unauthenticated on purpose: reveals LAN IPs/port and whether a PIN is
+// set (never the PIN itself), needed before a remote client can even ask
+// for a token.
+app.get('/api/remote/info', (req, res) => {
+    res.json(remoteAccessService.getInfo());
+});
+
+// QR image for the control PC's own Settings panel to scan-and-connect
+// from a phone. Loopback-only in practice (the operator's own browser).
+app.get('/api/remote/qr', async (req, res) => {
+    const ip = req.query.ip || remoteAccessService.getLanIps()[0];
+    if (!ip) return res.status(404).json({ error: 'No LAN IP detected' });
+    const url = `http://${ip}:${PORT}`;
+    try {
+        const dataUrl = await remoteAccessService.getQrDataUrl(url);
+        res.json({ url, dataUrl });
+    } catch (err) {
+        logger.error(err);
+        res.status(500).json({ error: 'QR generation failed' });
+    }
+});
+
+// PIN can only be set/cleared from the control PC itself — never over the
+// LAN — so a remote device can never race the owner to claim the PIN.
+app.post('/api/remote/pin', (req, res) => {
+    if (!remoteAccessService.isLoopback(req)) {
+        return res.status(403).json({ error: 'PIN can only be set from this machine' });
+    }
+    try {
+        remoteAccessService.setPin(req.body && req.body.pin);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+app.delete('/api/remote/pin', (req, res) => {
+    if (!remoteAccessService.isLoopback(req)) {
+        return res.status(403).json({ error: 'PIN can only be cleared from this machine' });
+    }
+    remoteAccessService.clearPin();
+    res.json({ ok: true });
+});
+
+// Remote clients exchange the PIN for a session token once; the frontend
+// caches the token client-side and sends it as X-Remote-Token after that.
+app.post('/api/remote/verify-pin', (req, res) => {
+    if (!remoteAccessService.hasPin()) return res.status(400).json({ error: 'No PIN is set' });
+    if (!remoteAccessService.verifyPin(req.body && req.body.pin)) {
+        return res.status(401).json({ error: 'Incorrect PIN' });
+    }
+    res.json({ token: remoteAccessService.issueToken() });
 });
 
 // ─── Macro REST API ──────────────────────────────────────────────
@@ -311,46 +370,21 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ─── Firmware Flashing & Live OTA ───────────────────────────
+// ─── Firmware Flashing ───────────────────────────────────────────
 
 const FirmwareFlashing = require('./lib/Firmware/Flashing/firmwareflashing');
 
-app.get('/api/firmware/info', (req, res) => {
-    try {
-        const currentVersion = req.query.currentVersion || engine.state?.version || '';
-        const info = firmwareUpdateService.getFirmwareInfo(currentVersion);
-        res.json(info);
-    } catch (err) {
-        logger.error(err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-app.post('/api/firmware/release', (req, res) => {
-    try {
-        const result = firmwareUpdateService.deployRelease(req.body);
-        res.json({ ok: true, manifest: result });
-    } catch (err) {
-        logger.error(err);
-        res.status(400).json({ error: err.message });
-    }
-});
-
 app.post('/api/firmware/flash', async (req, res) => {
-    const { port, boardType, hexPath, useOfficialRelease } = req.body;
-    let hexData = req.body.hexData;
+    const { port, boardType, hexPath } = req.body;
 
     if (!port || !boardType) {
         return res.status(400).json({ error: 'Missing port or boardType' });
     }
 
     try {
-        if (useOfficialRelease || (!hexData && !hexPath && boardType === 'EASYCNC')) {
-            hexData = await firmwareUpdateService.getOfficialHexData();
-        }
         // Get socket for progress events (if available from Socket.IO connection)
         const socket = io.sockets.sockets.values().next().value;
-        await FirmwareFlashing.flash(port, boardType, { hexPath, hexData, socket, controller: engine.controller });
+        await FirmwareFlashing.flash(port, boardType, { hexPath, socket });
         res.json({ success: true, message: 'Firmware flashed successfully' });
     } catch (err) {
         logger.error(err);
