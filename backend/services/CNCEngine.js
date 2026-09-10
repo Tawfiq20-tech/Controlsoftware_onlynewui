@@ -249,16 +249,33 @@ class CNCEngine extends EventEmitter {
 
             // ─── Firmware Flashing ───────────────────────────────
             socket.on('firmware:flash', async (options, callback) => {
-                const { port, boardType, hexPath, hexData } = options || {};
+                const { port, boardType, hexPath, useOfficialRelease } = options || {};
+                let hexData = options?.hexData;
                 try {
+                    // Safety check: ensure machine is not actively running a job or in alarm
+                    const currentMachineState = this.state?.status?.activeState || this.controller?.state?.status?.activeState || 'idle';
+                    if (this.firmwareUpdateService) {
+                        const safety = this.firmwareUpdateService.canFlash(currentMachineState);
+                        if (!safety.allowed) {
+                            throw new Error(safety.reason);
+                        }
+                    }
+
+                    // Official OTA release flow: in-memory secure retrieval with SHA-256 validation
+                    if (useOfficialRelease || (!hexData && !hexPath && boardType === 'EASYCNC')) {
+                        if (!this.firmwareUpdateService) {
+                            const { FirmwareUpdateService } = require('./firmware/FirmwareUpdateService');
+                            this.firmwareUpdateService = new FirmwareUpdateService({ logger });
+                        }
+                        socket.emit('flash:message', { type: 'info', content: 'Retrieving and verifying official firmware release...' });
+                        hexData = await this.firmwareUpdateService.getOfficialHexData();
+                    }
+
                     const FirmwareFlashing = require('../lib/Firmware/Flashing/firmwareflashing');
                     // EASYCNC's no-BOOT0 DFU path drives the bootloader jump
                     // over the existing RSP link, so it needs the live bound
                     // controller, not just the port string the other board
-                    // types use (avrgirl / DTR-RTS serial bootloader). It
-                    // also always sends hexData (raw text read client-side
-                    // from the file the user picked) rather than hexPath --
-                    // the backend never needs its own copy of that file.
+                    // types use (avrgirl / DTR-RTS serial bootloader).
                     await FirmwareFlashing.flash(port, boardType, { hexPath, hexData, socket, controller: this.controller });
                     if (typeof callback === 'function') callback(null, { success: true });
                 } catch (err) {
@@ -641,6 +658,11 @@ class CNCEngine extends EventEmitter {
             this.io.emit('sender:pause');
         });
 
+        this.controller.on('sender:resume', () => {
+            this._jobPaused = false;
+            this.io.emit('sender:resume');
+        });
+
         this.controller.on('sender:start', (data) => {
             this.io.emit('sender:start', data);
             if (this.sessionLogger) this.sessionLogger.logJob({ event: 'started' });
@@ -901,6 +923,11 @@ class CNCEngine extends EventEmitter {
             logger.info(`[Engine] command: ${cmd}${args.length ? ' ' + JSON.stringify(args) : ''}`);
         }
 
+        if (cmd === 'gcode:stop' || cmd === 'file:unload') {
+            this._jobPaused = false;
+            this._pendingUpload = null;
+        }
+
         try {
             this.controller.command(cmd, ...args);
         } catch (err) {
@@ -940,24 +967,17 @@ class CNCEngine extends EventEmitter {
         const fileName = name || 'untitled.gcode';
         logger.info(`[Engine] file:load received: name="${fileName}" bytes=${gcodeContent.length}`);
 
-        // ─── Job Isolation Guard ─────────────────────────────────────
-        // If a job is currently paused, don't silently overwrite the loaded
-        // G-code. Emit a conflict event so the frontend can show a modal
-        // asking the user what to do (replace / cancel / save & replace).
-        if (this._jobPaused) {
-            const senderStatus = (typeof this.controller?.getSenderStatus === 'function')
-                ? this.controller.getSenderStatus() : null;
-            const pausedInfo = {
-                filename: this.loadedFile?.name || 'unknown',
-                resumeLine: senderStatus?.received || 0,
-                totalLines: senderStatus?.total || 0,
-                newFilename: fileName,
-            };
-            logger.warn(`[Engine] file:load blocked — job is paused: ${JSON.stringify(pausedInfo)}`);
-            socket.emit('job:conflict', pausedInfo);
-            // Store the pending upload so it can be retried after conflict resolution.
-            this._pendingUpload = { name: fileName, content: gcodeContent };
-            return;
+        // ─── Clean Job Replacement on File Load ──────────────────────
+        // If a prior job was active or paused, loading a new file aborts the
+        // previous job and clears paused state so the newly uploaded file can
+        // be started cleanly from line 1.
+        if (this._jobPaused || (this.controller && this.controller.job && this.controller.job.active)) {
+            logger.info(`[Engine] file:load replacing previous active/paused job with "${fileName}"`);
+            try {
+                this.controller.command('gcode:stop');
+            } catch (_) {}
+            this._jobPaused = false;
+            this._pendingUpload = null;
         }
 
         // Load into controller's sender. spindleDelay is read here (not
@@ -968,7 +988,9 @@ class CNCEngine extends EventEmitter {
         this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay);
 
         // Store file info for reconnecting clients
-        const senderTotal = this.controller.sender?.total || gcodeContent.split('\n').filter(l => l.trim()).length;
+        const senderTotal = (this.controller && this.controller.job && this.controller.job.totalLineCount)
+            || this.controller.sender?.total
+            || gcodeContent.split(/\r?\n/).length;
         this.loadedFile = {
             name: fileName,
             total: senderTotal,
@@ -989,6 +1011,8 @@ class CNCEngine extends EventEmitter {
         if (this.controller) {
             this.controller.command('gcode:unload');
         }
+        this._jobPaused = false;
+        this._pendingUpload = null;
         this.loadedFile = null;
         this._loadedGcodeContent = null;
         this.io.emit('file:unload');

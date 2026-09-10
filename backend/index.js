@@ -30,6 +30,7 @@ const { WhatsAppService } = require('./services/whatsapp/WhatsAppService');
 const { TelegramBotService } = require('./services/telegram/TelegramBotService');
 const { LibraryService } = require('./services/library/LibraryService');
 const { ChatbotService } = require('./services/chatbot/ChatbotService');
+const { FirmwareUpdateService } = require('./services/firmware/FirmwareUpdateService');
 const errlog = require('./middleware/errlog');
 const errclient = require('./middleware/errclient');
 const errnotfound = require('./middleware/errnotfound');
@@ -38,7 +39,8 @@ const errserver = require('./middleware/errserver');
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
 app.use(cors({ origin: true }));
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -70,6 +72,7 @@ const io = new Server(server, {
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ['websocket', 'polling'],
+    maxHttpBufferSize: 1e8, // 100 MB max payload for large 3D relief G-code files
 });
 
 // Create CNCEngine (Layer 5)
@@ -95,10 +98,15 @@ const whatsappService   = new WhatsAppService({   configStore: engine.config, io
 const telegramService   = new TelegramBotService({ configStore: engine.config, io, logger,
                                                    getController, getEngine: () => engine, dataDir,
                                                    libraryService, webcamService });
+const firmwareUpdateService = new FirmwareUpdateService({
+    dataDir: path.join(dataDir, 'firmware'),
+    io,
+    logger,
+});
 
-// Wire JobResumeService to the CNCEngine so it can be used by the
-// job:conflict/job:resume socket handlers.
+// Wire services to the CNCEngine so they can be accessed by socket handlers
 engine.jobResumeService = jobResumeService;
+engine.firmwareUpdateService = firmwareUpdateService;
 
 webcamService.init();
 gamepadService.init();
@@ -127,6 +135,7 @@ io.on('connection', (socket) => {
         socket.emit('telegram:status', { state: ts.state, info: ts.info });
         socket.emit('telegram:config', ts.config);
     }
+    socket.emit('firmware:info', firmwareUpdateService.getFirmwareInfo(engine.state?.version || ''));
     socket.on('gamepad:axes',   (vals) => gamepadService.onAxes(vals));
     socket.on('gamepad:button', ({ index, pressed }) => gamepadService.onButton(index, pressed));
 });
@@ -289,21 +298,46 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ─── Firmware Flashing ───────────────────────────────────────────
+// ─── Firmware Flashing & Live OTA ───────────────────────────
 
 const FirmwareFlashing = require('./lib/Firmware/Flashing/firmwareflashing');
 
+app.get('/api/firmware/info', (req, res) => {
+    try {
+        const currentVersion = req.query.currentVersion || engine.state?.version || '';
+        const info = firmwareUpdateService.getFirmwareInfo(currentVersion);
+        res.json(info);
+    } catch (err) {
+        logger.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/firmware/release', (req, res) => {
+    try {
+        const result = firmwareUpdateService.deployRelease(req.body);
+        res.json({ ok: true, manifest: result });
+    } catch (err) {
+        logger.error(err);
+        res.status(400).json({ error: err.message });
+    }
+});
+
 app.post('/api/firmware/flash', async (req, res) => {
-    const { port, boardType, hexPath } = req.body;
+    const { port, boardType, hexPath, useOfficialRelease } = req.body;
+    let hexData = req.body.hexData;
 
     if (!port || !boardType) {
         return res.status(400).json({ error: 'Missing port or boardType' });
     }
 
     try {
+        if (useOfficialRelease || (!hexData && !hexPath && boardType === 'EASYCNC')) {
+            hexData = await firmwareUpdateService.getOfficialHexData();
+        }
         // Get socket for progress events (if available from Socket.IO connection)
         const socket = io.sockets.sockets.values().next().value;
-        await FirmwareFlashing.flash(port, boardType, { hexPath, socket });
+        await FirmwareFlashing.flash(port, boardType, { hexPath, hexData, socket, controller: engine.controller });
         res.json({ success: true, message: 'Firmware flashed successfully' });
     } catch (err) {
         logger.error(err);

@@ -1862,11 +1862,11 @@ class RTSController extends EventEmitter {
             'raw': (data) => this._sendRaw(data),
 
             // Overrides
-            'feedOverride:reset': () => { this._overrides.feed = 100; },
-            'feedOverride:coarsePlus': () => { this._overrides.feed = Math.min(200, this._overrides.feed + 10); },
-            'feedOverride:coarseMinus': () => { this._overrides.feed = Math.max(10, this._overrides.feed - 10); },
-            'feedOverride:finePlus': () => { this._overrides.feed = Math.min(200, this._overrides.feed + 1); },
-            'feedOverride:fineMinus': () => { this._overrides.feed = Math.max(10, this._overrides.feed - 1); },
+            'feedOverride:reset': () => { this._overrides.feed = 100; this.emit('status', this.state); },
+            'feedOverride:coarsePlus': () => { this._overrides.feed = Math.min(200, this._overrides.feed + 10); this.emit('status', this.state); },
+            'feedOverride:coarseMinus': () => { this._overrides.feed = Math.max(10, this._overrides.feed - 10); this.emit('status', this.state); },
+            'feedOverride:finePlus': () => { this._overrides.feed = Math.min(200, this._overrides.feed + 1); this.emit('status', this.state); },
+            'feedOverride:fineMinus': () => { this._overrides.feed = Math.max(10, this._overrides.feed - 1); this.emit('status', this.state); },
             'spindleOverride:reset': () => { this._overrides.spindle = 100; },
             'spindleOverride:coarsePlus': () => { this._overrides.spindle = Math.min(200, this._overrides.spindle + 10); },
             'spindleOverride:coarseMinus': () => { this._overrides.spindle = Math.max(10, this._overrides.spindle - 10); },

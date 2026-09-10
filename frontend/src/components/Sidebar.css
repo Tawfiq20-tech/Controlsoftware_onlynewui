@@ -710,8 +710,10 @@
     padding: 2px;
 }
 
-.file-drop-zone.disabled {
-    opacity: 0.6;
+.file-drop-zone.disabled,
+.file-drop-zone.drop-zone-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
     pointer-events: none;
 }
 

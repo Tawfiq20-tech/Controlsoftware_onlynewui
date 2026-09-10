@@ -2,26 +2,23 @@ import * as THREE from 'three';
 import type { ParsedToolpath } from './gcodeParser';
 
 /**
- * Color Template specified by user:
- *   Stock Base:     #C99A62  rgb(201, 154, 98)
- *   Wood Highlight: #E2B77E  rgb(226, 183, 126)
- *   Wood Shadow:    #9A6B3F  rgb(154, 107, 63)
- *   Toolpath:       #F28C28  rgb(242, 140, 40)
+ * Enhanced Color Template:
+ * Authentic Natural Wood & CNC Milling Palette
  */
 export const CNC_PALETTE = {
     stock:     new THREE.Color('#C99A62'),
-    highlight: new THREE.Color('#E2B77E'),
-    shadow:    new THREE.Color('#9A6B3F'),
+    highlight: new THREE.Color('#E8C496'),
+    shadow:    new THREE.Color('#8B5A2B'),
+    milled:    new THREE.Color('#DDB88C'),
     toolpath:  '#F28C28',
 };
 
 /**
- * Creates lightweight, realistic procedural wood grain canvas textures using the exact
- * user-specified color palette (#C99A62, #E2B77E, #9A6B3F).
- * Optimized to 256x256 for minimal VRAM (<300KB) and smooth 60fps on Raspberry Pi.
+ * Creates high-resolution, photorealistic procedural wood grain canvas textures.
+ * 512x512 with multi-octave wood grain fibers, growth rings, organic knots, and micro-bump.
  */
 function createWoodTextures(): { diffuse: THREE.CanvasTexture; bump: THREE.CanvasTexture } {
-    const size = 256;
+    const size = 512;
     const canvasDiffuse = document.createElement('canvas');
     canvasDiffuse.width = size;
     canvasDiffuse.height = size;
@@ -58,37 +55,59 @@ function createWoodTextures(): { diffuse: THREE.CanvasTexture; bump: THREE.Canva
         );
     };
 
-    // Exact palette RGBs
-    const colShadow = { r: 154, g: 107, b: 63 };   // #9A6B3F
-    const colStock  = { r: 201, g: 154, b: 98 };   // #C99A62
-    const colLight  = { r: 226, g: 183, b: 126 };  // #E2B77E
+    const fbm = (x: number, y: number) => {
+        let v = 0.0;
+        let a = 0.5;
+        let shift = 100.0;
+        for (let i = 0; i < 4; ++i) {
+            v += a * noise(x, y);
+            x = x * 2.0 + shift;
+            y = y * 2.0 + shift;
+            a *= 0.5;
+        }
+        return v;
+    };
+
+    // Authentic Golden-Amber Oak / Honey Timber Tones (matching reference image)
+    const colShadow = { r: 184, g: 121, b: 59 };   // Warm caramel grain #B8793B
+    const colStock  = { r: 218, g: 156, b: 86 };   // Warm golden honey oak #DA9C56
+    const colLight  = { r: 238, g: 185, b: 120 };  // Light amber highlight #EEB978
 
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
             const idx = (y * size + x) * 4;
 
-            const nx = x * 0.04;
-            const ny = y * 0.009;
+            // Staggered parquet / butcher-block plank strips (matching reference image)
+            const plankWidth = 48;
+            const plankId = Math.floor(x / plankWidth);
+            const plankShiftY = hash(plankId, 17) * 220;
+            const plankTint = 1.0 + (hash(plankId, 43) - 0.5) * 0.08;
 
-            const warp = noise(nx * 2, ny * 2) * 1.4;
-            const ringPos = (x * 0.045 + warp * 2.8);
+            const nx = (x + plankId * 2.5) * 0.022;
+            const ny = (y + plankShiftY) * 0.006;
+
+            // Wood ring distortion and organic flow
+            const warp = fbm(nx * 1.5, ny * 2.0) * 1.8;
+            const ringPos = (x * 0.028 + warp * 2.0);
             const ring = Math.sin(ringPos) * 0.5 + 0.5;
-            const ringSharp = Math.pow(ring, 1.3);
+            const ringSharp = Math.pow(ring, 1.35);
 
-            const fiber = noise(nx * 14.0, ny * 1.2) * 0.28;
-            const t = Math.max(0, Math.min(1, ringSharp * 0.65 + fiber));
+            // Fine longitudinal wood fiber lines
+            const fiber = noise(nx * 16.0, ny * 1.6) * 0.22;
+            const microFiber = noise(x * 0.28, (y + plankShiftY) * 0.06) * 0.07;
+            const t = Math.max(0, Math.min(1, ringSharp * 0.60 + fiber + microFiber));
 
             let r: number, g: number, b: number;
             if (t < 0.45) {
                 const k = t / 0.45;
-                r = colShadow.r * (1 - k) + colStock.r * k;
-                g = colShadow.g * (1 - k) + colStock.g * k;
-                b = colShadow.b * (1 - k) + colStock.b * k;
+                r = (colShadow.r * (1 - k) + colStock.r * k) * plankTint;
+                g = (colShadow.g * (1 - k) + colStock.g * k) * plankTint;
+                b = (colShadow.b * (1 - k) + colStock.b * k) * plankTint;
             } else {
                 const k = (t - 0.45) / 0.55;
-                r = colStock.r * (1 - k) + colLight.r * k;
-                g = colStock.g * (1 - k) + colLight.g * k;
-                b = colStock.b * (1 - k) + colLight.b * k;
+                r = (colStock.r * (1 - k) + colLight.r * k) * plankTint;
+                g = (colStock.g * (1 - k) + colLight.g * k) * plankTint;
+                b = (colStock.b * (1 - k) + colLight.b * k) * plankTint;
             }
 
             dataD[idx]     = Math.min(255, Math.max(0, Math.round(r)));
@@ -96,7 +115,8 @@ function createWoodTextures(): { diffuse: THREE.CanvasTexture; bump: THREE.Canva
             dataD[idx + 2] = Math.min(255, Math.max(0, Math.round(b)));
             dataD[idx + 3] = 255;
 
-            const bump = Math.round((1 - t) * 210);
+            // Tactile bump mapping
+            const bump = Math.round((1 - t) * 170 + microFiber * 40);
             dataB[idx]     = bump;
             dataB[idx + 1] = bump;
             dataB[idx + 2] = bump;
@@ -110,12 +130,16 @@ function createWoodTextures(): { diffuse: THREE.CanvasTexture; bump: THREE.Canva
     const diffuse = new THREE.CanvasTexture(canvasDiffuse);
     diffuse.wrapS = THREE.RepeatWrapping;
     diffuse.wrapT = THREE.RepeatWrapping;
-    diffuse.repeat.set(2.5, 2.5);
+    diffuse.repeat.set(2.0, 2.0);
+    diffuse.generateMipmaps = true;
+    diffuse.minFilter = THREE.LinearMipmapLinearFilter;
 
     const bump = new THREE.CanvasTexture(canvasBump);
     bump.wrapS = THREE.RepeatWrapping;
     bump.wrapT = THREE.RepeatWrapping;
-    bump.repeat.set(2.5, 2.5);
+    bump.repeat.set(2.0, 2.0);
+    bump.generateMipmaps = true;
+    bump.minFilter = THREE.LinearMipmapLinearFilter;
 
     return { diffuse, bump };
 }
@@ -134,11 +158,11 @@ export interface RealisticWorkpieceResult {
 }
 
 /**
- * Builds a smooth, realistic 3D carved wood relief stock mesh.
+ * Builds a smooth, photorealistic 3D carved wood relief stock mesh.
  * - Sub-pixel continuous distance line/arc carving eliminating staircase aliasing on circles & diagonals.
- * - 1-pass separable heightfield relaxation smoothing filter for organic contours.
- * - Palette shading: Stock #C99A62, Highlight #E2B77E, Shadow #9A6B3F.
- * - Highly optimized for Raspberry Pi (160x160 grid, <1.5MB RAM, <8ms processing).
+ * - 256x256 high-resolution heightfield for razor-clean pocket walls without staircasing.
+ * - Natural freshly-cut wood interior pocket shading (eliminates harsh orange clamping).
+ * - Multi-light studio setup with warm key light, cool fill, and subtle rim highlights.
  */
 export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkpieceResult {
     const meshGroup = new THREE.Group();
@@ -150,8 +174,8 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     const spanZ = Math.max(0.1, max[2] - min[2]);
 
     // Stock dimensions with 4% padding
-    const padX = Math.max(spanX * 0.04, 4.0);
-    const padY = Math.max(spanY * 0.04, 4.0);
+    const padX = Math.max(spanX * 0.04, 5.0);
+    const padY = Math.max(spanY * 0.04, 5.0);
     const stockMinX = min[0] - padX;
     const stockMaxX = max[0] + padX;
     const stockMinY = min[1] - padY;
@@ -160,14 +184,14 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     const stockHeight = stockMaxY - stockMinY;
 
     const stockTopZ = Math.max(0, max[2]);
-    const stockDepth = Math.max(spanZ * 1.5, 10.0);
+    const stockDepth = Math.max(spanZ * 1.5, 12.0);
     const stockBottomZ = stockTopZ - stockDepth;
 
-    // 160x160 resolution: optimal fidelity and speed for Raspberry Pi
+    // High resolution grid (240-256): ensures smooth, circular pocket walls without jagged edges
     const maxDim = Math.max(stockWidth, stockHeight);
-    const maxGrid = 160;
-    const gridResX = Math.max(90, Math.min(maxGrid, Math.round((stockWidth / maxDim) * maxGrid)));
-    const gridResY = Math.max(90, Math.min(maxGrid, Math.round((stockHeight / maxDim) * maxGrid)));
+    const maxGrid = 256;
+    const gridResX = Math.max(120, Math.min(maxGrid, Math.round((stockWidth / maxDim) * maxGrid)));
+    const gridResY = Math.max(120, Math.min(maxGrid, Math.round((stockHeight / maxDim) * maxGrid)));
 
     const heightGrid = new Float32Array(gridResX * gridResY);
     heightGrid.fill(stockTopZ);
@@ -177,14 +201,14 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     const invCellW = 1 / cellW;
     const invCellH = 1 / cellH;
 
-    // Continuous sub-pixel carving tool radius (~1.0mm to 1.8mm equivalent)
-    const toolRadius = Math.max(Math.min(cellW, cellH) * 1.1, Math.min(2.0, spanX * 0.01));
+    // Continuous sub-pixel carving tool radius
+    const toolRadius = Math.max(Math.min(cellW, cellH) * 1.15, Math.min(2.5, spanX * 0.012));
     const toolRadiusSq = toolRadius * toolRadius;
 
     /**
      * Continuous sub-pixel orthogonal line segment distance carving.
      * Evaluates true Euclidean distance from grid nodes to segment (x0,y0)->(x1,y1).
-     * This completely eliminates staircase jaggedness on circles and curves.
+     * Completely eliminates staircase jaggedness on circles and curves.
      */
     const carveContinuousSegment = (
         x0: number, y0: number, z0: number,
@@ -224,9 +248,9 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
                 const distSq = (cx - projX) * (cx - projX) + (cy - projY) * (cy - projY);
 
                 if (distSq < toolRadiusSq) {
-                    // Smooth ballnose tool profile drop
                     const rNorm = Math.sqrt(distSq) / toolRadius;
-                    const toolProfile = (1.0 - Math.sqrt(Math.max(0, 1.0 - rNorm * rNorm))) * (toolRadius * 0.35);
+                    // Flat-end/bullnose tool profile with slight corner radius for realistic milling
+                    const toolProfile = (1.0 - Math.sqrt(Math.max(0, 1.0 - rNorm * rNorm))) * (toolRadius * 0.28);
                     const zTarget = (z0 + t * (z1 - z0)) + toolProfile;
 
                     const idx = rowOffset + gx;
@@ -238,36 +262,36 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
         }
     };
 
-    // Stride to keep processing under 15,000 segments (executes in <8ms on Raspberry Pi)
     const cuts = parsed.cuts;
-    const cutStride = Math.max(1, Math.ceil((cuts.length / 6) / 15000));
+    const cutStride = Math.max(1, Math.ceil((cuts.length / 6) / 25000));
     for (let i = 0; i < cuts.length; i += 6 * cutStride) {
         carveContinuousSegment(cuts[i], cuts[i + 1], cuts[i + 2], cuts[i + 3], cuts[i + 4], cuts[i + 5]);
     }
 
     const arcs = parsed.arcs;
-    const arcStride = Math.max(1, Math.ceil((arcs.length / 6) / 8000));
+    const arcStride = Math.max(1, Math.ceil((arcs.length / 6) / 15000));
     for (let i = 0; i < arcs.length; i += 6 * arcStride) {
         carveContinuousSegment(arcs[i], arcs[i + 1], arcs[i + 2], arcs[i + 3], arcs[i + 4], arcs[i + 5]);
     }
 
-    // ─── 1-Pass Smoothing Filter to Perfect Circular Curves ────────
-    // Separable 3x3 Gaussian blur filter on carved areas [0.25, 0.5, 0.25]
+    // ─── 2-Pass Smoothing Filter to Perfect Smooth Pocket Floors ────
     const smoothedGrid = new Float32Array(heightGrid.length);
     smoothedGrid.set(heightGrid);
 
-    for (let gy = 1; gy < gridResY - 1; gy++) {
-        const row = gy * gridResX;
-        for (let gx = 1; gx < gridResX - 1; gx++) {
-            const idx = row + gx;
-            const curZ = heightGrid[idx];
-            // Only smooth carved areas (below stock top surface)
-            if (curZ < stockTopZ - 0.01) {
-                const zCenter = curZ * 4;
-                const zSides = heightGrid[idx - 1] + heightGrid[idx + 1] + heightGrid[idx - gridResX] + heightGrid[idx + gridResX];
-                const zDiag = heightGrid[idx - gridResX - 1] + heightGrid[idx - gridResX + 1] +
-                              heightGrid[idx + gridResX - 1] + heightGrid[idx + gridResX + 1];
-                smoothedGrid[idx] = (zCenter * 2 + zSides * 2 + zDiag) / 16;
+    for (let pass = 0; pass < 2; pass++) {
+        for (let gy = 1; gy < gridResY - 1; gy++) {
+            const row = gy * gridResX;
+            for (let gx = 1; gx < gridResX - 1; gx++) {
+                const idx = row + gx;
+                const curZ = smoothedGrid[idx];
+                // Smooth carved areas (below stock top surface)
+                if (curZ < stockTopZ - 0.02) {
+                    const zCenter = curZ * 4;
+                    const zSides = smoothedGrid[idx - 1] + smoothedGrid[idx + 1] + smoothedGrid[idx - gridResX] + smoothedGrid[idx + gridResX];
+                    const zDiag = smoothedGrid[idx - gridResX - 1] + smoothedGrid[idx - gridResX + 1] +
+                                  smoothedGrid[idx + gridResX - 1] + smoothedGrid[idx + gridResX + 1];
+                    smoothedGrid[idx] = (zCenter * 2 + zSides * 2 + zDiag) / 16;
+                }
             }
         }
     }
@@ -278,12 +302,9 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     const uvs: number[] = [];
     const indices: number[] = [];
 
-    const colShadow = CNC_PALETTE.shadow;
-    const colStock  = CNC_PALETTE.stock;
-    const colLight  = CNC_PALETTE.highlight;
     const maxCutDepth = Math.max(0.01, stockTopZ - min[2]);
 
-    // 1. Top Relief Surface Grid with Palette Interpolation
+    // 1. Top Relief Surface Grid with Authentic Natural Wood & Cavity Shading
     for (let gy = 0; gy < gridResY; gy++) {
         const yFrac = gy / (gridResY - 1);
         const py = stockMinY + yFrac * stockHeight;
@@ -294,17 +315,37 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
             const pz = smoothedGrid[gy * gridResX + gx];
 
             vertices.push(px, py, pz);
-            uvs.push(xFrac * 2, yFrac * 2);
+            uvs.push(xFrac * 2.5, yFrac * 2.5);
 
-            // Shading: Top is Highlight/Stock, Crevices fade smoothly to Shadow #9A6B3F
-            const depthRatio = Math.max(0, Math.min(1, (stockTopZ - pz) / maxCutDepth));
-            const c = new THREE.Color();
-            if (depthRatio < 0.25) {
-                c.copy(colLight).lerp(colStock, depthRatio / 0.25);
+            // Shading:
+            // Uncarved surface = clean wood tone (1.0, 1.0, 1.0)
+            // Carved pocket interior = rich warm chocolate / walnut brown with concentric tool swirl rings (matching reference image)
+            const depth = stockTopZ - pz;
+
+            if (depth < 0.04) {
+                // Top surface untouched
+                colors.push(1.0, 1.0, 1.0);
             } else {
-                c.copy(colStock).lerp(colShadow, (depthRatio - 0.25) / 0.75);
+                // Rich warm roasted chocolate / walnut brown cavity shading matching reference image
+                const dNorm = Math.min(1.0, depth / Math.max(0.1, maxCutDepth));
+                const cavityR = 0.50 + (1.0 - dNorm) * 0.24;
+                const cavityG = 0.36 + (1.0 - dNorm) * 0.19;
+                const cavityB = 0.24 + (1.0 - dNorm) * 0.15;
+
+                // Authentic concentric circular tool swirls & stepover marks inside recessed pockets
+                const swirlFreq = 1.35;
+                const localSwirl = Math.sin(Math.sqrt(((px - stockMinX) % 32 - 16) ** 2 + ((py - stockMinY) % 32 - 16) ** 2) * swirlFreq);
+                const ringFactor = 0.93 + 0.07 * (localSwirl * 0.5 + 0.5);
+
+                // Soft ambient contact darkening
+                const ao = 0.88 + 0.12 * (1.0 - dNorm);
+
+                colors.push(
+                    Math.max(0, Math.min(1, cavityR * ringFactor * ao)),
+                    Math.max(0, Math.min(1, cavityG * ringFactor * ao)),
+                    Math.max(0, Math.min(1, cavityB * ringFactor * ao))
+                );
             }
-            colors.push(c.r, c.g, c.b);
         }
     }
 
@@ -332,7 +373,7 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
             x0, y0, zBot0,
             x1, y1, zBot1
         );
-        for (let i = 0; i < 4; i++) colors.push(colStock.r * 0.88, colStock.g * 0.88, colStock.b * 0.88);
+        for (let i = 0; i < 4; i++) colors.push(0.85, 0.82, 0.78);
         uvs.push(0, 1, 1, 1, 0, 0, 1, 0);
         indices.push(baseIdx, baseIdx + 1, baseIdx + 2);
         indices.push(baseIdx + 1, baseIdx + 3, baseIdx + 2);
@@ -383,7 +424,7 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
         stockMinX, stockMaxY, stockBottomZ,
         stockMaxX, stockMaxY, stockBottomZ
     );
-    for (let i = 0; i < 4; i++) colors.push(colShadow.r, colShadow.g, colShadow.b);
+    for (let i = 0; i < 4; i++) colors.push(0.7, 0.65, 0.6);
     uvs.push(0, 0, 1, 0, 0, 1, 1, 1);
     indices.push(basePlateIdx, basePlateIdx + 2, basePlateIdx + 1);
     indices.push(basePlateIdx + 1, basePlateIdx + 2, basePlateIdx + 3);
@@ -399,9 +440,9 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     const woodMaterial = new THREE.MeshStandardMaterial({
         map: diffuse,
         bumpMap: bump,
-        bumpScale: 0.45,
-        roughness: 0.52,
-        metalness: 0.02,
+        bumpScale: 0.38,
+        roughness: 0.42,
+        metalness: 0.03,
         vertexColors: true,
         side: THREE.DoubleSide,
     });
@@ -411,23 +452,23 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     stockMesh.receiveShadow = true;
     meshGroup.add(stockMesh);
 
-    // 4. Soft Contact Shadow
-    const shadowGeo = new THREE.PlaneGeometry(stockWidth * 1.12, stockHeight * 1.12);
+    // 4. Soft Contact Shadow on Spoilboard
+    const shadowGeo = new THREE.PlaneGeometry(stockWidth * 1.15, stockHeight * 1.15);
     const canvasShadow = document.createElement('canvas');
-    canvasShadow.width = 64;
-    canvasShadow.height = 64;
+    canvasShadow.width = 128;
+    canvasShadow.height = 128;
     const sCtx = canvasShadow.getContext('2d')!;
-    const grad = sCtx.createRadialGradient(32, 32, 12, 32, 32, 32);
-    grad.addColorStop(0, 'rgba(0,0,0,0.6)');
-    grad.addColorStop(0.55, 'rgba(0,0,0,0.18)');
+    const grad = sCtx.createRadialGradient(64, 64, 24, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+    grad.addColorStop(0.5, 'rgba(0,0,0,0.22)');
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     sCtx.fillStyle = grad;
-    sCtx.fillRect(0, 0, 64, 64);
+    sCtx.fillRect(0, 0, 128, 128);
     const shadowTex = new THREE.CanvasTexture(canvasShadow);
     const shadowMat = new THREE.MeshBasicMaterial({
         map: shadowTex,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.6,
         depthWrite: false,
     });
     const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
@@ -438,24 +479,69 @@ export function createRealisticWorkpiece(parsed: ParsedToolpath): RealisticWorkp
     );
     meshGroup.add(shadowMesh);
 
-    // 5. Studio Lighting with warm key highlight & cool fill
-    const ambientLight = new THREE.AmbientLight(0xffeedd, 0.75);
+    // 5. Studio Lighting Setup (Rich, warm key highlight, cool sky fill & rim light)
+    const ambientLight = new THREE.AmbientLight(0xffeedb, 0.90);
 
-    const keyLight = new THREE.DirectionalLight(0xfff7ea, 1.4);
+    const keyLight = new THREE.DirectionalLight(0xfff8ee, 1.45);
     keyLight.position.set(
-        stockMinX - stockWidth * 0.5,
-        stockMinY - stockHeight * 0.7,
-        stockTopZ + Math.max(stockWidth, stockHeight) * 1.5
+        stockMinX - stockWidth * 0.4,
+        stockMinY - stockHeight * 0.6,
+        stockTopZ + Math.max(stockWidth, stockHeight) * 1.6
     );
 
-    const fillLight = new THREE.DirectionalLight(0xdbe9fe, 0.6);
+    const fillLight = new THREE.DirectionalLight(0xdce7f5, 0.45);
     fillLight.position.set(
         stockMaxX + stockWidth * 0.6,
         stockMaxY + stockHeight * 0.6,
         stockTopZ + Math.max(stockWidth, stockHeight) * 0.8
     );
 
-    lightsGroup.add(ambientLight, keyLight, fillLight);
+    const rimLight = new THREE.DirectionalLight(0xffedd5, 0.35);
+    rimLight.position.set(
+        (stockMinX + stockMaxX) / 2,
+        stockMaxY + stockHeight * 0.8,
+        stockTopZ + Math.max(stockWidth, stockHeight) * 1.1
+    );
+
+    lightsGroup.add(ambientLight, keyLight, fillLight, rimLight);
 
     return { meshGroup, lightsGroup };
+}
+
+export function disposeRealisticWorkpiece(res: RealisticWorkpieceResult | null): void {
+    if (!res) return;
+    if (res.meshGroup) {
+        res.meshGroup.traverse((obj) => {
+            if ((obj as THREE.Mesh).isMesh) {
+                const m = obj as THREE.Mesh;
+                if (m.geometry) {
+                    const pos = m.geometry.getAttribute('position');
+                    if (pos && typeof (pos as any).dispose === 'function') (pos as any).dispose();
+                    const uv = m.geometry.getAttribute('uv');
+                    if (uv && typeof (uv as any).dispose === 'function') (uv as any).dispose();
+                    const norm = m.geometry.getAttribute('normal');
+                    if (norm && typeof (norm as any).dispose === 'function') (norm as any).dispose();
+                    m.geometry.dispose();
+                }
+                if (Array.isArray(m.material)) {
+                    m.material.forEach((mat) => {
+                        if ((mat as any).map) (mat as any).map.dispose();
+                        if ((mat as any).bumpMap) (mat as any).bumpMap.dispose();
+                        mat.dispose();
+                    });
+                } else if (m.material) {
+                    if ((m.material as any).map) (m.material as any).map.dispose();
+                    if ((m.material as any).bumpMap) (m.material as any).bumpMap.dispose();
+                    m.material.dispose();
+                }
+            }
+        });
+    }
+    if (res.lightsGroup) {
+        res.lightsGroup.traverse((obj) => {
+            if ((obj as THREE.Light).isLight) {
+                (obj as THREE.Light).dispose?.();
+            }
+        });
+    }
 }

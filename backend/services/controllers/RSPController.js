@@ -262,6 +262,10 @@ class RSPController extends EventEmitter {
             firmwareType: this.type,
             firmwareVersion: 'RSP (Reliable Stream Protocol)',
         });
+
+        // Request initial status telemetry frame to synchronize stream seq
+        // (consumes seq 0 with telemetry request so user's first jog is seq >= 1)
+        this._requestStatus();
     }
 
     // ------------------------------------------------------------------
@@ -630,7 +634,7 @@ class RSPController extends EventEmitter {
      */
     command(cmd, ...args) {
         try {
-            this._dispatch(cmd, args);
+            return this._dispatch(cmd, args);
         } catch (exc) {
             logger.error(`[RSP] command "${cmd}" failed: ${exc.message || exc}`);
             // Emit a plain object, not the raw Error -- Error.message is
@@ -649,7 +653,7 @@ class RSPController extends EventEmitter {
         switch (cmd) {
             case 'jog': {
                 const p = args[0] || {};
-                const feed = p.feedRate || 500;
+                const feed = Math.min(Number(p.feedRate) || 500, 10000);
                 const axes = [
                     ['x', AXIS_X], ['y', AXIS_Y], ['z', AXIS_Z],
                 ];
@@ -685,6 +689,28 @@ class RSPController extends EventEmitter {
             case 'home':
                 this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL));
                 break;
+            case 'homing:x':
+            case 'home:x':
+                this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_BIT_X));
+                break;
+            case 'homing:y':
+            case 'home:y':
+                this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_BIT_Y));
+                break;
+            case 'homing:z':
+            case 'home:z':
+                this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_BIT_Z));
+                break;
+
+            case 'estop':
+            case 'emergency_stop':
+                this._lastAlarmEmitted = 'estop';
+                if (this.job) this.job.abort();
+                this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
+                this._fireAndForget(defs.OP_SOFT_RESET, Buffer.alloc(0));
+                this.emit('workflow:state', 'alarm');
+                this.emit('console', '🛑 [RSP] EMERGENCY STOP sent.');
+                break;
 
             // 'motor:reset'/'motor:resetAll'/'estop:clear'/'limit:clear' used
             // to fall through to the unknown-command default (silently
@@ -719,6 +745,15 @@ class RSPController extends EventEmitter {
                 this.stream.sendCommand(defs.OP_UNLOCK, Buffer.alloc(0), { timeout: 3.0 })
                     .then(() => {
                         this._lastAlarmEmitted = null;
+                        if (this.state && this.state.status) {
+                            if (this.state.status.state === defs.ST_ALARM ||
+                                this.state.status.state === defs.ST_ESTOP ||
+                                this.state.status.state === defs.ST_FAULT) {
+                                this.state.status.state = defs.ST_IDLE;
+                                this.state.status.activeState = 'Idle';
+                                this.state.status.estop = false;
+                            }
+                        }
                         this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
                         if (this._resumeLine > 1) {
                             this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
@@ -746,9 +781,15 @@ class RSPController extends EventEmitter {
                 if (this.job) this.job.resume();
                 break;
 
+            case 'zero':
             case 'wcs:zero': {
                 const p = args[0] || {};
                 let mask = 0;
+                if (Array.isArray(p.axes)) {
+                    if (p.axes.includes('X') || p.axes.includes('x')) mask |= AXIS_BIT_X;
+                    if (p.axes.includes('Y') || p.axes.includes('y')) mask |= AXIS_BIT_Y;
+                    if (p.axes.includes('Z') || p.axes.includes('z')) mask |= AXIS_BIT_Z;
+                }
                 if (p.x !== undefined) mask |= AXIS_BIT_X;
                 if (p.y !== undefined) mask |= AXIS_BIT_Y;
                 if (p.z !== undefined) mask |= AXIS_BIT_Z;
@@ -756,7 +797,17 @@ class RSPController extends EventEmitter {
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(mask));
                 break;
             }
+            case 'zero:x':
+                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_X));
+                break;
+            case 'zero:y':
+                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Y));
+                break;
+            case 'zero:z':
+                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Z));
+                break;
             case 'wcs:zeroAll':
+            case 'zero:all':
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_MASK_ALL));
                 break;
 
@@ -782,6 +833,15 @@ class RSPController extends EventEmitter {
                 if (this.job) this.job.resetProgress();
                 this._currentLine = 0;
                 this._loadedName = name || '';
+
+                // Ensure machine is released from any residual feed hold so it is ready in ST_IDLE
+                if (this.state && this.state.status && (this.state.status.state === defs.ST_HOLD || this.state.status.feedHold)) {
+                    this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                    this.state.status.state = defs.ST_IDLE;
+                    this.state.status.activeState = 'Idle';
+                    this.state.status.feedHold = 0;
+                }
+
                 // Firmware (easycnc_protocol.c, GcodeMove struct) has no
                 // arc-center field and rejects G2/G3 outright. Linearize
                 // here so ANY file the user loads just runs -- this only
@@ -836,33 +896,34 @@ class RSPController extends EventEmitter {
                         logger.info(`[RSP] resumeLine ${this._resumeLine} exceeds total lines ${totalLines}, starting fresh from line 1`);
                         this._resumeLine = 0;
                         this._resumeGcode = null;
-                        this._startJob(this._loadedGcode);
+                        return this._startJob(this._loadedGcode);
                     } else {
                         logger.info(`[RSP] gcode:start resuming stopped job at line ${this._resumeLine}`);
                         this.emit('console', `▶️ Resuming from line ${this._resumeLine} (where it was stopped).`);
-                        this._startJob(this._loadedGcode, this._resumeLine);
+                        return this._startJob(this._loadedGcode, this._resumeLine);
                     }
                 } else {
-                    this._startJob(this._loadedGcode);
+                    return this._startJob(this._loadedGcode);
                 }
-                break;
             }
 
             case 'gcode:startFromLine': {
                 const lineNumber = args[0];
-                this._startJob(this._loadedGcode, typeof lineNumber === 'number' ? lineNumber : 0);
-                break;
+                return this._startJob(this._loadedGcode, typeof lineNumber === 'number' ? lineNumber : 0);
             }
 
             case 'gcode:pause':
                 if (this.job) this.job.pause();
                 this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
                 this.emit('sender:pause');
+                this.emit('workflow:state', 'paused');
                 break;
 
             case 'gcode:resume':
                 if (this.job) this.job.resume();
                 this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                this.emit('sender:resume');
+                this.emit('workflow:state', 'running');
                 break;
 
             case 'gcode:stop': {
@@ -873,6 +934,15 @@ class RSPController extends EventEmitter {
                 const stopLine = this.job ? this.job.nextLineToRun() : 0;
                 const totalLines = (this.job && this.job.totalLineCount) || 0;
                 if (this.job) this.job.abort();
+                // Release any feed hold so firmware returns to ST_IDLE and doesn't get stuck in ST_HOLD
+                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                this.emit('sender:end', { aborted: true });
+                this.emit('workflow:state', 'idle');
+                if (this.state && this.state.status && (this.state.status.state === defs.ST_HOLD || this.state.status.state === defs.ST_STOPPING)) {
+                    this.state.status.state = defs.ST_IDLE;
+                    this.state.status.activeState = 'Idle';
+                    this.state.status.feedHold = 0;
+                }
                 if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
                     this._resumeLine = stopLine;
                     this._resumeGcode = this._loadedGcode;
@@ -1186,7 +1256,12 @@ class RSPController extends EventEmitter {
     _setFeedOverride(pct) {
         const clamped = Math.min(FEED_OVERRIDE_MAX, Math.max(FEED_OVERRIDE_MIN, pct));
         this._feedOverridePct = clamped;
+        if (this.state && this.state.status) {
+            this.state.status.feedOverridePct = clamped;
+        }
         this._fireAndForget(defs.OP_SET_FEED_OVERRIDE, codec.buildFeedOverride(clamped));
+        this.emit('status', this.state);
+        this.emit('sender:status', { feedOverridePct: clamped });
     }
 
     /**
@@ -1214,45 +1289,12 @@ class RSPController extends EventEmitter {
         if (this.job.active) {
             logger.info('[RSP] gcode:start aborting previous active/paused job to restart/resume cleanly');
             this.job.abort();
-            await new Promise(r => setTimeout(r, 100));
         }
         if (gen !== this._startJobGeneration) {
-            logger.info('[RSP] gcode:start superseded by a newer start request during post-abort settle -- bailing out');
+            logger.info('[RSP] gcode:start superseded by a newer start request -- bailing out');
             return;
         }
-        // If the machine is still running or actively decelerating from a
-        // just-aborted move (ST_STOPPING), wait for it to actually reach
-        // ST_IDLE before pipelining the next job's moves. ST_STOPPING was
-        // previously NOT in this condition -- a job aborted immediately
-        // before this call could leave the machine still winding down while
-        // this code treated it as already idle and started sending.
-        if (this.state && this.state.status && (
-            this.state.status.state === defs.ST_RUNNING ||
-            this.state.status.state === defs.ST_STREAMING ||
-            this.state.status.state === defs.ST_STOPPING
-        )) {
-            logger.info(`[RSP] Machine is still in state ${this.state.status.activeState || this.state.status.state} -- waiting for motion to complete before starting job...`);
-            const startWait = Date.now();
-            while (this.state.status && (
-                this.state.status.state === defs.ST_RUNNING ||
-                this.state.status.state === defs.ST_STREAMING ||
-                this.state.status.state === defs.ST_STOPPING
-            )) {
-                if (gen !== this._startJobGeneration) {
-                    logger.info('[RSP] gcode:start superseded by a newer start request while waiting for idle -- bailing out');
-                    return;
-                }
-                if (Date.now() - startWait > 8000) {
-                    logger.warn('[RSP] Timed out waiting for machine to become idle before starting job.');
-                    break;
-                }
-                await new Promise(r => setTimeout(r, 100));
-            }
-        }
-        if (gen !== this._startJobGeneration) {
-            logger.info('[RSP] gcode:start superseded by a newer start request after idle-wait -- bailing out');
-            return;
-        }
+
         const lines = String(gcodeText || '').split(/\r?\n/);
         // Reset so the G-code panel doesn't show the previous job's last
         // highlighted line for the brief window before the first EV_EXECUTED
@@ -1283,6 +1325,48 @@ class RSPController extends EventEmitter {
             wcs: modal.wcs,
             toolNumber: modal.toolNumber,
         });
+        this.emit('workflow:state', 'running');
+
+        // If the machine is still running or actively decelerating from a
+        // just-aborted move (ST_STOPPING / ST_HOLD), wait for it to actually reach
+        // ST_IDLE before pipelining the next job's moves.
+        if (this.state && this.state.status && (
+            this.state.status.state === defs.ST_RUNNING ||
+            this.state.status.state === defs.ST_STREAMING ||
+            this.state.status.state === defs.ST_STOPPING ||
+            this.state.status.state === defs.ST_HOLD
+        )) {
+            if (this.state.status.state === defs.ST_HOLD || this.state.status.feedHold) {
+                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+            }
+            logger.info(`[RSP] Machine is still in state ${this.state.status.activeState || this.state.status.state} -- waiting for motion to complete before starting job...`);
+            const startWait = Date.now();
+            while (this.state.status && (
+                this.state.status.state === defs.ST_RUNNING ||
+                this.state.status.state === defs.ST_STREAMING ||
+                this.state.status.state === defs.ST_STOPPING ||
+                this.state.status.state === defs.ST_HOLD
+            )) {
+                if (gen !== this._startJobGeneration) {
+                    logger.info('[RSP] gcode:start superseded by a newer start request while waiting for idle -- bailing out');
+                    return;
+                }
+                if (Date.now() - startWait > 4000) {
+                    logger.warn('[RSP] Timed out waiting for machine to become idle before starting job. Forcing OP_RESUME.');
+                    this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                    this.state.status.state = defs.ST_IDLE;
+                    this.state.status.activeState = 'Idle';
+                    this.state.status.feedHold = 0;
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 100));
+            }
+        }
+        if (gen !== this._startJobGeneration) {
+            logger.info('[RSP] gcode:start superseded by a newer start request after idle-wait -- bailing out');
+            return;
+        }
+
         this.job.start();
     }
 

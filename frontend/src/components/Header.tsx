@@ -130,9 +130,17 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
                             S <span className="metric-val text-primary font-bold">{(spindleSpeed * 185).toFixed(0)}</span> RPM
                         </div>
                         {firmwareType !== 'unknown' && (
-                            <div className="metric-inline text-xs text-text-dim font-mono">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    useCNCStore.getState().setSettingsTab('firmware');
+                                    setActiveTab('Settings');
+                                }}
+                                className="metric-inline text-xs text-text-dim font-mono hover:text-primary transition-colors cursor-pointer bg-transparent border-0 p-0"
+                                title="Click to open Firmware & Updates"
+                            >
                                 <span className="metric-val text-primary font-bold">{firmwareType}</span> {firmwareVersion}
-                            </div>
+                            </button>
                         )}
                     </>
                 )}

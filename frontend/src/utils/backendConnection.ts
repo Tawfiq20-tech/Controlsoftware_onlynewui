@@ -248,7 +248,6 @@ function _wireControllerToStore(): void {
                     y: state.status.wpos.y,
                     z: state.status.wpos.z,
                 };
-                console.log('[Position Update] Work:', newPos);
                 s.setPosition(newPos);
             }
 
@@ -259,7 +258,6 @@ function _wireControllerToStore(): void {
                     y: state.status.mpos.y,
                     z: state.status.mpos.z,
                 };
-                console.log('[Position Update] Machine:', newMachinePos);
                 s.setMachinePosition(newMachinePos);
             }
 
@@ -340,6 +338,15 @@ function _wireControllerToStore(): void {
     // machineState (which reflects firmware activeState, not the streamer).
     controller.on('sender:start', () => {
         getStore().setJobActive(true);
+        getStore().setMachineState('running');
+    });
+
+    controller.on('sender:pause', () => {
+        getStore().setMachineState('paused');
+    });
+
+    controller.on('sender:resume', () => {
+        getStore().setMachineState('running');
     });
 
     controller.on('sender:end', (data: unknown) => {
@@ -686,8 +693,14 @@ export function backendJobLoad(content: string): void {
 
 export function backendJobStart(): void { controller.startJob(); }
 export function backendJobStartFromLine(line: number): void { controller.startFromLine(line); }
-export function backendJobPause(): void { controller.pauseJob(); }
-export function backendJobResume(): void { controller.resumeJob(); }
+export function backendJobPause(): void {
+    useCNCStore.getState().setMachineState('paused');
+    controller.pauseJob();
+}
+export function backendJobResume(): void {
+    useCNCStore.getState().setMachineState('running');
+    controller.resumeJob();
+}
 export function backendJobStop(): void { controller.stopJob(); }
 
 export function backendJobQueue(content: string, _startFromLine = 0): void {

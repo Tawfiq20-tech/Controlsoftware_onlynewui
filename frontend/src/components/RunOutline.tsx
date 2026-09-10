@@ -151,7 +151,7 @@ interface RunOutlineProps {
 }
 
 export default function RunOutline({ onClose }: RunOutlineProps) {
-    const { rawGcodeContent, connected, addConsoleLog, appPreferences } = useCNCStore();
+    const { rawGcodeContent, fileInfo, connected, addConsoleLog, appPreferences } = useCNCStore();
     const [mode, setMode] = useState<'square' | 'detailed'>(
         (appPreferences?.outlineStyle?.toLowerCase() as 'square' | 'detailed') ?? 'square'
     );
@@ -173,11 +173,25 @@ export default function RunOutline({ onClose }: RunOutlineProps) {
             outlineGcode = generateDetailedOutline(rawGcodeContent, safeZ, feedRate);
         }
 
+        const origFileName = fileInfo?.name || 'job.gcode';
+        const origGcode = rawGcodeContent;
+
         addConsoleLog('info', `Running ${mode} outline at Z=${safeZ}mm, F=${feedRate}`);
         controller.loadFile('outline.gcode', outlineGcode);
         setTimeout(() => {
             controller.command('gcode:start');
             addConsoleLog('success', 'Outline run started');
+
+            const restoreOriginal = () => {
+                controller.off('sender:end', restoreOriginal);
+                controller.off('sender:error', restoreOriginal);
+                if (origGcode) {
+                    addConsoleLog('info', `Restoring original design: ${origFileName}`);
+                    controller.loadFile(origFileName, origGcode);
+                }
+            };
+            controller.on('sender:end', restoreOriginal);
+            controller.on('sender:error', restoreOriginal);
         }, 200);
 
         onClose();

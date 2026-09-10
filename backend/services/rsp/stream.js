@@ -56,11 +56,9 @@ const {
 // honors execution credits (JobStream.depth) so we never overrun the
 // device planner -- ACK means "accepted", not "slot freed".
 const DEFAULT_WINDOW = 16;
-// Widened from 0.10 to 0.25 (2026-09-09): at 115200 baud on Windows USB-CDC,
-// 16 frames in flight (~800 bytes outbound + 320 bytes ACK inbound) takes >120-150ms
-// round-trip. A 100ms RTO caused spurious retransmission storms on every multi-frame
-// burst, clogging the serial link.
-const DEFAULT_RTO_S = 0.25;
+// Widened from 0.25 to 0.75: accommodates USB CDC startup turnaround latency
+// and prevents premature retransmission of commands before initial ACK arrives.
+const DEFAULT_RTO_S = 0.75;
 const MAX_RETRIES = 8;
 const DEFAULT_HEARTBEAT_S = 1.0;
 // Absolute cap on how long any single command may sit unresolved, regardless

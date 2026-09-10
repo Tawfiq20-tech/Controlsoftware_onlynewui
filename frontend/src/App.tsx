@@ -19,7 +19,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
 import { useCNCStore } from './stores/cncStore';
 import controller from './utils/controller';
-import { GCodeParser } from './utils/gcodeParser';
+import { parseGcodeAsync } from './utils/gcodeParser';
 
 function AppInner() {
     const [activeHeaderTab, setActiveHeaderTab] = useState('Prepare');
@@ -50,6 +50,7 @@ function AppInner() {
         fileInfo,
         gcode,
         setGcode,
+        setParsedToolpath,
         setToolpathSegments,
         addConsoleLog,
     } = useCNCStore();
@@ -59,6 +60,13 @@ function AppInner() {
         if (!rawGcodeContent) return;
         if (fileLoadedBackend) return;
         controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
+
+        const timer = setTimeout(() => {
+            if (useCNCStore.getState().connected && !useCNCStore.getState().fileLoadedBackend && rawGcodeContent) {
+                controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
+            }
+        }, 1500);
+        return () => clearTimeout(timer);
     }, [connected, controllerReady, rawGcodeContent, fileLoadedBackend, fileInfo?.name]);
 
     // rawGcodeContent/fileInfo survive a page refresh via localStorage
@@ -72,16 +80,19 @@ function AppInner() {
     // parsed this session.
     useEffect(() => {
         if (!rawGcodeContent || gcode.length > 0) return;
-        try {
-            const result = new GCodeParser().parseGCode(rawGcodeContent);
-            if (result.lines && result.lines.length > 0) {
-                setGcode(result.lines);
-                setToolpathSegments(result.segments);
-                addConsoleLog('info', `Restored ${result.lines.length} G-code lines from last session`);
+        (async () => {
+            try {
+                const result = await parseGcodeAsync(rawGcodeContent);
+                if (result.lines && result.lines.length > 0) {
+                    setGcode(result.lines);
+                    setParsedToolpath(result.parsedToolpath);
+                    setToolpathSegments(result.segments);
+                    addConsoleLog('info', `Restored ${result.lines.length} G-code lines from last session`);
+                }
+            } catch (error) {
+                console.error('Error re-parsing restored G-code:', error);
             }
-        } catch (error) {
-            console.error('Error re-parsing restored G-code:', error);
-        }
+        })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -98,8 +109,17 @@ function AppInner() {
             if (target.closest('input, textarea, [contenteditable="true"]')) return;
             e.preventDefault();
         };
+        const blockCopy = (e: ClipboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target && target.closest('input, textarea, [contenteditable="true"]')) return;
+            e.preventDefault();
+        };
         document.addEventListener('contextmenu', blockContextMenu);
-        return () => document.removeEventListener('contextmenu', blockContextMenu);
+        document.addEventListener('copy', blockCopy);
+        return () => {
+            document.removeEventListener('contextmenu', blockContextMenu);
+            document.removeEventListener('copy', blockCopy);
+        };
     }, []);
 
     // Activate global keyboard shortcuts — Ctrl+O triggers file open via sidebar

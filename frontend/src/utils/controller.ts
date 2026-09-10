@@ -600,6 +600,14 @@ class Controller {
             this._emit('sender:start', data);
         });
 
+        this.socket.on('sender:pause', () => {
+            this._emit('sender:pause');
+        });
+
+        this.socket.on('sender:resume', () => {
+            this._emit('sender:resume');
+        });
+
         this.socket.on('sender:end', (data: unknown) => {
             this._emit('sender:end', data);
         });

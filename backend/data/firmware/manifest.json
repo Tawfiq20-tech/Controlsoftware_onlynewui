@@ -1,0 +1,16 @@
+{
+  "board": "STM32H723 (fw_m3)",
+  "version": "1.1.0",
+  "releaseDate": "2026-09-10",
+  "title": "Safety Hardening & Async Motion Release",
+  "changelog": [
+    "Hardware IWDG Watchdog enabled — board safely auto-resets on firmware hang",
+    "Async TIM2/TIM5 motion engine — instant jog acknowledgments with zero latency",
+    "Fault handler safety de-energize — drives disabled before halting",
+    "E-stop / TIM2 ISR completion race resolved",
+    "Feed-override multiplier dynamically wired into motion pipeline"
+  ],
+  "minSupportedVersion": "1.0.0",
+  "hexFile": "fw_m3.hex",
+  "sha256": "ee64e5fc2b35fc851469613930ee6c1c4886a17f835532e82ed71ac3228d4b37"
+}

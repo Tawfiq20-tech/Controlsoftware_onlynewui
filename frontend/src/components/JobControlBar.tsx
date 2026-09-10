@@ -10,6 +10,7 @@ import {
 } from '../utils/backendConnection';
 import StartFromLine from './StartFromLine';
 import RunOutline from './RunOutline';
+import controller from '../utils/controller';
 import './JobControlBar.css';
 
 export default function JobControlBar() {
@@ -24,6 +25,8 @@ export default function JobControlBar() {
         jobProgress,
         currentLine,
         fileLoadedBackend,
+        fileInfo,
+        rawGcodeContent,
         safetyValidation,
         safetyOverrideArmed,
         addConsoleLog,
@@ -41,6 +44,14 @@ export default function JobControlBar() {
         if (!connected) return;
         if (!jobActive) {
             if (!fileLoadedBackend) {
+                if (rawGcodeContent) {
+                    controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
+                    addConsoleLog('info', 'Syncing G-code to controller and starting job...');
+                    setTimeout(() => {
+                        backendJobStart();
+                    }, 250);
+                    return;
+                }
                 addConsoleLog('warning', 'File still loading on backend — try again in a moment.');
                 return;
             }
@@ -79,15 +90,9 @@ export default function JobControlBar() {
 
     // Enable gate (gsender pattern):
     //  - serial connected
-    //  - backend feeder has the lines (not just frontend parse)
-    //  - no other job currently streaming
+    //  - G-code parsed and present in store
     //  - machine is not in alarm
-    // When jobActive is true the button stays enabled so it can pause/resume.
-    // ECSS Module 1 — block Start when the validator says the toolpath
-    // would step outside the machine envelope. Stays disabled until a
-    // touch-off or new file fixes the verdict — UNLESS the one-shot
-    // override has been armed (Arm one-shot override button in the
-    // banner), which clears Start for the next press.
+    //  - no ECSS bounds violation
     const ecssBlocked = !!safetyValidation?.blocked
         && !safetyValidation?.cleared
         && !jobActive
@@ -95,7 +100,6 @@ export default function JobControlBar() {
     const isJobDisabled =
         !connected ||
         gcode.length === 0 ||
-        !fileLoadedBackend ||
         machineState === 'alarm' ||
         ecssBlocked;
     const canStop = connected && (jobActive || machineState === 'paused');
@@ -133,8 +137,8 @@ export default function JobControlBar() {
                 <button
                     className="job-outline-btn"
                     onClick={() => setShowRunOutline(true)}
-                    disabled={!connected}
-                    title="Run Outline"
+                    disabled={!connected || (jobActive && machineState !== 'paused')}
+                    title="Run Outline — Trace workpiece boundary perimeter at safe Z height"
                 >
                     <Maximize2 size={14} />
                 </button>
@@ -143,7 +147,7 @@ export default function JobControlBar() {
                     className="job-startfrom-btn"
                     onClick={() => setShowStartFromLine(true)}
                     disabled={!connected || gcode.length === 0}
-                    title="Start From Line"
+                    title="Start From Line — Resume carve job starting from a specific G-code line"
                 >
                     <SkipForward size={14} />
                 </button>
@@ -152,7 +156,7 @@ export default function JobControlBar() {
                     className="job-stop-btn"
                     onClick={handleStop}
                     disabled={!canStop}
-                    title="Stop"
+                    title="Stop Job — Stop current carve and unlock file management"
                 >
                     <Square size={14} />
                 </button>

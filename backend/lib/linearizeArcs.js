@@ -70,7 +70,14 @@ function tessellateArc(sx, sy, ex, ey, i, j, clockwise) {
  * @returns {{ text: string, arcCount: number, segmentCount: number }}
  */
 function linearizeArcs(gcodeText) {
-    const lines = String(gcodeText).split(/\r?\n/);
+    const raw = String(gcodeText);
+    // 3D finishing files with hundreds of thousands of lines almost never
+    // contain arcs. Fast-path out immediately without allocating or regex scanning:
+    if (!/[Gg]0?[23]\b/.test(raw)) {
+        return { text: raw, arcCount: 0, segmentCount: 0 };
+    }
+
+    const lines = raw.split(/\r?\n/);
     const out = [];
     let curX = 0;
     let curY = 0;
@@ -87,9 +94,11 @@ function linearizeArcs(gcodeText) {
         if (explicitMotion !== null) motionMode = explicitMotion;
 
         if (!isArc) {
-            const toks = parseTokens(line);
-            if (toks.X !== undefined) curX = toks.X;
-            if (toks.Y !== undefined) curY = toks.Y;
+            if (/[xyXY]/.test(line)) {
+                const toks = parseTokens(line);
+                if (toks.X !== undefined) curX = toks.X;
+                if (toks.Y !== undefined) curY = toks.Y;
+            }
             out.push(line);
             continue;
         }

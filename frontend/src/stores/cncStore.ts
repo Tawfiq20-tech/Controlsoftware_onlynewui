@@ -17,6 +17,7 @@ import type {
 import type { AlarmInfo } from '../utils/controller';
 import { getTimestamp } from '../utils/formatters';
 import { jogDistanceStorage, jogSpeedStorage, coordSystemStorage, gcodeFileStorage } from '../utils/localStorage';
+import type { ParsedToolpath } from '../utils/gcodeParser';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type CoordSystem = 'Z' | 'XYZ' | 'XY' | 'X' | 'Y';
@@ -97,10 +98,13 @@ interface CNCStore {
     // G-Code & File
     gcode: GCodeLine[];
     setGcode: (gcode: GCodeLine[]) => void;
+    parsedToolpath: ParsedToolpath | null;
+    setParsedToolpath: (toolpath: ParsedToolpath | null) => void;
     toolpathSegments: ToolpathSegment[];
     setToolpathSegments: (segments: ToolpathSegment[]) => void;
     fileInfo: FileInfo | null;
     setFileInfo: (info: FileInfo | null) => void;
+    cleanupForNewFile: () => void;
 
     // 3D View
     viewMode3D: ViewMode3D;
@@ -225,6 +229,10 @@ interface CNCStore {
     };
     setProbeWizardStatus: (status: 'idle' | 'running' | 'success' | 'error', meta?: { routine?: string; plateType?: string }) => void;
 
+    // Settings active tab
+    settingsTab: string;
+    setSettingsTab: (tab: string) => void;
+
     // Firmware (EEPROM) settings: id -> value
     firmwareSettings: Record<number, string>;
     setFirmwareSetting: (id: number, value: string) => void;
@@ -322,7 +330,6 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // Position
     position: { x: 0, y: 0, z: 0 },
     setPosition: (position) => {
-        console.log('[Store] Setting work position:', position);
         set({ position: { ...position } });
     },
     updatePosition: (axis, value) =>
@@ -360,6 +367,8 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // G-Code & File
     gcode: [],
     setGcode: (gcode) => set({ gcode }),
+    parsedToolpath: null,
+    setParsedToolpath: (parsedToolpath) => set({ parsedToolpath }),
     toolpathSegments: [],
     setToolpathSegments: (toolpathSegments) => set({ toolpathSegments }),
     fileInfo: restoredGcodeFile
@@ -371,6 +380,24 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
         gcodeFileStorage.save(
             fileInfo && content ? { name: fileInfo.name, size: fileInfo.size, lines: fileInfo.lines, content } : null
         );
+    },
+    cleanupForNewFile: () => {
+        set({
+            gcode: [],
+            parsedToolpath: null,
+            toolpathSegments: [],
+            rawGcodeContent: null,
+            fileInfo: null,
+            fileLoadedBackend: false,
+            jobActive: false,
+            jobProgress: 0,
+            currentLine: 0,
+            safetyValidation: null,
+            safetyWcsHealth: null,
+            safetyZRunaway: null,
+            safetyOverrideArmed: false,
+        });
+        gcodeFileStorage.save(null);
     },
 
     // 3D View
@@ -387,9 +414,13 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
         { type: 'system', text: 'Ready to connect...', time: getTimestamp() },
     ],
     addConsoleLog: (type, text) =>
-        set((state) => ({
-            consoleLines: [...state.consoleLines, { type, text, time: getTimestamp() }],
-        })),
+        set((state) => {
+            const newEntry = { type, text, time: getTimestamp() };
+            const prev = state.consoleLines;
+            return {
+                consoleLines: prev.length >= 500 ? [...prev.slice(prev.length - 499), newEntry] : [...prev, newEntry],
+            };
+        }),
     clearConsole: () => set({ consoleLines: [] }),
     consoleExpanded: false,
     setConsoleExpanded: (consoleExpanded) => set({ consoleExpanded }),
@@ -452,7 +483,6 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
 
     machinePosition: { x: 0, y: 0, z: 0 },
     setMachinePosition: (machinePosition) => {
-        console.log('[Store] Setting machine position:', machinePosition);
         set({ machinePosition: { ...machinePosition } });
     },
 
@@ -544,6 +574,10 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
             ...(status === 'running' && { lastRunAt: Date.now() }),
         },
     })),
+
+    // Settings active tab
+    settingsTab: 'appearance',
+    setSettingsTab: (tab) => set({ settingsTab: tab }),
 
     // Firmware (EEPROM) settings
     firmwareSettings: {},

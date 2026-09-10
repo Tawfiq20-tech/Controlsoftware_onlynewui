@@ -10,12 +10,14 @@ import {
 import './FeedOverrideControl.css';
 
 export default function FeedOverrideControl() {
-    const { connected, feedOverridePct, addConsoleLog } = useCNCStore();
+    const { connected, feedOverridePct, setFeedOverridePct, addConsoleLog } = useCNCStore();
 
-    const withLog = (fn: () => void, label: string) => () => {
+    const handleFeedChange = (fn: () => void, delta: number, label: string) => () => {
         if (!connected) return;
+        const nextPct = delta === 0 ? 100 : Math.min(150, Math.max(50, Math.round(feedOverridePct + delta)));
+        setFeedOverridePct(nextPct);
         fn();
-        addConsoleLog('info', `Feed override: ${label}`);
+        addConsoleLog('info', `Feed override: ${label} (${nextPct}%)`);
     };
 
     return (
@@ -29,7 +31,7 @@ export default function FeedOverrideControl() {
             <div className="feed-override-buttons">
                 <button
                     className="feed-override-btn"
-                    onClick={withLog(backendFeedOverrideCoarseMinus, '-10%')}
+                    onClick={handleFeedChange(backendFeedOverrideCoarseMinus, -10, '-10%')}
                     disabled={!connected}
                     title="Decrease feed 10%"
                 >
@@ -37,7 +39,7 @@ export default function FeedOverrideControl() {
                 </button>
                 <button
                     className="feed-override-btn"
-                    onClick={withLog(backendFeedOverrideFineMinus, '-1%')}
+                    onClick={handleFeedChange(backendFeedOverrideFineMinus, -1, '-1%')}
                     disabled={!connected}
                     title="Decrease feed 1%"
                 >
@@ -45,7 +47,7 @@ export default function FeedOverrideControl() {
                 </button>
                 <button
                     className="feed-override-btn reset"
-                    onClick={withLog(backendFeedOverrideReset, 'reset to 100%')}
+                    onClick={handleFeedChange(backendFeedOverrideReset, 0, 'reset to 100%')}
                     disabled={!connected}
                     title="Reset to 100%"
                 >
@@ -53,7 +55,7 @@ export default function FeedOverrideControl() {
                 </button>
                 <button
                     className="feed-override-btn"
-                    onClick={withLog(backendFeedOverrideFinePlus, '+1%')}
+                    onClick={handleFeedChange(backendFeedOverrideFinePlus, 1, '+1%')}
                     disabled={!connected}
                     title="Increase feed 1%"
                 >
@@ -61,7 +63,7 @@ export default function FeedOverrideControl() {
                 </button>
                 <button
                     className="feed-override-btn"
-                    onClick={withLog(backendFeedOverrideCoarsePlus, '+10%')}
+                    onClick={handleFeedChange(backendFeedOverrideCoarsePlus, 10, '+10%')}
                     disabled={!connected}
                     title="Increase feed 10%"
                 >

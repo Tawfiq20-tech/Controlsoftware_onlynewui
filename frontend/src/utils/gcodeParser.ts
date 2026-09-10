@@ -1,15 +1,11 @@
 import type { GCodeLine, ToolpathSegment } from '../types/cnc';
+import {
+    parseGcodeFileCore,
+    type ParsedToolpath,
+    type GCodeParseResult,
+} from '../workers/gcodeParser.worker';
 
-/**
- * Enhanced G-code parser with visualization support.
- *
- * v1.3 (Phase A) additions:
- *   - G2 / G3 arc parsing (IJK center-offset and R radius forms)
- *   - G17 / G18 / G19 plane selection (XY / XZ / YZ)
- *   - G92  (set position — applies a work offset)
- *   - G53  (one-shot machine coordinates — skips work offset)
- *   - Hard segment cap (MAX_SEGMENTS) — downsamples evenly if exceeded
- */
+export type { ParsedToolpath, GCodeParseResult };
 
 export interface GCodeFile {
     lines: GCodeLine[];
@@ -33,356 +29,104 @@ export interface GCodeFile {
     };
 }
 
-const MAX_SEGMENTS = 100_000;
-const ARC_SEGS_PER_TURN = 64;
-const ARC_MIN_SEGS = 6;
+/**
+ * Synchronous unified G-code parser.
+ * Produces lines, typed Float32 arrays for Three.js, segments, bounds, and stats in a single pass.
+ */
+export function parseGcodeFile(content: string): GCodeParseResult {
+    return parseGcodeFileCore(content);
+}
 
-type Plane = 'XY' | 'XZ' | 'YZ';
+// ── Web Worker Singleton & Async Dispatch ─────────────────────────────
+let workerInstance: Worker | null = null;
+let reqId = 0;
+const pendingRequests = new Map<number, {
+    resolve: (res: GCodeParseResult) => void;
+    reject: (err: Error) => void;
+}>();
 
-export class GCodeParser {
-    private currentX = 0;
-    private currentY = 0;
-    private currentZ = 0;
-    private absoluteMode = true;
-    private units: 'mm' | 'inches' = 'mm';
-    private plane: Plane = 'XY';
-    private offsetX = 0;
-    private offsetY = 0;
-    private offsetZ = 0;
-    private activeMotion: 'G0' | 'G1' | 'G2' | 'G3' | null = null;
+function getOrCreateWorker(): Worker | null {
+    if (typeof window === 'undefined' || typeof Worker === 'undefined') {
+        return null;
+    }
+    if (!workerInstance) {
+        try {
+            workerInstance = new Worker(
+                new URL('../workers/gcodeParser.worker.ts', import.meta.url),
+                { type: 'module' }
+            );
+            workerInstance.onmessage = (e: MessageEvent<{ type: string; id?: number; result?: GCodeParseResult; error?: string }>) => {
+                const { id, type, result, error } = e.data;
+                if (id === undefined) return;
+                const req = pendingRequests.get(id);
+                if (!req) return;
+                pendingRequests.delete(id);
 
-    parseGCode(content: string): GCodeFile {
-        const lines = content.split('\n');
-        const parsedLines: GCodeLine[] = [];
-        const segments: ToolpathSegment[] = [];
-
-        let minX = Infinity, maxX = -Infinity;
-        let minY = Infinity, maxY = -Infinity;
-        let minZ = Infinity, maxZ = -Infinity;
-        let rapidCount = 0;
-        let cutCount = 0;
-        let arcCount = 0;
-        let totalLengthMm = 0;
-
-        console.log('[GCodeParser] Starting parse. Total lines:', lines.length);
-
-        lines.forEach((rawLine) => {
-            const trimmed = rawLine.trim();
-            if (!trimmed || trimmed.startsWith(';') || trimmed.startsWith('(')) return;
-
-            const tokens = this.tokenize(trimmed);
-            if (tokens.length === 0) return;
-
-            const params: Record<string, number> = {};
-            const motions: string[] = [];
-            const modal: string[] = [];
-
-            for (const tok of tokens) {
-                const letter = tok[0];
-                const rest = tok.slice(1);
-                const value = parseFloat(rest);
-
-                if (letter === 'G' || letter === 'M') {
-                    const code = `${letter}${parseInt(rest, 10)}`;
-                    if (code === 'G0' || code === 'G1' || code === 'G2' || code === 'G3') {
-                        motions.push(code);
-                    } else {
-                        modal.push(code);
-                    }
-                } else if (isFinite(value)) {
-                    params[letter] = value;
+                if (type === 'SUCCESS' && result) {
+                    req.resolve(result);
+                } else {
+                    req.reject(new Error(error || 'Worker parsing failed'));
                 }
-            }
-
-            // Modal state updates
-            for (const m of modal) {
-                if (m === 'G17') this.plane = 'XY';
-                else if (m === 'G18') this.plane = 'XZ';
-                else if (m === 'G19') this.plane = 'YZ';
-                else if (m === 'G20') this.units = 'inches';
-                else if (m === 'G21') this.units = 'mm';
-                else if (m === 'G90') this.absoluteMode = true;
-                else if (m === 'G91') this.absoluteMode = false;
-            }
-
-            // G53: one-shot machine coords — temporarily zero work offsets for this block.
-            const oneShotMachine = modal.includes('G53');
-
-            // G92: set current position to the given coords (applies a persistent offset).
-            if (modal.includes('G92')) {
-                if (params.X !== undefined) this.offsetX = this.currentX - params.X;
-                if (params.Y !== undefined) this.offsetY = this.currentY - params.Y;
-                if (params.Z !== undefined) this.offsetZ = this.currentZ - params.Z;
-                parsedLines.push({ command: trimmed, comment: this.extractComment(trimmed) });
-                return;
-            }
-
-            // Resolve motion mode (sticky like vendor controllers)
-            const motion = motions[0]
-                ? (motions[0] as 'G0' | 'G1' | 'G2' | 'G3')
-                : (this.hasAxisWord(params) ? this.activeMotion : null);
-
-            if (motions[0]) this.activeMotion = motions[0] as 'G0' | 'G1' | 'G2' | 'G3';
-
-            if (!motion) {
-                parsedLines.push({ command: trimmed, comment: this.extractComment(trimmed) });
-                return;
-            }
-
-            const startX = this.currentX;
-            const startY = this.currentY;
-            const startZ = this.currentZ;
-
-            const resolveAxis = (val: number | undefined, current: number, offset: number): number => {
-                if (val === undefined) return current;
-                let v = this.absoluteMode ? val : current + val;
-                if (oneShotMachine) v = v - offset;
-                return v;
             };
-
-            const targetX = resolveAxis(params.X, startX, this.offsetX);
-            const targetY = resolveAxis(params.Y, startY, this.offsetY);
-            const targetZ = resolveAxis(params.Z, startZ, this.offsetZ);
-
-            const isRapid = motion === 'G0';
-            const isArc = motion === 'G2' || motion === 'G3';
-
-            parsedLines.push({
-                command: trimmed,
-                x: targetX,
-                y: targetY,
-                z: targetZ,
-                f: params.F,
-                comment: this.extractComment(trimmed),
-            });
-
-            if (isArc) {
-                const clockwise = motion === 'G2';
-                const arcSegs = this.buildArcSegments({
-                    startX, startY, startZ,
-                    endX: targetX, endY: targetY, endZ: targetZ,
-                    iOff: params.I, jOff: params.J, kOff: params.K,
-                    radius: params.R,
-                    clockwise,
-                    plane: this.plane,
-                });
-                arcCount++;
-                for (const seg of arcSegs) {
-                    segments.push(seg);
-                    cutCount++;
-                    minX = Math.min(minX, seg.start.x, seg.end.x); maxX = Math.max(maxX, seg.start.x, seg.end.x);
-                    minY = Math.min(minY, seg.start.y, seg.end.y); maxY = Math.max(maxY, seg.start.y, seg.end.y);
-                    minZ = Math.min(minZ, seg.start.z, seg.end.z); maxZ = Math.max(maxZ, seg.start.z, seg.end.z);
-                    totalLengthMm += this.dist(seg.start, seg.end);
+            workerInstance.onerror = (err) => {
+                console.warn('[GCodeParserWorker] Worker error, falling back to main thread:', err);
+                for (const [, req] of pendingRequests) {
+                    req.reject(new Error('Worker encountered an error'));
                 }
-            } else {
-                const seg: ToolpathSegment = {
-                    start: { x: startX, y: startY, z: startZ },
-                    end: { x: targetX, y: targetY, z: targetZ },
-                    rapid: isRapid,
-                    layer: 0,
-                };
-                segments.push(seg);
-                if (isRapid) rapidCount++; else cutCount++;
-                minX = Math.min(minX, startX, targetX); maxX = Math.max(maxX, startX, targetX);
-                minY = Math.min(minY, startY, targetY); maxY = Math.max(maxY, startY, targetY);
-                minZ = Math.min(minZ, startZ, targetZ); maxZ = Math.max(maxZ, startZ, targetZ);
-                totalLengthMm += this.dist(seg.start, seg.end);
+                pendingRequests.clear();
+                workerInstance = null;
+            };
+        } catch (e) {
+            console.warn('[GCodeParserWorker] Worker initialization failed:', e);
+            workerInstance = null;
+        }
+    }
+    return workerInstance;
+}
+
+/**
+ * Async G-code parser. Offloads parsing to a Web Worker with zero-copy transferable buffers.
+ * Transparently falls back to synchronous main thread parsing if workers are unavailable.
+ */
+export async function parseGcodeAsync(content: string): Promise<GCodeParseResult> {
+    const worker = getOrCreateWorker();
+    if (!worker) {
+        return parseGcodeFile(content);
+    }
+
+    const currentId = ++reqId;
+    return new Promise<GCodeParseResult>((resolve, reject) => {
+        pendingRequests.set(currentId, { resolve, reject });
+        try {
+            worker.postMessage({ type: 'PARSE', id: currentId, content });
+        } catch (postErr) {
+            pendingRequests.delete(currentId);
+            console.warn('[GCodeParserWorker] postMessage failed, falling back to sync parse:', postErr);
+            try {
+                resolve(parseGcodeFile(content));
+            } catch (syncErr) {
+                reject(syncErr instanceof Error ? syncErr : new Error(String(syncErr)));
             }
-
-            this.currentX = targetX;
-            this.currentY = targetY;
-            this.currentZ = targetZ;
-        });
-
-        // Inches → mm conversion
-        const unitMultiplier = this.units === 'inches' ? 25.4 : 1.0;
-        if (unitMultiplier !== 1.0) {
-            console.log('[GCodeParser] Converting inches → mm');
-            segments.forEach(seg => {
-                seg.start.x *= unitMultiplier; seg.start.y *= unitMultiplier; seg.start.z *= unitMultiplier;
-                seg.end.x *= unitMultiplier;   seg.end.y *= unitMultiplier;   seg.end.z *= unitMultiplier;
-            });
-            minX *= unitMultiplier; maxX *= unitMultiplier;
-            minY *= unitMultiplier; maxY *= unitMultiplier;
-            minZ *= unitMultiplier; maxZ *= unitMultiplier;
-            totalLengthMm *= unitMultiplier;
         }
+    });
+}
 
-        // Segment guard
-        const originalSegments = segments.length;
-        let finalSegments = segments;
-        let downsampled = false;
-        if (segments.length > MAX_SEGMENTS) {
-            const stride = Math.ceil(segments.length / MAX_SEGMENTS);
-            finalSegments = segments.filter((_, i) => i % stride === 0);
-            downsampled = true;
-            console.warn(`[GCodeParser] Downsampled ${originalSegments} → ${finalSegments.length} (stride ${stride})`);
-        }
-
-        console.log('[GCodeParser] Done. Segments:', finalSegments.length,
-            'Rapids:', rapidCount, 'Cuts:', cutCount, 'Arcs:', arcCount,
-            'Length:', totalLengthMm.toFixed(1), 'mm');
-
+/**
+ * Backwards compatible GCodeParser class.
+ * Handles G90 (absolute), G91 (incremental), G20 (inches), G21 (mm), arcs (G2/G3).
+ */
+export class GCodeParser {
+    parseGCode(content: string): GCodeFile {
+        const res = parseGcodeFileCore(content);
         return {
-            lines: parsedLines,
-            totalLines: parsedLines.length,
-            bounds: {
-                minX: minX === Infinity ? 0 : minX,
-                maxX: maxX === -Infinity ? 0 : maxX,
-                minY: minY === Infinity ? 0 : minY,
-                maxY: maxY === -Infinity ? 0 : maxY,
-                minZ: minZ === Infinity ? 0 : minZ,
-                maxZ: maxZ === -Infinity ? 0 : maxZ,
-            },
-            segments: finalSegments,
-            stats: {
-                rapidCount,
-                cutCount,
-                arcCount,
-                totalLengthMm,
-                downsampled,
-                originalSegments,
-            },
+            lines: res.lines,
+            totalLines: res.totalLines,
+            bounds: res.bounds,
+            segments: res.segments,
+            stats: res.stats,
         };
     }
 
-    // Tokenizer — handles "G1X10Y20" (no spaces) and "G1 X10 Y20" alike.
-    private tokenize(line: string): string[] {
-        const code = line.split(';')[0].split('(')[0];
-        const out: string[] = [];
-        const re = /([GMXYZIJKRFEPST])\s*(-?\d*\.?\d+)/gi;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(code)) !== null) {
-            out.push(m[1].toUpperCase() + m[2]);
-        }
-        return out;
-    }
-
-    private extractComment(line: string): string | undefined {
-        const m = line.match(/;(.*)/) || line.match(/\((.*?)\)/);
-        return m ? m[1].trim() : undefined;
-    }
-
-    private hasAxisWord(p: Record<string, number>): boolean {
-        return p.X !== undefined || p.Y !== undefined || p.Z !== undefined;
-    }
-
-    private dist(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) {
-        const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-        return Math.sqrt(dx * dx + dy * dy + dz * dz);
-    }
-
-    // Arc interpolation — IJK form (exact) or R form (resolved via perpendicular bisector).
-    private buildArcSegments(opts: {
-        startX: number; startY: number; startZ: number;
-        endX: number; endY: number; endZ: number;
-        iOff?: number; jOff?: number; kOff?: number;
-        radius?: number;
-        clockwise: boolean;
-        plane: Plane;
-    }): ToolpathSegment[] {
-        const { plane, clockwise } = opts;
-
-        const pick = (p: { x: number; y: number; z: number }) => {
-            if (plane === 'XY') return { u: p.x, v: p.y, w: p.z };
-            if (plane === 'XZ') return { u: p.x, v: p.z, w: p.y };
-            return { u: p.y, v: p.z, w: p.x };
-        };
-        const unpick = (u: number, v: number, w: number): { x: number; y: number; z: number } => {
-            if (plane === 'XY') return { x: u, y: v, z: w };
-            if (plane === 'XZ') return { x: u, y: w, z: v };
-            return { x: w, y: u, z: v };
-        };
-
-        const start = pick({ x: opts.startX, y: opts.startY, z: opts.startZ });
-        const end   = pick({ x: opts.endX,   y: opts.endY,   z: opts.endZ });
-
-        let cu: number, cv: number;
-        if (opts.iOff !== undefined || opts.jOff !== undefined || opts.kOff !== undefined) {
-            let dU: number, dV: number;
-            if (plane === 'XY') { dU = opts.iOff ?? 0; dV = opts.jOff ?? 0; }
-            else if (plane === 'XZ') { dU = opts.iOff ?? 0; dV = opts.kOff ?? 0; }
-            else { dU = opts.jOff ?? 0; dV = opts.kOff ?? 0; }
-            cu = start.u + dU;
-            cv = start.v + dV;
-        } else if (opts.radius !== undefined) {
-            const mx = (start.u + end.u) / 2;
-            const my = (start.v + end.v) / 2;
-            const dx = end.u - start.u;
-            const dy = end.v - start.v;
-            const chord = Math.hypot(dx, dy);
-            const r = opts.radius;
-            const absR = Math.abs(r);
-            const h2 = absR * absR - (chord / 2) * (chord / 2);
-            if (h2 < 0 || chord < 1e-9) {
-                return [{
-                    start: { x: opts.startX, y: opts.startY, z: opts.startZ },
-                    end: { x: opts.endX, y: opts.endY, z: opts.endZ },
-                    rapid: false, layer: 0,
-                }];
-            }
-            const h = Math.sqrt(h2);
-            const px = -dy / chord;
-            const py = dx / chord;
-            const shortArc = r > 0;
-            const ccw = !clockwise;
-            const sign = (shortArc === ccw) ? 1 : -1;
-            cu = mx + sign * h * px;
-            cv = my + sign * h * py;
-        } else {
-            return [{
-                start: { x: opts.startX, y: opts.startY, z: opts.startZ },
-                end: { x: opts.endX, y: opts.endY, z: opts.endZ },
-                rapid: false, layer: 0,
-            }];
-        }
-
-        const r0 = Math.hypot(start.u - cu, start.v - cv);
-        if (r0 < 1e-9) {
-            return [{
-                start: { x: opts.startX, y: opts.startY, z: opts.startZ },
-                end: { x: opts.endX, y: opts.endY, z: opts.endZ },
-                rapid: false, layer: 0,
-            }];
-        }
-
-        const aStart = Math.atan2(start.v - cv, start.u - cu);
-        const aEnd   = Math.atan2(end.v   - cv, end.u   - cu);
-
-        let sweep = aEnd - aStart;
-        if (clockwise) {
-            while (sweep > 0) sweep -= 2 * Math.PI;
-            if (sweep === 0) sweep = -2 * Math.PI;
-        } else {
-            while (sweep < 0) sweep += 2 * Math.PI;
-            if (sweep === 0) sweep = 2 * Math.PI;
-        }
-
-        const turns = Math.abs(sweep) / (2 * Math.PI);
-        const nSegs = Math.max(ARC_MIN_SEGS, Math.ceil(turns * ARC_SEGS_PER_TURN));
-
-        const segs: ToolpathSegment[] = [];
-        let prevPoint = { x: opts.startX, y: opts.startY, z: opts.startZ };
-        for (let i = 1; i <= nSegs; i++) {
-            const t = i / nSegs;
-            const a = aStart + sweep * t;
-            const u = cu + r0 * Math.cos(a);
-            const v = cv + r0 * Math.sin(a);
-            const w = start.w + (end.w - start.w) * t;
-            const pt = unpick(u, v, w);
-            segs.push({
-                start: { ...prevPoint },
-                end: { ...pt },
-                rapid: false,
-                layer: 0,
-            });
-            prevPoint = pt;
-        }
-        return segs;
-    }
-
-    // GPU helpers — G-code X→world X, Y→-world Z, Z→world Y mapping is done in the renderer.
     getToolpathVertices(segments: ToolpathSegment[]): Float32Array {
         const vertices: number[] = [];
         segments.forEach(segment => {
@@ -406,10 +150,8 @@ export class GCodeParser {
     }
 }
 
-// Legacy exports
 export function parseGCode(content: string): GCodeLine[] {
-    const parser = new GCodeParser();
-    return parser.parseGCode(content).lines;
+    return parseGcodeFileCore(content).lines;
 }
 
 export function isMoveCommand(command: string): boolean {

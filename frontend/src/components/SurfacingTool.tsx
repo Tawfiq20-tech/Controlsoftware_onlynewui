@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Layers, Play, Eye, EyeOff, RotateCcw, Download } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
-import { GCodeParser } from '../utils/gcodeParser';
+import { parseGcodeAsync } from '../utils/gcodeParser';
 import './SurfacingTool.css';
 
 // ─── Types ────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ export default function SurfacingTool() {
     const [errors, setErrors] = useState<string[]>([]);
     const [loaded, setLoaded] = useState(false);
 
-    const { setGcode: storeSetGcode, setToolpathSegments, setFileInfo, setRawGcodeContent, addConsoleLog } = useCNCStore();
+    const { setGcode: storeSetGcode, setParsedToolpath, setToolpathSegments, setFileInfo, setRawGcodeContent, cleanupForNewFile, addConsoleLog } = useCNCStore();
 
     const setParam = <K extends keyof SurfacingParams>(key: K, value: SurfacingParams[K]) => {
         setParams(prev => ({ ...prev, [key]: value }));
@@ -216,14 +216,15 @@ export default function SurfacingTool() {
         addConsoleLog('info', 'Surfacing G-code generated');
     }, [params, addConsoleLog]);
 
-    const handleLoadToWorkspace = useCallback(() => {
+    const handleLoadToWorkspace = useCallback(async () => {
         if (!gcode) return;
         try {
-            const parser = new GCodeParser();
-            const result = parser.parseGCode(gcode);
+            cleanupForNewFile();
+            const result = await parseGcodeAsync(gcode);
             const parsed = result.lines;
             const segments = result.segments;
             storeSetGcode(parsed);
+            setParsedToolpath(result.parsedToolpath);
             setToolpathSegments(segments);
             setRawGcodeContent(gcode);
             const lineCount = gcode.split('\n').length;
@@ -233,7 +234,7 @@ export default function SurfacingTool() {
         } catch (e) {
             addConsoleLog('error', `Failed to load surfacing G-code: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
-    }, [gcode, storeSetGcode, setToolpathSegments, setRawGcodeContent, setFileInfo, addConsoleLog]);
+    }, [gcode, cleanupForNewFile, storeSetGcode, setParsedToolpath, setToolpathSegments, setRawGcodeContent, setFileInfo, addConsoleLog]);
 
     const handleDownload = useCallback(() => {
         if (!gcode) return;

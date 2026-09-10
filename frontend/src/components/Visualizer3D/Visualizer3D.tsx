@@ -28,28 +28,44 @@ import {
     Grid3x3, Box, Move3d, Crosshair, RotateCcw,
     Maximize2, Eye, EyeOff, Ruler,
     Play, Pause, Palette, Video, Sparkles,
-    Check, AlertTriangle,
+    Check, AlertTriangle, Activity,
 } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
 import type { GCodeLine, ToolpathSegment } from '../../types/cnc';
-import { parseGcode, type ParsedToolpath } from './gcodeParser';
-import { createRealisticWorkpiece, type RealisticWorkpieceResult } from './RealisticStockMesh';
+import type { ParsedToolpath } from './gcodeParser';
+import { createRealisticWorkpiece, disposeRealisticWorkpiece, type RealisticWorkpieceResult } from './RealisticStockMesh';
 import ResizeHandle from '../ResizeHandle';
 import JobControlBar from '../JobControlBar';
 import './Visualizer3D.css';
 
-/** Build a source string from the store's parsed GCodeLine[] so our richer
- *  parser (which knows arcs + units + feed) can re-derive segments. */
-function stringifyGcode(lines: GCodeLine[]): string {
-    return lines.map(l => {
-        const parts = [l.command];
-        if (l.x !== undefined) parts.push(`X${l.x}`);
-        if (l.y !== undefined) parts.push(`Y${l.y}`);
-        if (l.z !== undefined) parts.push(`Z${l.z}`);
-        if (l.f !== undefined) parts.push(`F${l.f}`);
-        if (l.comment) parts.push(`(${l.comment})`);
-        return parts.join(' ');
-    }).join('\n');
+function safeSetAttribute(
+    geometry: THREE.BufferGeometry,
+    name: string,
+    newAttribute: THREE.BufferAttribute
+): void {
+    const oldAttr = geometry.getAttribute(name);
+    if (oldAttr && 'dispose' in oldAttr && typeof (oldAttr as unknown as { dispose?: () => void }).dispose === 'function') {
+        (oldAttr as unknown as { dispose: () => void }).dispose();
+    }
+    geometry.setAttribute(name, newAttribute);
+}
+
+function safeDeleteAttribute(
+    geometry: THREE.BufferGeometry,
+    name: string
+): void {
+    const oldAttr = geometry.getAttribute(name);
+    if (oldAttr && 'dispose' in oldAttr && typeof (oldAttr as unknown as { dispose?: () => void }).dispose === 'function') {
+        (oldAttr as unknown as { dispose: () => void }).dispose();
+    }
+    geometry.deleteAttribute(name);
+}
+
+function disposeMaterial(material: THREE.Material): void {
+    const m = material as THREE.Material & { map?: THREE.Texture | null; bumpMap?: THREE.Texture | null };
+    if (m.map && typeof m.map.dispose === 'function') m.map.dispose();
+    if (m.bumpMap && typeof m.bumpMap.dispose === 'function') m.bumpMap.dispose();
+    material.dispose();
 }
 
 /** Fallback: build a Float32 segment array straight from the store's segments
@@ -243,13 +259,19 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
     const cursorSecRef    = useRef(0);
     const cameraFollowRef = useRef(false);
     const livePosRef      = useRef<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
+    const smoothedToolPosRef = useRef<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
+    const lastFrameTimeRef = useRef<number>(0);
     const modeRef          = useRef(mode);
-    const toolZRef         = useRef(0);
 
-    const [view, setView] = useState<ViewPreset>('iso');
+    const [view, setView] = useState<ViewPreset | null>('iso');
     const [showGrid, setShowGrid] = useState(true);
     const [showEnv, setShowEnv]   = useState(true);
     const [showRapids, setShowRapids] = useState(true);
+    const [showToolpaths, setShowToolpaths] = useState(() => {
+        const saved = localStorage.getItem('v3d:showToolpaths');
+        return saved !== null ? saved === 'true' : true;
+    });
+    const showToolpathsRef = useRef(true);
     const [showProgress] = useState(true);
     const [showTool, setShowTool] = useState(true);
     const [showAxes, setShowAxes] = useState(true);
@@ -281,9 +303,15 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
 
     const {
         gcode, toolpathSegments, fileInfo, currentLine,
-        position, machinePosition, machineState,
-        activeMachineProfile,
+        position, machinePosition, machineState, spindleSpeed,
+        activeMachineProfile, parsedToolpath: parsed,
     } = useCNCStore();
+
+    const spindleSpeedRef = useRef(0);
+    const machineStateRef = useRef(machineState);
+    useEffect(() => { spindleSpeedRef.current = spindleSpeed; }, [spindleSpeed]);
+    useEffect(() => { machineStateRef.current = machineState; }, [machineState]);
+    useEffect(() => { showToolpathsRef.current = showToolpaths; }, [showToolpaths]);
 
     // machineState drives the Carve banner state pill; lock-behavior for
     // Header tabs + Sidebar Controls tab is wired in those components.
@@ -320,13 +348,6 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         if (m) return { x: m.x, y: m.y, z: m.z };
         return { x: 838, y: 838, z: 133 };
     }, [selectedMachineId, customDims]);
-
-    // Re-parse G-code when it changes. Uses our rich parser for arcs/units/feed.
-    const parsed = useMemo<ParsedToolpath | null>(() => {
-        if (!gcode || gcode.length === 0) return null;
-        try { return parseGcode(stringifyGcode(gcode)); }
-        catch (e) { console.warn('[Visualizer3D] parse failed', e); return null; }
-    }, [gcode]);
 
     const partW = parsed ? Math.max(1, parsed.bbox.max[0] - parsed.bbox.min[0]) : 0;
     const partH = parsed ? Math.max(1, parsed.bbox.max[1] - parsed.bbox.min[1]) : 0;
@@ -403,6 +424,10 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         ctrl.enableDamping = true;
         ctrl.dampingFactor = 0.08;
         ctrl.target.set(envelope.x / 2, envelope.y / 2, 0);
+        ctrl.addEventListener('start', () => {
+            // Clear active preset state on manual drag/zoom so no effect snaps it back
+            setView(null);
+        });
         ctrlRef.current = ctrl;
 
         // Lighting (ambient + key + fill for realistic 3D spindle & workpiece).
@@ -489,13 +514,19 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
             arcsMaterial: arcsMat,
         };
 
-        applyView(view, cam, ctrl, envelope);
+        applyView(view || 'iso', cam, ctrl, envelope, parsedRef.current, carveOriginRef.current);
 
         // Animation loop. Reads refs so cursor + camera-follow stay reactive
         // without re-creating the closure on every state change.
         let raf = 0;
         const tmpVec = new THREE.Vector3();
+        lastFrameTimeRef.current = performance.now();
+
         const tick = () => {
+            const now = performance.now();
+            const dt = Math.min((now - (lastFrameTimeRef.current || now)) / 1000, 0.1);
+            lastFrameTimeRef.current = now;
+
             const p = parsedRef.current;
             // Decide toolhead position: scrubber/playback overrides live machine pos.
             let toolPos = livePosRef.current;
@@ -530,17 +561,38 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                         targetZ = stockTop + 26;
                     }
                 }
+
+                const curr = smoothedToolPosRef.current;
                 if (cursorActiveRef.current) {
-                    toolZRef.current = targetZ;
+                    curr.x = toolPos.x;
+                    curr.y = toolPos.y;
+                    curr.z = targetZ;
                 } else {
-                    toolZRef.current += (targetZ - toolZRef.current) * 0.18;
+                    // Unified critically-damped exponential smoothing across X, Y, and Z
+                    // Tuned decay factor (24s^-1) guarantees buttery smooth 60 FPS motion without teleporting
+                    const blend = 1 - Math.exp(-24 * dt);
+                    curr.x += (toolPos.x - curr.x) * blend;
+                    curr.y += (toolPos.y - curr.y) * blend;
+                    curr.z += (targetZ - curr.z) * blend;
                 }
-                g.toolhead.position.set(toolPos.x, toolPos.y, toolZRef.current);
+                g.toolhead.position.set(curr.x, curr.y, curr.z);
+
+                // Realistic spindle spinning animation when cutting or spindle speed > 0
+                const isSpinning = (spindleSpeedRef.current && spindleSpeedRef.current > 0) || 
+                                   (modeRef.current === 'carve' && machineStateRef.current === 'running') ||
+                                   cursorActiveRef.current;
+                if (isSpinning) {
+                    const rotor = g.toolhead.getObjectByName('spindleRotor');
+                    if (rotor) {
+                        rotor.rotation.z += dt * 45;
+                    }
+                }
             }
 
             // Camera-follow: lerp orbit target to toolhead.
             if (cameraFollowRef.current) {
-                tmpVec.set(toolPos.x, toolPos.y, toolZRef.current);
+                const curr = smoothedToolPosRef.current;
+                tmpVec.set(curr.x, curr.y, curr.z);
                 ctrl.target.lerp(tmpVec, 0.08);
                 cam.position.lerp(
                     tmpVec.clone().add(new THREE.Vector3(150, -150, 120)),
@@ -567,6 +619,29 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         return () => {
             cancelAnimationFrame(raf);
             ro.disconnect();
+            if (sceneRef.current) {
+                sceneRef.current.traverse((obj) => {
+                    if ((obj as THREE.Mesh).isMesh || (obj as THREE.Line).isLine) {
+                        const m = obj as THREE.Mesh;
+                        if (m.geometry) {
+                            safeDeleteAttribute(m.geometry, 'position');
+                            safeDeleteAttribute(m.geometry, 'color');
+                            safeDeleteAttribute(m.geometry, 'uv');
+                            safeDeleteAttribute(m.geometry, 'normal');
+                            m.geometry.dispose();
+                        }
+                        if (Array.isArray(m.material)) {
+                            m.material.forEach((mat) => disposeMaterial(mat));
+                        } else if (m.material) {
+                            disposeMaterial(m.material);
+                        }
+                    }
+                });
+            }
+            if (ctrlRef.current) {
+                ctrlRef.current.dispose();
+                ctrlRef.current = null;
+            }
             renderer.dispose();
             if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
         };
@@ -607,17 +682,22 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         if (!g) return;
         if (!parsed) {
             // Fall back to whatever toolpathSegments the store already has.
-            g.rapids.geometry.setAttribute('position', new THREE.BufferAttribute(fallback.rapids, 3));
-            g.cuts.geometry.setAttribute('position',   new THREE.BufferAttribute(fallback.cuts, 3));
-            g.arcs.geometry.setAttribute('position',   new THREE.BufferAttribute(new Float32Array(0), 3));
-            g.progress.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+            if (toolpathSegments && toolpathSegments.length > 0) {
+                safeSetAttribute(g.rapids.geometry, 'position', new THREE.BufferAttribute(fallback.rapids, 3));
+                safeSetAttribute(g.cuts.geometry, 'position',   new THREE.BufferAttribute(fallback.cuts, 3));
+            } else {
+                safeSetAttribute(g.rapids.geometry, 'position', new THREE.BufferAttribute(new Float32Array(0), 3));
+                safeSetAttribute(g.cuts.geometry, 'position',   new THREE.BufferAttribute(new Float32Array(0), 3));
+            }
+            safeSetAttribute(g.arcs.geometry, 'position',   new THREE.BufferAttribute(new Float32Array(0), 3));
+            safeSetAttribute(g.progress.geometry, 'position', new THREE.BufferAttribute(new Float32Array(0), 3));
             parsedRef.current = null;
             return;
         }
         parsedRef.current = parsed;
-        g.rapids.geometry.setAttribute('position', new THREE.BufferAttribute(parsed.rapids, 3));
-        g.cuts.geometry.setAttribute('position',   new THREE.BufferAttribute(parsed.cuts, 3));
-        g.arcs.geometry.setAttribute('position',   new THREE.BufferAttribute(parsed.arcs, 3));
+        safeSetAttribute(g.rapids.geometry, 'position', new THREE.BufferAttribute(parsed.rapids, 3));
+        safeSetAttribute(g.cuts.geometry, 'position',   new THREE.BufferAttribute(parsed.cuts, 3));
+        safeSetAttribute(g.arcs.geometry, 'position',   new THREE.BufferAttribute(parsed.arcs, 3));
         g.rapids.geometry.computeBoundingSphere();
         g.cuts.geometry.computeBoundingSphere();
         g.arcs.geometry.computeBoundingSphere();
@@ -626,7 +706,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         if (camRef.current && ctrlRef.current) {
             fitToBox(parsed.bbox, camRef.current, ctrlRef.current);
         }
-    }, [parsed]);
+    }, [parsed, fallback, toolpathSegments]);
 
     // ─── Build Realistic 3D Carved Wood Stock Workpiece ───────────
     useEffect(() => {
@@ -637,14 +717,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         if (realisticRef.current) {
             g.carveGroup.remove(realisticRef.current.meshGroup);
             g.carveGroup.remove(realisticRef.current.lightsGroup);
-            realisticRef.current.meshGroup.traverse((obj) => {
-                if ((obj as THREE.Mesh).isMesh) {
-                    const m = obj as THREE.Mesh;
-                    m.geometry.dispose();
-                    if (Array.isArray(m.material)) m.material.forEach(mat => mat.dispose());
-                    else m.material.dispose();
-                }
-            });
+            disposeRealisticWorkpiece(realisticRef.current);
             realisticRef.current = null;
         }
 
@@ -660,7 +733,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                 console.warn('[Visualizer3D] Realistic workpiece build failed:', err);
             }
         }
-    }, [parsed]);
+    }, [parsed, showRealistic]);
 
     // ─── Realistic Mode Visibility Sync ───────────────────────────
     useEffect(() => {
@@ -701,70 +774,79 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         (g.envelope.material as THREE.LineBasicMaterial).needsUpdate = true;
     }, [rangeCheck]);
 
-    // ─── Progress overlay (cut-so-far in green) — O(log N) zero-alloc binary search ──
+    // ─── Progress overlay (cut-so-far in green) — O(log N) zero-alloc binary search with rAF throttling ──
     useEffect(() => {
+        let active = true;
         const g = groupRef.current;
         const p = parsedRef.current;
         if (!g || !p) return;
         if (!showProgress || (!cursorActive && currentLine <= 0)) {
-            g.progress.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+            safeSetAttribute(g.progress.geometry, 'position', new THREE.BufferAttribute(new Float32Array(0), 3));
             return;
         }
 
-        let cutEndVerts = 0;
-        let arcEndVerts = 0;
+        const raf = requestAnimationFrame(() => {
+            if (!active) return;
+            let cutEndVerts = 0;
+            let arcEndVerts = 0;
 
-        if (cursorActive) {
-            if (p.cutCumSec.length > 0) {
-                let lo = 0, hi = p.cutCumSec.length - 1;
-                while (lo <= hi) {
-                    const mid = (lo + hi) >> 1;
-                    if (p.cutCumSec[mid] <= cursorSec) lo = mid + 1;
-                    else hi = mid - 1;
+            if (cursorActive) {
+                if (p.cutCumSec.length > 0) {
+                    let lo = 0, hi = p.cutCumSec.length - 1;
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (p.cutCumSec[mid] <= cursorSec) lo = mid + 1;
+                        else hi = mid - 1;
+                    }
+                    cutEndVerts = lo * 6;
                 }
-                cutEndVerts = lo * 6;
-            }
-            if (p.arcCumSec.length > 0) {
-                let lo = 0, hi = p.arcCumSec.length - 1;
-                while (lo <= hi) {
-                    const mid = (lo + hi) >> 1;
-                    if (p.arcCumSec[mid] <= cursorSec) lo = mid + 1;
-                    else hi = mid - 1;
+                if (p.arcCumSec.length > 0) {
+                    let lo = 0, hi = p.arcCumSec.length - 1;
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (p.arcCumSec[mid] <= cursorSec) lo = mid + 1;
+                        else hi = mid - 1;
+                    }
+                    arcEndVerts = lo * 6;
                 }
-                arcEndVerts = lo * 6;
-            }
-        } else {
-            if (p.cutLines.length > 0) {
-                let lo = 0, hi = p.cutLines.length - 1;
-                while (lo <= hi) {
-                    const mid = (lo + hi) >> 1;
-                    if (p.cutLines[mid] <= currentLine) lo = mid + 1;
-                    else hi = mid - 1;
+            } else {
+                if (p.cutLines.length > 0) {
+                    let lo = 0, hi = p.cutLines.length - 1;
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (p.cutLines[mid] <= currentLine) lo = mid + 1;
+                        else hi = mid - 1;
+                    }
+                    cutEndVerts = lo * 6;
                 }
-                cutEndVerts = lo * 6;
-            }
-            if (p.arcLines.length > 0) {
-                let lo = 0, hi = p.arcLines.length - 1;
-                while (lo <= hi) {
-                    const mid = (lo + hi) >> 1;
-                    if (p.arcLines[mid] <= currentLine) lo = mid + 1;
-                    else hi = mid - 1;
+                if (p.arcLines.length > 0) {
+                    let lo = 0, hi = p.arcLines.length - 1;
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >> 1;
+                        if (p.arcLines[mid] <= currentLine) lo = mid + 1;
+                        else hi = mid - 1;
+                    }
+                    arcEndVerts = lo * 6;
                 }
-                arcEndVerts = lo * 6;
             }
-        }
 
-        const totalFloats = cutEndVerts + arcEndVerts;
-        if (totalFloats === 0) {
-            g.progress.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
-            return;
-        }
+            const totalFloats = cutEndVerts + arcEndVerts;
+            if (totalFloats === 0) {
+                safeSetAttribute(g.progress.geometry, 'position', new THREE.BufferAttribute(new Float32Array(0), 3));
+                return;
+            }
 
-        const combined = new Float32Array(totalFloats);
-        if (cutEndVerts > 0) combined.set(p.cuts.subarray(0, cutEndVerts), 0);
-        if (arcEndVerts > 0) combined.set(p.arcs.subarray(0, arcEndVerts), cutEndVerts);
+            const combined = new Float32Array(totalFloats);
+            if (cutEndVerts > 0) combined.set(p.cuts.subarray(0, cutEndVerts), 0);
+            if (arcEndVerts > 0) combined.set(p.arcs.subarray(0, arcEndVerts), cutEndVerts);
 
-        g.progress.geometry.setAttribute('position', new THREE.BufferAttribute(combined, 3));
+            safeSetAttribute(g.progress.geometry, 'position', new THREE.BufferAttribute(combined, 3));
+        });
+
+        return () => {
+            active = false;
+            cancelAnimationFrame(raf);
+        };
     }, [currentLine, showProgress, parsed, cursorActive, cursorSec]);
 
     // ─── Toolhead live position → ref (read by RAF tick) ─────────
@@ -816,14 +898,14 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
             g.arcsMaterial.color.set(COLORS.arc);
             g.cutsMaterial.needsUpdate = true;
             g.arcsMaterial.needsUpdate = true;
-            g.cuts.geometry.deleteAttribute('color');
-            g.arcs.geometry.deleteAttribute('color');
+            safeDeleteAttribute(g.cuts.geometry, 'color');
+            safeDeleteAttribute(g.arcs.geometry, 'color');
             return;
         }
         const cutColors = buildColors(p.cutFeeds, p.cutZs, colorBy, p.feedRange, p.zRange, new THREE.Color(COLORS.cut));
         const arcColors = buildColors(p.arcFeeds, p.arcZs, colorBy, p.feedRange, p.zRange, new THREE.Color(COLORS.arc));
-        g.cuts.geometry.setAttribute('color', new THREE.BufferAttribute(cutColors, 3));
-        g.arcs.geometry.setAttribute('color', new THREE.BufferAttribute(arcColors, 3));
+        safeSetAttribute(g.cuts.geometry, 'color', new THREE.BufferAttribute(cutColors, 3));
+        safeSetAttribute(g.arcs.geometry, 'color', new THREE.BufferAttribute(arcColors, 3));
         g.cutsMaterial.vertexColors = true;
         g.arcsMaterial.vertexColors = true;
         g.cutsMaterial.needsUpdate = true;
@@ -840,22 +922,20 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         const g = groupRef.current; if (!g) return;
         g.grid.visible = showGrid;
         g.envelope.visible = showEnv;
-        // In Prepare mode with realistic view, remove orange toolpath so the 3D carving is clean
-        const showToolpaths = mode !== 'prepare' || !showRealistic;
         g.rapids.visible = showRapids && showToolpaths;
         g.cuts.visible = showToolpaths;
         g.arcs.visible = showToolpaths;
-        g.progress.visible = showProgress;
+        g.progress.visible = showProgress && showToolpaths;
         g.toolhead.visible = showTool;
         g.axes.visible = showAxes;
         g.scale.visible = showScale;
-    }, [showGrid, showEnv, showRapids, showProgress, showTool, showAxes, showScale, showRealistic, mode]);
+    }, [showGrid, showEnv, showRapids, showProgress, showTool, showAxes, showScale, showToolpaths]);
 
     // ─── View preset changes ─────────────────────────────────────
     useEffect(() => {
-        if (!camRef.current || !ctrlRef.current) return;
-        applyView(view, camRef.current, ctrlRef.current, envelope);
-    }, [view, envelope]);
+        if (!camRef.current || !ctrlRef.current || !view) return;
+        applyView(view, camRef.current, ctrlRef.current, envelope, parsedRef.current, carveOriginRef.current);
+    }, [view]);
 
     // HUD computations.
     const eta = useMemo(() => {
@@ -865,48 +945,21 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         return { total: parsed.durationSec, remaining, frac };
     }, [parsed, currentLine]);
 
-    // Carve-mode state pill content
-    const carvePillTone = machineState === 'running' ? 'run'
-        : machineState === 'paused' ? 'hold'
-        : machineState === 'alarm' ? 'bad'
-        : 'idle';
-    const carvePillLabel = machineState === 'running' ? 'RUN'
-        : machineState === 'paused' ? 'HOLD'
-        : machineState === 'alarm' ? 'ALARM'
-        : 'IDLE';
-
     return (
         <div className={`v3d-root ${mode === 'carve' ? 'v3d-root-carve' : ''}`}>
             <div className="v3d-canvas-area">
-            {mode === 'carve' && (
-                <div className="v3d-carve-banner">
-                    <span className="v3d-cb-name">{fileInfo?.name || 'untitled.nc'}</span>
-                    {parsed && <span className="v3d-cb-meta">· {parsed.lineCount} lines</span>}
-                    <span className={`v3d-cb-pill ${carvePillTone}`}>
-                        <span className="v3d-cb-dot" />{carvePillLabel}
-                    </span>
-                    <div className="v3d-cb-spacer" />
-                    {parsed && (
-                        <div className="v3d-cb-prog">
-                            <div className="v3d-cb-prog-track">
-                                <div className="v3d-cb-prog-fill"
-                                    style={{ width: `${eta ? (eta.frac * 100).toFixed(1) : 0}%` }} />
-                            </div>
-                            <span className="v3d-cb-eta">
-                                <b>{currentLine}</b>/{parsed.lineCount} · <b>{eta ? (eta.frac * 100).toFixed(0) : 0}</b>% ·
-                                ETA <b>{eta ? fmtClock(eta.remaining) : fmtClock(parsed.durationSec)}</b>
-                            </span>
-                        </div>
-                    )}
-                </div>
-            )}
             <div className="v3d-mount" ref={mountRef} />
 
             <div className="v3d-toolbar v3d-toolbar-top">
                 <div className="v3d-toolbar-row">
                     {(['iso', 'top', 'front', 'left', 'right'] as ViewPreset[]).map(v => (
                         <button key={v} className={`v3d-btn ${view === v ? 'active' : ''}`}
-                                onClick={() => setView(v)}>{v}</button>
+                                onClick={() => {
+                                    setView(v);
+                                    if (camRef.current && ctrlRef.current) {
+                                        applyView(v, camRef.current, ctrlRef.current, envelope, parsed, carveOrigin);
+                                    }
+                                }}>{v.toUpperCase()}</button>
                     ))}
                     <span className="v3d-divider" />
                     <button className="v3d-btn" title="Fit to part"
@@ -919,7 +972,11 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                                 }
                             }}><Maximize2 size={14} /></button>
                     <button className="v3d-btn" title="Reset view"
-                            onClick={() => applyView('iso', camRef.current!, ctrlRef.current!, envelope)}>
+                            onClick={() => {
+                                if (camRef.current && ctrlRef.current) {
+                                    applyView('iso', camRef.current, ctrlRef.current, envelope, parsed, carveOrigin);
+                                }
+                            }}>
                         <RotateCcw size={14} />
                     </button>
                 </div>
@@ -930,6 +987,8 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                             onClick={() => setShowEnv(v => !v)}><Box size={14} /></button>
                     <button className={`v3d-btn ${showRapids ? 'active' : ''}`} title="Rapids"
                             onClick={() => setShowRapids(v => !v)}><Move3d size={14} /></button>
+                    <button className={`v3d-btn ${showToolpaths ? 'active' : ''}`} title={showToolpaths ? "Toolpath: On (Click to view 3D Design alone)" : "Toolpath: Off (Click to view G-Code lines)"}
+                            onClick={() => setShowToolpaths(v => !v)}><Activity size={14} /></button>
                     <button className={`v3d-btn ${showTool ? 'active' : ''}`} title="Toolhead"
                             onClick={() => setShowTool(v => !v)}><Crosshair size={14} /></button>
                     <button className={`v3d-btn ${showAxes ? 'active' : ''}`} title="Axes"
@@ -1178,20 +1237,61 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
 }
 
 // ─── Right-side G-code line list (Carve mode) ──────────────────────
+const ROW_HEIGHT = 22;
+const OVERSCAN = 12;
+
 function GcodePanel({ gcode, currentLine, fileName }: {
     gcode: GCodeLine[];
     currentLine: number;
     fileName?: string;
 }) {
     const listRef = useRef<HTMLDivElement | null>(null);
+    const [scrollTop, setScrollTop] = useState(0);
+    const [viewportHeight, setViewportHeight] = useState(500);
+    const userScrolledRef = useRef(false);
+    const userScrollTimeoutRef = useRef<number | null>(null);
 
-    // Auto-scroll to keep the current line in view.
+    // Measure viewport
     useEffect(() => {
         const el = listRef.current;
         if (!el) return;
-        const cur = el.querySelector<HTMLDivElement>('.v3d-gp-row.current');
-        if (cur) cur.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, [currentLine]);
+        setViewportHeight(el.clientHeight || 500);
+        const ro = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.contentRect.height > 0) {
+                    setViewportHeight(entry.contentRect.height);
+                }
+            }
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    // Instant direct auto-scroll to currentLine using requestAnimationFrame
+    useEffect(() => {
+        const el = listRef.current;
+        if (!el || !gcode.length) return;
+        if (currentLine <= 0) return;
+
+        // If user manually scrolled recently, pause auto-scroll for 3s
+        if (userScrolledRef.current) return;
+
+        const targetY = Math.max(0, (currentLine - 1) * ROW_HEIGHT - viewportHeight / 2 + ROW_HEIGHT / 2);
+        el.scrollTop = targetY;
+        setScrollTop(targetY);
+    }, [currentLine, viewportHeight, gcode.length]);
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const top = e.currentTarget.scrollTop;
+        setScrollTop(top);
+
+        // Detect user manual scroll vs programmatic
+        userScrolledRef.current = true;
+        if (userScrollTimeoutRef.current) window.clearTimeout(userScrollTimeoutRef.current);
+        userScrollTimeoutRef.current = window.setTimeout(() => {
+            userScrolledRef.current = false;
+        }, 3000);
+    };
 
     if (!gcode.length) {
         return (
@@ -1205,29 +1305,52 @@ function GcodePanel({ gcode, currentLine, fileName }: {
         );
     }
 
+    const totalCount = gcode.length;
+    const totalHeight = totalCount * ROW_HEIGHT;
+    const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+    const endIndex = Math.min(totalCount, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
+
+    const visibleItems = [];
+    for (let i = startIndex; i < endIndex; i++) {
+        const line = gcode[i];
+        const isCurrent = i === currentLine - 1;
+        const isDone = i < currentLine - 1;
+        const cls = isCurrent ? 'current' : isDone ? 'done' : 'upcoming';
+
+        const parts = [line.command];
+        if (line.x !== undefined) parts.push(`X${line.x}`);
+        if (line.y !== undefined) parts.push(`Y${line.y}`);
+        if (line.z !== undefined) parts.push(`Z${line.z}`);
+        if (line.f !== undefined) parts.push(`F${line.f}`);
+
+        visibleItems.push(
+            <div
+                key={i}
+                className={`v3d-gp-row ${cls}`}
+                style={{
+                    position: 'absolute',
+                    top: i * ROW_HEIGHT,
+                    left: 0,
+                    right: 0,
+                    height: ROW_HEIGHT,
+                }}
+            >
+                <span className="v3d-gp-num">{i + 1}</span>
+                <span className="v3d-gp-code">{parts.join(' ')}</span>
+            </div>
+        );
+    }
+
     return (
         <div className="v3d-gp">
             <div className="v3d-gp-header">
                 <span title={fileName}>G-code · {fileName || 'untitled.nc'}</span>
                 <span className="v3d-gp-count">{currentLine} / {gcode.length}</span>
             </div>
-            <div className="v3d-gp-list" ref={listRef}>
-                {gcode.map((line, i) => {
-                    const cls = i < currentLine - 1 ? 'done'
-                        : i === currentLine - 1 ? 'current'
-                        : 'upcoming';
-                    const parts = [line.command];
-                    if (line.x !== undefined) parts.push(`X${line.x}`);
-                    if (line.y !== undefined) parts.push(`Y${line.y}`);
-                    if (line.z !== undefined) parts.push(`Z${line.z}`);
-                    if (line.f !== undefined) parts.push(`F${line.f}`);
-                    return (
-                        <div key={i} className={`v3d-gp-row ${cls}`}>
-                            <span className="v3d-gp-num">{i + 1}</span>
-                            <span className="v3d-gp-code">{parts.join(' ')}</span>
-                        </div>
-                    );
-                })}
+            <div className="v3d-gp-list" ref={listRef} onScroll={handleScroll}>
+                <div style={{ position: 'relative', height: totalHeight, width: '100%' }}>
+                    {visibleItems}
+                </div>
             </div>
         </div>
     );
@@ -1241,15 +1364,49 @@ function applyView(
     cam: THREE.PerspectiveCamera,
     ctrl: OrbitControls,
     env: { x: number; y: number; z: number },
+    parsed?: ParsedToolpath | null,
+    carveOrigin?: { x: number; y: number; z: number },
 ) {
-    const cx = env.x / 2, cy = env.y / 2, cz = env.z / 2;
-    const D = Math.max(env.x, env.y, env.z) * 1.3;
+    let cx: number, cy: number, cz: number, D: number;
+
+    if (parsed && parsed.bbox) {
+        const ox = carveOrigin?.x ?? 0;
+        const oy = carveOrigin?.y ?? 0;
+        const oz = carveOrigin?.z ?? 0;
+
+        const minX = parsed.bbox.min[0] + ox;
+        const maxX = parsed.bbox.max[0] + ox;
+        const minY = parsed.bbox.min[1] + oy;
+        const maxY = parsed.bbox.max[1] + oy;
+        const minZ = parsed.bbox.min[2] + oz;
+        const maxZ = parsed.bbox.max[2] + oz;
+
+        cx = (minX + maxX) / 2;
+        cy = (minY + maxY) / 2;
+        cz = (minZ + maxZ) / 2;
+
+        const spanX = Math.max(1, maxX - minX);
+        const spanY = Math.max(1, maxY - minY);
+        const spanZ = Math.max(0.1, maxZ - minZ);
+        const maxSpan = Math.max(spanX, spanY, spanZ, 50);
+
+        // Distance factor chosen so the workpiece/design nicely fills the viewport with ~20-25% margin (matching user reference image)
+        D = maxSpan * 1.35;
+    } else {
+        cx = env.x / 2;
+        cy = env.y / 2;
+        cz = env.z / 2;
+        D = Math.max(env.x, env.y, env.z) * 1.3;
+    }
+
+    cam.up.set(0, 0, 1);
+
     const positions: Record<ViewPreset, [number, number, number]> = {
         iso:   [cx + D * 0.8, cy - D * 0.8, cz + D * 0.7],
-        top:   [cx, cy, cz + D * 1.4],
-        front: [cx, cy - D, cz],
-        left:  [cx - D, cy, cz],
-        right: [cx + D, cy, cz],
+        top:   [cx, cy - D * 0.001, cz + D * 1.35],
+        front: [cx, cy - D * 1.35, cz + D * 0.15],
+        left:  [cx - D * 1.35, cy, cz + D * 0.15],
+        right: [cx + D * 1.35, cy, cz + D * 0.15],
     };
     cam.position.set(...positions[v]);
     ctrl.target.set(cx, cy, cz);
@@ -1517,9 +1674,13 @@ function buildRealisticSpindle(): THREE.Group {
     cableGeo.translate(0, 0, 123.0);
     const cable = new THREE.Mesh(cableGeo, matRubberCable);
 
+    const rotor = new THREE.Group();
+    rotor.name = 'spindleRotor';
+    rotor.add(bitTip, flutes, shank, collet, nut, nutShoulder, shaftCollar);
+
     spindle.add(
-        bitTip, flutes, shank, collet, nut, nutShoulder,
-        shaftCollar, nose, body, clamp, cap, connBase, lockRing, cable
+        rotor,
+        nose, body, clamp, cap, connBase, lockRing, cable
     );
 
     // Set renderOrder so it stays crisp

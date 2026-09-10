@@ -50,7 +50,7 @@ export const jogDistanceStorage = {
  */
 export const jogSpeedStorage = {
     save: (speed: number): void => saveToStorage(STORAGE_KEYS.JOG_SPEED, speed),
-    load: (): number => loadFromStorage(STORAGE_KEYS.JOG_SPEED, 1000), // Default to 1000 mm/min (medium-slow)
+    load: (): number => loadFromStorage(STORAGE_KEYS.JOG_SPEED, 3000), // Default to 3000 mm/min (Medium)
 };
 
 /**
@@ -64,13 +64,9 @@ export const coordSystemStorage = {
 /**
  * Loaded G-code file persistence.
  *
- * Without this, a page refresh wipes the in-memory rawGcodeContent (Zustand
- * state is not persisted), so the auto-reload-on-reconnect effect in
- * JobControlBar.tsx has nothing to send to the backend -- Start silently
- * no-ops with a local-only warning that never reaches the session log
- * (Tawfiq msg11296, "SAME issue" after a reconnect with no G-code loaded
- * anywhere -- no backend console event at all, unlike the earlier
- * fileLoadedBackend bug, because the command never left the browser).
+ * Persists loaded G-code across page refreshes.
+ * Writes are deferred to requestIdleCallback / setTimeout to eliminate main-thread freeze
+ * when serializing megabytes of G-code.
  */
 export interface StoredGcodeFile {
     name: string;
@@ -79,8 +75,20 @@ export interface StoredGcodeFile {
     content: string;
 }
 
+let pendingGcodeSaveHandle: number | ReturnType<typeof setTimeout> | null = null;
+
 export const gcodeFileStorage = {
     save: (file: StoredGcodeFile | null): void => {
+        // Cancel any pending deferred save
+        if (pendingGcodeSaveHandle !== null) {
+            if (typeof window !== 'undefined' && 'cancelIdleCallback' in window && typeof pendingGcodeSaveHandle === 'number') {
+                window.cancelIdleCallback(pendingGcodeSaveHandle);
+            } else {
+                clearTimeout(pendingGcodeSaveHandle as ReturnType<typeof setTimeout>);
+            }
+            pendingGcodeSaveHandle = null;
+        }
+
         if (file === null) {
             try {
                 localStorage.removeItem(STORAGE_KEYS.GCODE_FILE);
@@ -89,17 +97,29 @@ export const gcodeFileStorage = {
             }
             return;
         }
-        saveToStorage(STORAGE_KEYS.GCODE_FILE, file);
+
+        // Schedule async/idle write so large string serialization never blocks user interaction
+        const doSave = () => {
+            pendingGcodeSaveHandle = null;
+            try {
+                // If the content is extremely large (> 10MB), catch quota errors safely
+                saveToStorage(STORAGE_KEYS.GCODE_FILE, file);
+            } catch (err) {
+                console.warn('[gcodeFileStorage] Async save failed:', err);
+            }
+        };
+
+        if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+            pendingGcodeSaveHandle = window.requestIdleCallback(doSave, { timeout: 1000 });
+        } else {
+            pendingGcodeSaveHandle = setTimeout(doSave, 50);
+        }
     },
     load: (): StoredGcodeFile | null => loadFromStorage<StoredGcodeFile | null>(STORAGE_KEYS.GCODE_FILE, null),
 };
 
 /**
- * Last device successfully connected to, keyed by vendorId+productId (not
- * the OS port path, which changes across USB hubs/reboots on some systems).
- * Used by DevicePanel's auto-connect poll so a previously-paired controller
- * reconnects itself on next detection instead of requiring a manual pick
- * (Tawfiq msg11347 item 4).
+ * Last device successfully connected to, keyed by vendorId+productId.
  */
 export interface LastDevice {
     vendorId: string;

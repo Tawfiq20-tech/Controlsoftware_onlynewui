@@ -7,20 +7,24 @@ import {
 } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { formatAxisValue, formatFileSize } from '../utils/formatters';
-import { GCodeParser } from '../utils/gcodeParser';
+import { parseGcodeAsync } from '../utils/gcodeParser';
 import {
     sendBackendCommand,
     backendJog,
+    backendJogCancel,
     backendHome,
     backendHomeAxis,
     backendUnlock,
     backendZeroAll,
+    backendZeroWCS,
     backendMotorReset,
+    backendJobStop,
 } from '../utils/backendConnection';
 import CoolantControl from './CoolantControl';
 import SpindleLaserControl from './SpindleLaserControl';
 import FeedOverrideControl from './FeedOverrideControl';
 import CameraView from './CameraView/CameraView';
+import controller from '../utils/controller';
 import './Sidebar.css';
 
 // ── Settings Tabs ─────────────────────────────
@@ -50,30 +54,36 @@ export default function Sidebar() {
     const {
         connected,
         machineState,
+        jobActive,
         position, setPosition,
         jogDistance, setJogDistance,
         jogSpeed, setJogSpeed,
         coordSystem, setCoordSystem,
         setGcode,
+        setParsedToolpath,
         fileInfo, setFileInfo,
         setRawGcodeContent,
         toolpathSegments: _ts, setToolpathSegments,
+        cleanupForNewFile,
         consoleLines, addConsoleLog,
         appPreferences, setAppPreferences,
     } = useCNCStore();
 
-    // Lock the Controls tab while the machine is actively running a job, so
-    // operators can't accidentally toggle hardware mid-carve. (Tawfiq msg 7292.)
-    const isCarving = machineState === 'running' || machineState === 'paused';
+    // Lock the Controls tab and File Management while the machine is actively running a job,
+    // so operators can't accidentally toggle hardware or swap files mid-carve.
+    const isCarving = machineState === 'running' || machineState === 'paused' || jobActive;
+
+    // Jog debounce ref (150ms) to prevent double-firing on initial click/touch
+    const lastJogClickRef = useRef<number>(0);
 
     // Continuous jog interval ref
     const continuousJogRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Jog speed presets (msg11535: 600/1000/6000/10000)
+    // Jog speed presets: Slow (1000), Medium (3000), Fast (9000), Ultra (10000 - firmware limit)
     const jogSpeedPresets = [
-        { label: 'Slow', value: 600 },
-        { label: 'Medium', value: 1000 },
-        { label: 'Fast', value: 6000 },
+        { label: 'Slow', value: 1000 },
+        { label: 'Medium', value: 3000 },
+        { label: 'Fast', value: 9000 },
         { label: 'Ultra', value: 10000 },
     ];
 
@@ -93,18 +103,21 @@ export default function Sidebar() {
 
     // Drag and drop handlers
     const handleDragOver = (e: React.DragEvent) => {
+        if (isCarving) return;
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(true);
     };
 
     const handleDragLeave = (e: React.DragEvent) => {
+        if (isCarving) return;
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
     };
 
     const handleDrop = (e: React.DragEvent) => {
+        if (isCarving) return;
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
@@ -124,6 +137,10 @@ export default function Sidebar() {
     // ── Handlers ─────────────────────────────
     const handleJog = (axis: 'x' | 'y' | 'z', direction: 1 | -1) => {
         if (!connected) return;
+        const now = Date.now();
+        if (now - lastJogClickRef.current < 150) return;
+        lastJogClickRef.current = now;
+
         const distance = jogDistance * direction;
         const params: Record<string, number | undefined> = {};
         params[axis] = distance;
@@ -133,6 +150,10 @@ export default function Sidebar() {
 
     const handleDiagonalJog = (xDir: 1 | -1, yDir: 1 | -1) => {
         if (!connected) return;
+        const now = Date.now();
+        if (now - lastJogClickRef.current < 150) return;
+        lastJogClickRef.current = now;
+
         const xDistance = jogDistance * xDir;
         const yDistance = jogDistance * yDir;
         backendJog(xDistance, yDistance, undefined, jogSpeed);
@@ -157,7 +178,7 @@ export default function Sidebar() {
     const handleZero = (axis: 'x' | 'y' | 'z') => {
         if (!connected) return;
         const axisNum = axis === 'x' ? 'X' : axis === 'y' ? 'Y' : 'Z';
-        sendBackendCommand(`G10 L20 P0 ${axisNum}0`);
+        backendZeroWCS({ axes: [axisNum] });
         setPosition({ ...position, [axis]: 0 });
         addConsoleLog('info', `${axis.toUpperCase()} axis zeroed`);
     };
@@ -182,6 +203,11 @@ export default function Sidebar() {
     };
 
     const processFile = (file: File) => {
+        if (isCarving) {
+            addConsoleLog('warning', 'Cannot load file while a carve job is active. Press STOP [■] in the control bar first.');
+            return;
+        }
+
         // Validate file type
         const validExtensions = ['.nc', '.gcode', '.txt', '.ngc', '.cnc', '.tap'];
         const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
@@ -197,11 +223,13 @@ export default function Sidebar() {
             addConsoleLog('error', `File too large: ${formatFileSize(file.size)}. Maximum size: ${formatFileSize(maxSize)}`);
             return;
         }
-        
+
+        // Free previous geometries and state immediately before loading new file
+        cleanupForNewFile();
         addConsoleLog('info', `Loading file: ${file.name} (${formatFileSize(file.size)})`);
         
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             try {
                 const content = e.target?.result as string;
                 
@@ -211,9 +239,8 @@ export default function Sidebar() {
                     return;
                 }
                 
-                // Parse G-code (v1.3: GCodeParser handles arcs, G92/G53, plane select, downsampling)
-                const parser = new GCodeParser();
-                const result = parser.parseGCode(content);
+                // Parse G-code asynchronously in Web Worker (or single-pass fallback)
+                const result = await parseGcodeAsync(content);
                 const parsed = result.lines;
                 const segments = result.segments;
                 if (!parsed || parsed.length === 0) {
@@ -222,6 +249,7 @@ export default function Sidebar() {
                 }
 
                 setGcode(parsed);
+                setParsedToolpath(result.parsedToolpath);
                 setToolpathSegments(segments);
                 setRawGcodeContent(content);
                 setFileInfo({ name: file.name, size: file.size, lines: parsed.length });
@@ -251,29 +279,44 @@ export default function Sidebar() {
     };
 
     const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+        if (isCarving) return;
         const file = event.target.files?.[0];
         if (!file) return;
         processFile(file);
     };
 
     const handleClearFile = () => {
-        setFileInfo(null);
-        setGcode([]);
-        setToolpathSegments([]);
-        setRawGcodeContent(null);
+        if (isCarving) {
+            addConsoleLog('warning', 'Cannot clear file while a carve job is active. Press STOP [■] in the control bar first.');
+            return;
+        }
+        cleanupForNewFile();
         addConsoleLog('info', 'File cleared');
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const handleReloadFile = () => {
-        if (!fileInputRef.current || !fileInputRef.current.files?.[0]) {
-            addConsoleLog('warning', 'No file to reload - please load a file first');
+        if (isCarving) {
+            addConsoleLog('warning', 'Cannot reload file while a carve job is active. Press STOP [■] in the control bar first.');
             return;
         }
-        
-        const file = fileInputRef.current.files[0];
-        addConsoleLog('info', `Reloading file: ${file.name}`);
-        processFile(file);
+
+        if (fileInputRef.current && fileInputRef.current.files?.[0]) {
+            const file = fileInputRef.current.files[0];
+            addConsoleLog('info', `Reloading file: ${file.name}`);
+            processFile(file);
+            return;
+        }
+
+        const state = useCNCStore.getState();
+        if (state.rawGcodeContent && state.fileInfo) {
+            addConsoleLog('info', `Reloading current file: ${state.fileInfo.name}`);
+            state.setFileLoadedBackend(false);
+            controller.loadFile(state.fileInfo.name, state.rawGcodeContent);
+            return;
+        }
+
+        addConsoleLog('warning', 'No file to reload - please load a file first');
     };
 
 
@@ -358,10 +401,10 @@ export default function Sidebar() {
 
                     <div 
                         ref={dropZoneRef}
-                        className={`file-drop-zone ${isDragOver ? 'drag-over' : ''}`}
-                        onDragOver={handleDragOver}
-                        onDragLeave={handleDragLeave}
-                        onDrop={handleDrop}
+                        className={`file-drop-zone ${isDragOver ? 'drag-over' : ''} ${isCarving ? 'drop-zone-disabled' : ''}`}
+                        onDragOver={isCarving ? undefined : handleDragOver}
+                        onDragLeave={isCarving ? undefined : handleDragLeave}
+                        onDrop={isCarving ? undefined : handleDrop}
                     >
                         {fileInfo ? (
                             <div className="file-card">
@@ -384,14 +427,16 @@ export default function Sidebar() {
                                     <button 
                                         className="file-card-action" 
                                         onClick={handleReloadFile} 
-                                        title="Reload current file"
+                                        title={isCarving ? "File actions locked during carve" : "Reload current file"}
+                                        disabled={isCarving}
                                     >
                                         <RefreshCw size={12} />
                                     </button>
                                     <button 
                                         className="file-card-action" 
                                         onClick={handleClearFile} 
-                                        title="Clear file"
+                                        title={isCarving ? "File actions locked during carve" : "Clear file"}
+                                        disabled={isCarving}
                                     >
                                         <X size={12} />
                                     </button>
@@ -404,14 +449,14 @@ export default function Sidebar() {
                                 </div>
                                 <div className="file-card-details">
                                     <div className="file-card-name">
-                                        {isDragOver ? 'Drop G-code file here' : 'No file loaded'}
+                                        {isCarving ? 'File upload locked during carve' : isDragOver ? 'Drop G-code file here' : 'No file loaded'}
                                     </div>
                                     <div className="file-card-meta">
-                                        {isDragOver ? 'Release to load file' : 'Load a G-code file to begin or drag & drop'}
+                                        {isCarving ? 'Press STOP [■] in control bar to load a new file' : isDragOver ? 'Release to load file' : 'Load a G-code file to begin or drag & drop'}
                                     </div>
                                     <div className="file-card-status">
-                                        <Circle size={8} className="file-status-indicator empty" />
-                                        <span>Ready to Load</span>
+                                        <Circle size={8} className={`file-status-indicator ${isCarving ? 'empty' : 'empty'}`} />
+                                        <span>{isCarving ? 'Locked' : 'Ready to Load'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -429,7 +474,9 @@ export default function Sidebar() {
                     <div className="file-management-actions">
                         <button
                             className="file-upload-btn primary"
-                            onClick={() => fileInputRef.current?.click()}
+                            onClick={() => !isCarving && fileInputRef.current?.click()}
+                            disabled={isCarving}
+                            title={isCarving ? "File upload locked during carve — press STOP to load a new file" : undefined}
                         >
                             <Upload size={14} />
                             Browse for G-Code File
@@ -439,14 +486,14 @@ export default function Sidebar() {
                             <button
                                 className="file-upload-btn secondary"
                                 onClick={handleReloadFile}
+                                disabled={isCarving}
+                                title={isCarving ? "File reload locked during carve" : undefined}
                             >
                                 <RotateCcw size={14} />
                                 Reload Current
                             </button>
                         )}
-
                     </div>
-
                 </div>
 
                 {isCarving && (
@@ -709,7 +756,17 @@ export default function Sidebar() {
                                     <g transform="translate(77 77) rotate(315)" pointerEvents="none"><polygon points="0,-9 7,4 -7,4" className="jog-ref-icon"/></g>
 
                                     {/* Center STOP button - OCTAGONAL like reference */}
-                                    <polygon points="133,88 152,107 152,133 133,152 107,152 88,133 88,107 107,88" className="jog-ref-stop"/>
+                                    <polygon
+                                        points="133,88 152,107 152,133 133,152 107,152 88,133 88,107 107,88"
+                                        className="jog-ref-stop"
+                                        onClick={() => {
+                                            if (!connected) return;
+                                            backendJogCancel();
+                                            backendJobStop();
+                                            addConsoleLog('warning', 'Motion stopped');
+                                        }}
+                                        style={{ cursor: 'pointer' }}
+                                    />
                                     <text x="120" y="127" textAnchor="middle" className="jog-ref-stop-text" pointerEvents="none">STOP</text>
                                 </svg>
                             </div>

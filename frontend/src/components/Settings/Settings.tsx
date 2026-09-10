@@ -12,7 +12,7 @@
  * Persistence happens via the backend ConfigStore (REST), so settings
  * survive process restarts and roam to all connected browsers.
  */
-import { useState } from 'react';
+
 import {
     Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu,
 } from 'lucide-react';
@@ -25,6 +25,7 @@ import SectionSurfacing from './SectionSurfacing';
 import SectionNotifications from './SectionNotifications';
 import SectionAppearance from './SectionAppearance';
 import SectionFirmwareUpdate from './SectionFirmwareUpdate';
+import { useCNCStore } from '../../stores/cncStore';
 import './Settings.css';
 
 type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware';
@@ -73,7 +74,8 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
 ];
 
 export default function Settings() {
-    const [active, setActive] = useState<Tab>('appearance');
+    const active = (useCNCStore((s) => s.settingsTab) as Tab) || 'appearance';
+    const setActive = (tab: Tab) => useCNCStore.getState().setSettingsTab(tab);
 
     return (
         <div className="settings-root">
