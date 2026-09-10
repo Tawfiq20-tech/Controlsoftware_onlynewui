@@ -94,7 +94,12 @@ class ChatbotService {
         for (const line of lines) {
             try {
                 const obj = JSON.parse(line);
-                if (obj.question && obj.answer) this.qaPairs.push(obj);
+                if (obj.question && obj.answer) {
+                    // Tokenize once at load time instead of on every query --
+                    // this list is re-scanned in full for every chat message.
+                    obj.questionTokens = tokenize(obj.question);
+                    this.qaPairs.push(obj);
+                }
             } catch (_) { /* skip malformed line */ }
         }
     }
@@ -109,8 +114,10 @@ class ChatbotService {
             const fix = /FIX:\s*(.+)/.exec(block);
             const nav = /NAV:\s*(.+)/.exec(block);
             if (key && fix) {
+                const keyStr = key[1].trim();
                 this.errorEntries.push({
-                    key: key[1].trim(),
+                    key: keyStr,
+                    keyTokens: tokenize(keyStr),
                     means: means ? means[1].trim() : '',
                     fix: fix[1].trim(),
                     nav: nav ? nav[1].trim() : '',
@@ -125,18 +132,23 @@ class ChatbotService {
         const sections = text.split(/\n(?=#{1,3}\s)/);
         for (const section of sections) {
             const trimmed = section.trim();
-            if (trimmed.length > 40) this.docChunks.push({ text: trimmed.slice(0, 1200), source: sourceName });
+            if (trimmed.length > 40) {
+                const chunkText = trimmed.slice(0, 1200);
+                this.docChunks.push({ text: chunkText, textTokens: tokenize(chunkText), source: sourceName });
+            }
         }
     }
 
     // Returns { answer, sources, score } — the best offline match, or a
-    // generic "don't know" if nothing scores above threshold.
+    // generic "don't know" if nothing scores above threshold. Uses the
+    // tokens cached at load time (_loadQaJsonl/_loadErrorKb/_loadMarkdown)
+    // instead of re-tokenizing all ~560 entries on every single query.
     _retrieve(query) {
         const qTokens = tokenize(query);
         let best = null;
 
         for (const kb of this.errorEntries) {
-            const score = overlapScore(qTokens, tokenize(kb.key));
+            const score = overlapScore(qTokens, kb.keyTokens);
             if (!best || score > best.score) {
                 best = {
                     score,
@@ -147,14 +159,14 @@ class ChatbotService {
         }
 
         for (const qa of this.qaPairs) {
-            const score = overlapScore(qTokens, tokenize(qa.question));
+            const score = overlapScore(qTokens, qa.questionTokens);
             if (!best || score > best.score) {
                 best = { score, answer: qa.answer, sources: ['control_software_qa.jsonl'] };
             }
         }
 
         for (const chunk of this.docChunks) {
-            const score = overlapScore(qTokens, tokenize(chunk.text)) * 0.7; // prose chunks are noisier, downweight
+            const score = overlapScore(qTokens, chunk.textTokens) * 0.7; // prose chunks are noisier, downweight
             if (!best || score > best.score) {
                 best = { score, answer: chunk.text, sources: [chunk.source] };
             }
@@ -163,8 +175,7 @@ class ChatbotService {
         return best;
     }
 
-    _offlineAnswer(query) {
-        const best = this._retrieve(query);
+    _offlineAnswer(best) {
         if (!best || best.score < 0.2) {
             return {
                 answer:
@@ -176,11 +187,10 @@ class ChatbotService {
         return { answer: best.answer, sources: best.sources, usedOnline: false };
     }
 
-    async _onlineAnswer(query, history, machineContext) {
+    async _onlineAnswer(query, history, machineContext, best) {
         const apiKey = process.env.GROQ_API_KEY;
         if (!apiKey) return null;
 
-        const best = this._retrieve(query);
         const context = best && best.score >= 0.15 ? best.answer : '';
         const stateLine = machineContext
             ? `\n\nCurrent machine state (for reference only, do not repeat verbatim unless asked): ` +
@@ -225,10 +235,22 @@ class ChatbotService {
         }
     }
 
+    // High-confidence threshold for skipping the Groq round-trip entirely.
+    // A score this strong means we already have a direct, specific match
+    // (near-exact question/error-key hit) -- rewording it through the LLM
+    // adds ~1-3s of network latency and an API call for no real benefit.
+    static HIGH_CONFIDENCE = 0.55;
+
     async answer(query, history, machineContext) {
         const suggestedAction = detectAction(query);
-        const online = await this._onlineAnswer(query, history, machineContext);
-        const result = online || this._offlineAnswer(query);
+        const best = this._retrieve(query); // single retrieval pass, reused below
+        let result;
+        if (best && best.score >= ChatbotService.HIGH_CONFIDENCE) {
+            result = this._offlineAnswer(best);
+        } else {
+            const online = await this._onlineAnswer(query, history, machineContext, best);
+            result = online || this._offlineAnswer(best);
+        }
         return { ...result, suggestedAction };
     }
 }
