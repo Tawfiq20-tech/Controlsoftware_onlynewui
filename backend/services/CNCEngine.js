@@ -1029,6 +1029,14 @@ class CNCEngine extends EventEmitter {
             : { linkOk: false, lastRxAgoS: null, heartbeatS: null, heartbeatTimeoutS: null, inFlight: 0, recentEvents: [] };
     }
 
+    /** Active on-demand link test for /api/link-test. See RSPController.pingNow(). */
+    async pingNow() {
+        const ctrl = this.controller;
+        return (typeof ctrl?.pingNow === 'function')
+            ? ctrl.pingNow()
+            : { ok: false, rttMs: null, error: 'controller does not support active ping' };
+    }
+
     /**
      * List available serial ports.
      */

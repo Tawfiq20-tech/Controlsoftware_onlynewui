@@ -151,6 +151,15 @@ app.get('/api/link-health', (req, res) => {
     res.json(engine.getLinkHealth());
 });
 
+app.post('/api/link-test', async (req, res) => {
+    try {
+        res.json(await engine.pingNow());
+    } catch (err) {
+        logger.error(err);
+        res.status(500).json({ ok: false, rttMs: null, error: err.message });
+    }
+});
+
 app.post('/api/connect', (req, res) => {
     const path = req.body.path || req.body.port;
     const baudRate = req.body.baudRate || 115200;
