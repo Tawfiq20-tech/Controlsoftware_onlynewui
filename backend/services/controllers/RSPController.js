@@ -1416,6 +1416,30 @@ class RSPController extends EventEmitter {
         return this.stream.getLinkHealth();
     }
 
+    /**
+     * Active on-demand link test: sends a real RSP_OP_PING to the firmware
+     * right now and waits for its reply, instead of reading passively
+     * observed traffic (getLinkHealth()). rsp_handle_ping() just ACKs with
+     * an empty payload (fw_m3/Src/easycnc_protocol.c:1173-1176) -- the RSP
+     * seq-matching in ReliableStream already guarantees the reply is really
+     * this ping's, so RTT is simply send-to-resolve wall time.
+     */
+    async pingNow() {
+        if (!this.stream) {
+            return { ok: false, rttMs: null, error: 'no stream (not connected)' };
+        }
+        const t0 = Date.now();
+        try {
+            await this.stream.sendCommand(defs.OP_PING, Buffer.alloc(0), { timeout: 2.0 });
+            return { ok: true, rttMs: Date.now() - t0, error: null };
+        } catch (exc) {
+            const reason = (exc instanceof LinkLost) ? 'link down'
+                : (exc instanceof RspTimeoutError) ? 'no reply within 2s -- unlinked'
+                : (exc.message || String(exc));
+            return { ok: false, rttMs: null, error: reason };
+        }
+    }
+
     getEventTriggers() {
         return { ...this._eventTriggers };
     }
