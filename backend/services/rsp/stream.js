@@ -180,6 +180,11 @@ class ReliableStream extends EventEmitter {
         // again; see _handle()'s FT_ACK/FT_RSP branches below.
         this._linkDownReason = '';
         this._lastGapNak = 0.0;
+        // Ring buffer of link up/down transitions (reason mirrors the string
+        // passed to _setLink: 'heartbeat', 'stall', 'tx_error', etc.) --
+        // exposed via getLinkHealth() so /api/link-health can show *why* a
+        // link dropped without the caller having to tail winston logs.
+        this._linkEvents = [];
 
         this._replyWaiters = new Map(); // seq -> {resolve, reject, timer}
 
@@ -251,9 +256,27 @@ class ReliableStream extends EventEmitter {
         }
         if (ok !== this._linkOk) {
             this._linkOk = ok;
+            this._linkEvents.push({ ts: now(), linkOk: ok, reason: ok ? 'restored' : (reason || 'unknown') });
+            if (this._linkEvents.length > 5) this._linkEvents.shift();
             if (this.onLinkChange) this.onLinkChange(ok);
             this.emit('link', ok);
         }
+    }
+
+    /**
+     * Snapshot for /api/link-health -- one-glance answer to "is the RSP
+     * link actually alive, and if not, why/when did it last drop."
+     */
+    getLinkHealth() {
+        const n = now();
+        return {
+            linkOk: this._linkOk,
+            lastRxAgoS: this._lastRx > 0 ? Number((n - this._lastRx).toFixed(2)) : null,
+            heartbeatS: this.heartbeatS,
+            heartbeatTimeoutS: this.heartbeatS * 3.0,
+            inFlight: this.inFlight,
+            recentEvents: this._linkEvents.slice(),
+        };
     }
 
     // -------------------------------------------------------------------------

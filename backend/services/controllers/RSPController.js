@@ -1409,6 +1409,13 @@ class RSPController extends EventEmitter {
         };
     }
 
+    getLinkHealth() {
+        if (!this.stream) {
+            return { linkOk: false, lastRxAgoS: null, heartbeatS: null, heartbeatTimeoutS: null, inFlight: 0, recentEvents: [] };
+        }
+        return this.stream.getLinkHealth();
+    }
+
     getEventTriggers() {
         return { ...this._eventTriggers };
     }

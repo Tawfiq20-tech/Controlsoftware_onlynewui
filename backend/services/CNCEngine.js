@@ -1044,6 +1044,16 @@ class CNCEngine extends EventEmitter {
     }
 
     /**
+     * Get RSP link liveness snapshot for /api/link-health.
+     */
+    getLinkHealth() {
+        const ctrl = this.controller;
+        return (typeof ctrl?.getLinkHealth === 'function')
+            ? ctrl.getLinkHealth()
+            : { linkOk: false, lastRxAgoS: null, heartbeatS: null, heartbeatTimeoutS: null, inFlight: 0, recentEvents: [] };
+    }
+
+    /**
      * List available serial ports.
      */
     async listPorts() {

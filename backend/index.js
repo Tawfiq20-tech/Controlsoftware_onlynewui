@@ -156,6 +156,10 @@ app.get('/api/state', (req, res) => {
     res.json(engine.getState());
 });
 
+app.get('/api/link-health', (req, res) => {
+    res.json(engine.getLinkHealth());
+});
+
 app.post('/api/connect', (req, res) => {
     const path = req.body.path || req.body.port;
     const baudRate = req.body.baudRate || 115200;
