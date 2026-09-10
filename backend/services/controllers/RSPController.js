@@ -736,6 +736,18 @@ class RSPController extends EventEmitter {
                 this.emit('console', '[RSP] Soft reset sent.');
                 break;
 
+            // Was missing entirely -- Header.tsx's "E-Stop" button and
+            // HomingOverlay's abort button both call command('estop'), which
+            // fell to the silent unknown-command default (no OP sent, no
+            // error surfaced, operator believed it worked). OP_E_STOP has a
+            // real firmware handler (rsp_handle_estop, allowlisted through
+            // the alarm gate) -- just wire it.
+            case 'estop':
+                this._lastAlarmEmitted = null;
+                this._fireAndForget(defs.OP_E_STOP, Buffer.alloc(0));
+                this.emit('console', '🛑 [RSP] E-Stop sent.');
+                break;
+
             case 'feedhold':
                 this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
                 if (this.job) this.job.pause();
