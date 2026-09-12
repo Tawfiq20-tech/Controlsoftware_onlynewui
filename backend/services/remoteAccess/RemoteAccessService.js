@@ -28,6 +28,9 @@ try {
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+const MIN_LAN_PIN_LENGTH = 4;
+const MIN_TUNNEL_PIN_LENGTH = 6;
+const TUNNEL_CONNECT_TIMEOUT_MS = 15 * 1000; // 15 seconds — observed live hangs/502s past this
 
 function isLoopbackAddress(addr) {
     if (!addr) return false;
@@ -84,10 +87,14 @@ class RemoteAccessService {
 
     setPin(pin) {
         const str = String(pin || '').trim();
-        if (str.length < 4) throw new Error('PIN must be at least 4 characters');
+        if (str.length < MIN_LAN_PIN_LENGTH) throw new Error(`PIN must be at least ${MIN_LAN_PIN_LENGTH} characters`);
         const salt = crypto.randomBytes(16).toString('hex');
         const hash = crypto.scryptSync(str, salt, 64).toString('hex');
         this.config.set('remoteAccess.pinHash', `${salt}:${hash}`);
+        // Only the hash is persisted (never the plaintext), so the length
+        // is stored separately to let startTunnel() enforce a stronger
+        // minimum for internet-facing access without re-prompting for the PIN.
+        this.config.set('remoteAccess.pinLength', str.length);
         this.tokens.clear(); // changing the PIN invalidates every existing remote session
         this.failedAttempts.clear();
     }
@@ -98,6 +105,7 @@ class RemoteAccessService {
             this.stopTunnel().catch(() => {});
         }
         this.config.delete('remoteAccess.pinHash');
+        this.config.delete('remoteAccess.pinLength');
         this.tokens.clear();
         this.failedAttempts.clear();
     }
@@ -218,9 +226,44 @@ class RemoteAccessService {
 
     // ─── Global Tunnel Management ────────────────────────────────────
 
+    // localtunnel's connect promise has been observed to hang indefinitely
+    // (or resolve to a 502/503-serving tunnel) against the real loca.lt
+    // service. Race it against a hard timeout so the UI gets a real error
+    // instead of sitting in 'starting' forever; if the tunnel resolves late
+    // (after we've already given up), close it immediately so it doesn't
+    // leak an unmanaged public endpoint.
+    _connectTunnelWithTimeout(timeoutMs) {
+        let timedOut = false;
+        let timer = null;
+        const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+                timedOut = true;
+                reject(new Error(`Tunnel did not connect within ${Math.round(timeoutMs / 1000)}s. The tunnel service may be unreachable or overloaded — try again later.`));
+            }, timeoutMs);
+        });
+
+        const connectPromise = localtunnel({ port: this.port }).then((tunnel) => {
+            clearTimeout(timer);
+            if (timedOut) {
+                try { tunnel.close(); } catch (_) {}
+                return null; // already rejected via timeoutPromise; this branch is unreachable in the race below
+            }
+            return tunnel;
+        }, (err) => {
+            clearTimeout(timer);
+            throw err;
+        });
+
+        return Promise.race([connectPromise, timeoutPromise]);
+    }
+
     async startTunnel() {
         if (!this.hasPin()) {
             throw new Error('A security PIN must be set before enabling Global Remote Access.');
+        }
+        const pinLength = this.config.get('remoteAccess.pinLength', 0);
+        if (pinLength < MIN_TUNNEL_PIN_LENGTH) {
+            throw new Error(`Internet tunnel requires a PIN of at least ${MIN_TUNNEL_PIN_LENGTH} characters. Set a longer PIN first.`);
         }
         if (this.tunnelInstance && this.tunnelStatus === 'running') {
             return { ok: true, url: this.tunnelUrl, tunnelPassword: this.tunnelPassword };
@@ -233,7 +276,7 @@ class RemoteAccessService {
         this.tunnelError = null;
 
         try {
-            const tunnel = await localtunnel({ port: this.port });
+            const tunnel = await this._connectTunnelWithTimeout(TUNNEL_CONNECT_TIMEOUT_MS);
             this.tunnelInstance = tunnel;
             this.tunnelUrl = tunnel.url;
             this.tunnelStatus = 'running';
@@ -297,7 +340,14 @@ class RemoteAccessService {
     // ─── Gates ───────────────────────────────────────────────────────
 
     isLoopback(req) {
-        return isLoopbackAddress(req.ip) || isLoopbackAddress(req.connection && req.connection.remoteAddress);
+        // req.ip resolves via Express's `trust proxy` setting (see index.js:
+        // 'loopback' — trusts X-Forwarded-For only when the direct peer is
+        // loopback). Do NOT also fall back to req.connection.remoteAddress:
+        // that is unconditionally loopback for ALL localtunnel-relayed
+        // traffic (the tunnel client always connects to localhost), so an
+        // OR-fallback there would let any internet visitor through the
+        // tunnel bypass the PIN gate entirely.
+        return isLoopbackAddress(req.ip);
     }
 
     httpGate() {
@@ -318,8 +368,23 @@ class RemoteAccessService {
 
     socketGate() {
         return (socket, next) => {
-            const addr = socket.handshake.address || '';
-            if (isLoopbackAddress(addr) || addr.endsWith('127.0.0.1')) return next();
+            // Socket.IO does NOT inherit Express's `trust proxy` setting:
+            // engine.io sets handshake.address straight from
+            // req.connection.remoteAddress, never consulting X-Forwarded-For
+            // (confirmed by reading engine.io/build/socket.js and
+            // socket.io/dist/socket.js). So handshake.address is always
+            // loopback for tunnel-relayed traffic, same as the raw HTTP
+            // case fix #2 addresses. Replicate the same loopback-trusts-XFF
+            // logic manually here using the raw handshake headers, which
+            // ARE the unmodified request headers and do carry a real
+            // X-Forwarded-For from the tunnel relay.
+            const rawAddr = socket.handshake.address || '';
+            let effectiveAddr = rawAddr;
+            if (isLoopbackAddress(rawAddr)) {
+                const xff = socket.handshake.headers && socket.handshake.headers['x-forwarded-for'];
+                if (xff) effectiveAddr = String(xff).split(',')[0].trim();
+            }
+            if (isLoopbackAddress(effectiveAddr)) return next();
             if (!this.hasPin()) return next();
             const token = socket.handshake.auth && socket.handshake.auth.token;
             if (this.verifyToken(token)) return next();

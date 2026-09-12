@@ -39,6 +39,13 @@ const errserver = require('./middleware/errserver');
 
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
+// Tunnel clients (localtunnel) relay public traffic to localhost, so the
+// direct peer is always loopback. Trusting X-Forwarded-For ONLY when the
+// immediate peer is loopback lets req.ip resolve to the real tunnel visitor
+// without letting a non-loopback (LAN/WAN) peer spoof its IP via a forged
+// header. Verified live against a real loca.lt tunnel: the tunnel server
+// sets a genuine X-Forwarded-For with the visitor's public IP.
+app.set('trust proxy', 'loopback');
 app.use(cors({ origin: true }));
 app.use(express.json());
 

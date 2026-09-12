@@ -11,7 +11,10 @@ import { remote, RemoteInfo, TunnelStatus } from './api';
 type AccessMode = 'global' | 'local';
 
 export default function SectionRemoteAccess() {
-    const [mode, setMode] = useState<AccessMode>('global');
+    // Default to Local Wi-Fi, not Global Internet: the tunnel exposes this
+    // machine to the public internet and should be an explicit opt-in, not
+    // the first thing the operator sees.
+    const [mode, setMode] = useState<AccessMode>('local');
     const [info, setInfo] = useState<RemoteInfo | null>(null);
     const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
     const [selectedIp, setSelectedIp] = useState<string | null>(null);
@@ -19,6 +22,7 @@ export default function SectionRemoteAccess() {
     const [pinDraft, setPinDraft] = useState('');
     const [busy, setBusy] = useState(false);
     const [tunnelBusy, setTunnelBusy] = useState(false);
+    const [understandRisk, setUnderstandRisk] = useState(false);
     const [copiedUrl, setCopiedUrl] = useState(false);
     const [copiedPw, setCopiedPw] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -247,13 +251,31 @@ export default function SectionRemoteAccess() {
                         </div>
                     </div>
 
+                    {!isTunnelRunning && (
+                        <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 6, fontSize: 12, color: '#fca5a5' }}>
+                            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={understandRisk}
+                                    onChange={(e) => setUnderstandRisk(e.target.checked)}
+                                    style={{ marginTop: 2 }}
+                                />
+                                <span>
+                                    <ShieldAlert size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                    I understand this exposes my machine to the internet and requires a 6+ character PIN.
+                                </span>
+                            </label>
+                        </div>
+                    )}
+
                     <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
                         {!isTunnelRunning ? (
                             <button
                                 className="settings-btn primary"
                                 onClick={startGlobalTunnel}
-                                disabled={tunnelBusy || busy}
+                                disabled={tunnelBusy || busy || !understandRisk}
                                 style={{ height: 34, padding: '0 16px' }}
+                                title={!understandRisk ? 'Check the box above to confirm you understand the exposure risk' : undefined}
                             >
                                 <Power size={14} /> Enable Global Access
                             </button>
@@ -410,7 +432,7 @@ export default function SectionRemoteAccess() {
                             type="password"
                             inputMode="numeric"
                             className="wa-input"
-                            placeholder="New Security PIN (min 4 chars)"
+                            placeholder={mode === 'global' ? 'New Security PIN (min 6 chars for internet access)' : 'New Security PIN (min 4 chars)'}
                             value={pinDraft}
                             onChange={(e) => setPinDraft(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') setPin(); }}
@@ -420,6 +442,11 @@ export default function SectionRemoteAccess() {
                         <button className="settings-btn primary" onClick={setPin} disabled={busy || pinDraft.trim().length < 4}>
                             <Lock size={14} /> Set PIN
                         </button>
+                    </div>
+                )}
+                {mode === 'global' && (
+                    <div className="wa-block-sub" style={{ marginTop: 8 }}>
+                        Internet tunnel access requires a PIN of at least 6 characters.
                     </div>
                 )}
             </div>

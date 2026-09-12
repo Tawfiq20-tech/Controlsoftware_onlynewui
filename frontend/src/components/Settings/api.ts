@@ -16,6 +16,18 @@ const BASE = (() => {
     return 'http://localhost:4000';
 })();
 
+// Backend error routes reply with a JSON `{ error: '<message>' }` body (e.g.
+// startTunnel()'s timeout/PIN-length messages) — read it when present instead
+// of discarding it in favor of the generic HTTP status text.
+async function throwWithServerMessage(r: Response): Promise<never> {
+    let message = `${r.status} ${r.statusText}`;
+    try {
+        const body = await r.json();
+        if (body && typeof body.error === 'string') message = body.error;
+    } catch (_) { /* body wasn't JSON — fall back to status text */ }
+    throw new Error(message);
+}
+
 async function jget<T>(path: string): Promise<T> {
     const r = await fetch(`${BASE}${path}`, {
         headers: {
@@ -23,7 +35,7 @@ async function jget<T>(path: string): Promise<T> {
             ...remoteAuthHeaders(),
         },
     });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) return throwWithServerMessage(r);
     return r.json();
 }
 async function jpost<T>(path: string, body: unknown): Promise<T> {
@@ -36,7 +48,7 @@ async function jpost<T>(path: string, body: unknown): Promise<T> {
         },
         body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) return throwWithServerMessage(r);
     return r.json();
 }
 async function jdelete(path: string): Promise<void> {
@@ -47,7 +59,7 @@ async function jdelete(path: string): Promise<void> {
             ...remoteAuthHeaders(),
         },
     });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) return throwWithServerMessage(r);
 }
 
 // Webcams

@@ -9,3 +9,4 @@ backend/data/remote-access.json
 # Frontend build tooling (dist/ stays committed -- backend/index.js serves it
 # statically and Tawfiq's machine doesn't run the frontend build itself)
 frontend/node_modules/
+backend/node_modules/
