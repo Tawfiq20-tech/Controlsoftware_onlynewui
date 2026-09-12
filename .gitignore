@@ -4,6 +4,7 @@ backend/logs/
 *.ndjson
 *.patch
 backend/data/*.jsonl
+backend/data/remote-access.json
 
 # Frontend build tooling (dist/ stays committed -- backend/index.js serves it
 # statically and Tawfiq's machine doesn't run the frontend build itself)

@@ -19,13 +19,16 @@ function extractModalStates(lines: string[], targetLine: number): string[] {
         wcs: 'G54',            // default WCS
         cutter: '',            // G40 cutter comp off
         tool_length: '',       // G49 tool length offset cancel
-        spindle: '',           // G97 spindle speed mode
+        motion: 'G0',          // active motion mode (G0, G1, G2, G3)
+        feedRate: '',          // active feed rate
+        spindleSpeed: '',      // active spindle speed
+        spindleState: '',      // M3, M4, M5
         coolant: 'M9',         // coolant off
     };
 
     // Scan all lines before target to track modal state changes
     for (let i = 0; i < Math.min(targetLine, lines.length); i++) {
-        const line = lines[i].toUpperCase().replace(/;.*$/, '').trim();
+        const line = lines[i].toUpperCase().replace(/\([^)]*\)/g, ' ').replace(/;.*$/, '').trim();
         if (!line) continue;
 
         // Units
@@ -48,6 +51,18 @@ function extractModalStates(lines: string[], targetLine: number): string[] {
         if (line.includes('G57')) modals.wcs = 'G57';
         if (line.includes('G58')) modals.wcs = 'G58';
         if (line.includes('G59')) modals.wcs = 'G59';
+        // Active motion
+        const mMatch = line.match(/\bG0?([0-3])\b/);
+        if (mMatch) modals.motion = 'G' + mMatch[1];
+        // Feed rate
+        const fMatch = line.match(/F\s*(-?[\d.]+)/);
+        if (fMatch) modals.feedRate = fMatch[1];
+        // Spindle
+        const sMatch = line.match(/S\s*(\d+)/);
+        if (sMatch) modals.spindleSpeed = sMatch[1];
+        if (line.includes('M3') || line.includes('M03')) modals.spindleState = 'M3';
+        if (line.includes('M4') || line.includes('M04')) modals.spindleState = 'M4';
+        if (line.includes('M5') || line.includes('M05')) modals.spindleState = 'M5';
         // Coolant
         if (line.includes('M7') || line.includes('M8')) modals.coolant = line.includes('M7') ? 'M7' : 'M8';
         if (line.includes('M9')) modals.coolant = 'M9';
@@ -57,10 +72,19 @@ function extractModalStates(lines: string[], targetLine: number): string[] {
     const setup: string[] = [];
     setup.push(`${modals.units} ${modals.plane} ${modals.distance} ${modals.feed} ${modals.wcs}`.trim());
     setup.push('G40 G49'); // cutter comp off, tool length offset cancel
+    if (modals.feedRate) {
+        setup.push(`F${modals.feedRate}`);
+    }
+    if (modals.spindleSpeed && modals.spindleState && modals.spindleState !== 'M5') {
+        setup.push(`${modals.spindleState} S${modals.spindleSpeed}`);
+    }
     if (modals.coolant && modals.coolant !== 'M9') {
         setup.push(modals.coolant);
     } else {
         setup.push('M9'); // ensure coolant off
+    }
+    if (modals.motion) {
+        setup.push(modals.motion); // restore active motion mode before target line
     }
     return setup;
 }

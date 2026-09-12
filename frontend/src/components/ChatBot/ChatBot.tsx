@@ -27,7 +27,7 @@ import {
     backendJobStop,
     backendJog,
 } from '../../utils/backendConnection';
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { remoteAuthHeaders } from '../../utils/remoteAuth';
 import './ChatBot.css';
@@ -86,6 +86,82 @@ const ACTION_EXECUTORS: Partial<Record<SuggestedAction['action'], () => void>> =
     job_stop: backendJobStop,
 };
 
+/* ── ChatMessageItem (Memoized to prevent markdown re-parsing on typing) ── */
+
+const ChatMessageItem = memo(function ChatMessageItem({
+    msg,
+    index,
+    connected,
+    onRequestConfirm,
+    onRunAction,
+    onCancelConfirm,
+}: {
+    msg: ChatMessage;
+    index: number;
+    connected: boolean;
+    onRequestConfirm: (index: number) => void;
+    onRunAction: (index: number, action: SuggestedAction) => void;
+    onCancelConfirm: (index: number) => void;
+}) {
+    return (
+        <div
+            className={`chatbot-msg ${
+                msg.role === 'user' ? 'chatbot-msg-user' : 'chatbot-msg-bot'
+            }`}
+        >
+            <ReactMarkdown>{msg.content}</ReactMarkdown>
+
+            {msg.role === 'assistant' && msg.suggestedAction && (
+                <div className="chatbot-action-row">
+                    {msg.actionState === 'idle' && (
+                        msg.suggestedAction.autoExec ? (
+                            connected ? (
+                                <button
+                                    className="chatbot-action-btn"
+                                    onClick={() => onRequestConfirm(index)}
+                                >
+                                    Want me to do this — {msg.suggestedAction.label}?
+                                </button>
+                            ) : (
+                                <div className="chatbot-action-hint">
+                                    (Machine isn't connected — connect first, then ask again.)
+                                </div>
+                            )
+                        ) : (
+                            <div className="chatbot-action-hint">
+                                ({msg.suggestedAction.label} needs details I can't guess from chat — use the panel above.)
+                            </div>
+                        )
+                    )}
+                    {msg.actionState === 'confirming' && (
+                        <div className="chatbot-action-confirm">
+                            <span>Confirm: {msg.suggestedAction.label}?</span>
+                            <button
+                                className="chatbot-action-btn chatbot-action-yes"
+                                onClick={() => onRunAction(index, msg.suggestedAction as SuggestedAction)}
+                            >
+                                Yes, do it
+                            </button>
+                            <button
+                                className="chatbot-action-btn chatbot-action-no"
+                                onClick={() => onCancelConfirm(index)}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    )}
+                    {msg.actionState === 'done' && (
+                        <div className="chatbot-action-done">Done — sent {msg.suggestedAction.label.toLowerCase()}.</div>
+                    )}
+                    {msg.actionState === 'error' && (
+                        <div className="chatbot-error">Couldn't run that — try the button on the panel instead.</div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+});
+
 /* ── Component ──────────────────────────────────────────── */
 
 export default function ChatBot() {
@@ -99,9 +175,9 @@ export default function ChatBot() {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    /* Auto-scroll to latest message */
+    /* Auto-scroll to latest message without running continuous smooth-scroll animation frames */
     const scrollToBottom = useCallback(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
     }, []);
 
     useEffect(() => {
@@ -203,14 +279,14 @@ export default function ChatBot() {
 
     /* ── Action confirm / execute ──────────────────────── */
 
-    const setActionState = (index: number, state: ChatMessage['actionState']) => {
+    const setActionState = useCallback((index: number, state: ChatMessage['actionState']) => {
         setMessages(prev => prev.map((m, i) => (i === index ? { ...m, actionState: state } : m)));
-    };
+    }, []);
 
-    const requestConfirm = (index: number) => setActionState(index, 'confirming');
-    const cancelConfirm = (index: number) => setActionState(index, 'idle');
+    const requestConfirm = useCallback((index: number) => setActionState(index, 'confirming'), [setActionState]);
+    const cancelConfirm = useCallback((index: number) => setActionState(index, 'idle'), [setActionState]);
 
-    const runAction = (index: number, action: SuggestedAction) => {
+    const runAction = useCallback((index: number, action: SuggestedAction) => {
         // Every other control in this app (Sidebar/JobControlBar/StatusBar/Header)
         // gates its backend calls on `connected` — match that here so a stale
         // confirm button can't silently no-op against a disconnected machine.
@@ -240,7 +316,7 @@ export default function ChatBot() {
         } catch (err) {
             setActionState(index, 'error');
         }
-    };
+    }, [connected, setActionState]);
 
     /* ── Render ─────────────────────────────────────────── */
 
@@ -294,62 +370,15 @@ export default function ChatBot() {
 
                         {/* Message list */}
                         {messages.map((msg, i) => (
-                            <div
+                            <ChatMessageItem
                                 key={i}
-                                className={`chatbot-msg ${
-                                    msg.role === 'user' ? 'chatbot-msg-user' : 'chatbot-msg-bot'
-                                }`}
-                            >
-                                <ReactMarkdown>{msg.content}</ReactMarkdown>
-
-                                {msg.role === 'assistant' && msg.suggestedAction && (
-                                    <div className="chatbot-action-row">
-                                        {msg.actionState === 'idle' && (
-                                            msg.suggestedAction.autoExec ? (
-                                                connected ? (
-                                                    <button
-                                                        className="chatbot-action-btn"
-                                                        onClick={() => requestConfirm(i)}
-                                                    >
-                                                        Want me to do this — {msg.suggestedAction.label}?
-                                                    </button>
-                                                ) : (
-                                                    <div className="chatbot-action-hint">
-                                                        (Machine isn't connected — connect first, then ask again.)
-                                                    </div>
-                                                )
-                                            ) : (
-                                                <div className="chatbot-action-hint">
-                                                    ({msg.suggestedAction.label} needs details I can't guess from chat — use the panel above.)
-                                                </div>
-                                            )
-                                        )}
-                                        {msg.actionState === 'confirming' && (
-                                            <div className="chatbot-action-confirm">
-                                                <span>Confirm: {msg.suggestedAction.label}?</span>
-                                                <button
-                                                    className="chatbot-action-btn chatbot-action-yes"
-                                                    onClick={() => runAction(i, msg.suggestedAction as SuggestedAction)}
-                                                >
-                                                    Yes, do it
-                                                </button>
-                                                <button
-                                                    className="chatbot-action-btn chatbot-action-no"
-                                                    onClick={() => cancelConfirm(i)}
-                                                >
-                                                    Cancel
-                                                </button>
-                                            </div>
-                                        )}
-                                        {msg.actionState === 'done' && (
-                                            <div className="chatbot-action-done">Done — sent {msg.suggestedAction.label.toLowerCase()}.</div>
-                                        )}
-                                        {msg.actionState === 'error' && (
-                                            <div className="chatbot-error">Couldn't run that — try the button on the panel instead.</div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
+                                msg={msg}
+                                index={i}
+                                connected={connected}
+                                onRequestConfirm={requestConfirm}
+                                onRunAction={runAction}
+                                onCancelConfirm={cancelConfirm}
+                            />
                         ))}
 
                         {/* Typing indicator */}

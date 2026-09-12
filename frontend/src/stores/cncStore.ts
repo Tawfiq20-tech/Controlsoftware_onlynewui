@@ -160,7 +160,7 @@ interface CNCStore {
     machinePosition: Position;
     setMachinePosition: (pos: Position) => void;
 
-    // Feed-rate override percent (RSP OP_SET_FEED_OVERRIDE, 50-150%)
+    // Feed-rate override percent (RSP OP_SET_FEED_OVERRIDE, 10-200%)
     feedOverridePct: number;
     setFeedOverridePct: (pct: number) => void;
 

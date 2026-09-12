@@ -248,8 +248,8 @@ class JobStream extends EventEmitter {
      */
     upload(lines, jobId = null) {
         const clean = lines
-            .map((l) => l.trim())
-            .filter((l) => l && !(l.startsWith(';') || l.startsWith('(') || l.startsWith('%')));
+            .map((l) => l.replace(/\([^)]*\)/g, ' ').replace(/;.*$/, '').trim())
+            .filter((l) => l && !l.startsWith('%'));
         if (this._active) {
             throw new Error('job already active');
         }

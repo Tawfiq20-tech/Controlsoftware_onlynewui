@@ -16,10 +16,12 @@ const getBackendUrl = (): string => {
     if (url !== undefined && url !== null && String(url).trim() !== '') {
         return String(url).replace(/\/$/, '');
     }
-    // Use same host as the page so external devices (e.g. tablet on network) can connect to backend
+    // Use same host as the page so external devices (e.g. tablet on network, global tunnel) can connect to backend
     if (typeof window !== 'undefined' && window.location?.hostname) {
-        const { protocol, hostname } = window.location;
-        return `${protocol}//${hostname}:4000`;
+        const { protocol, hostname, port, origin } = window.location;
+        if (port === '5173') return `${protocol}//${hostname}:4000`;
+        if (port === '4000') return `${protocol}//${hostname}:4000`;
+        return origin;
     }
     return 'http://localhost:4000';
 };
@@ -63,7 +65,14 @@ export function connectBackendSocket(): Promise<void> {
         // gated) and required on a remote LAN client once a PIN is set --
         // see RemoteAccessService.socketGate() on the backend.
         const remoteToken = getRemoteToken();
-        const socketOptions = remoteToken ? { auth: { token: remoteToken } } : {};
+        const socketOptions: Record<string, unknown> = {
+            extraHeaders: {
+                'bypass-tunnel-reminder': 'true',
+            },
+        };
+        if (remoteToken) {
+            socketOptions.auth = { token: remoteToken };
+        }
 
         controller.connect(url, socketOptions, (err) => {
             if (err) {
@@ -274,7 +283,7 @@ function _wireControllerToStore(): void {
             if (state.status.feedrate !== undefined) s.setFeedRate(state.status.feedrate);
             if (state.status.spindle !== undefined) s.setSpindleSpeed(state.status.spindle);
 
-            // Update feed-rate override percent (RSP only -- 50-150%)
+            // Update feed-rate override percent (RSP only -- 10-200%)
             if (state.status.feedOverridePct !== undefined) s.setFeedOverridePct(state.status.feedOverridePct);
 
             // Update overrides

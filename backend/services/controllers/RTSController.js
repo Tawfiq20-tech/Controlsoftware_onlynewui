@@ -1675,8 +1675,18 @@ class RTSController extends EventEmitter {
         // typical CAM output ("G1 X22.318 Y10.433 Z-0.100 F200.0") has
         // spaces. RTS firmware appears strict about this — keep parity
         // with the vendor wire format.
-        const compact = String(code).replace(/\s+/g, '');
-        const text = `AN${lineNum}${compact}`;
+        // Check for operator notice in comments (e.g. Buildbotics MSG comments)
+        const msgMatch = String(code).match(/\((?:MSG,?\s*)(.*?)\)/i);
+        if (msgMatch) {
+            const notice = msgMatch[1].trim();
+            this.emit('console', `💬 [Operator Notice] ${notice}`);
+            this.emit('operator:message', notice);
+        }
+
+        // Strip parenthetical comments before packing into AN stream line so they don't corrupt wire protocol
+        const stripped = String(code).replace(/\([^)]*\)/g, '').replace(/;.*$/, '');
+        const compact = stripped.replace(/\s+/g, '');
+        const text = `AN${lineNum}${compact || 'G4P0'}`;
         const asciiBytes = Buffer.from(text, 'ascii');
         const payload = Buffer.alloc(1 + asciiBytes.length);
         payload[0] = CMD_QUERY; // 0x00
@@ -2843,7 +2853,7 @@ class RTSController extends EventEmitter {
      * @param {string} gcode
      */
     _loadGcode(name, gcode) {
-        this._gcodeLines = gcode.split('\n').map(l => l.trim()).filter(Boolean);
+        this._gcodeLines = gcode.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('%'));
         this._gcodeIndex = 0;
         this._running = false;
         this._paused = false;

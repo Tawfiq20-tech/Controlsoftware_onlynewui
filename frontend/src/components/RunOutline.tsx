@@ -19,33 +19,42 @@ function calculateBoundingBox(rawGcode: string): BoundingBox | null {
     let minZ = Infinity, maxZ = -Infinity;
     let isAbsolute = true;
     let hasMove = false;
+    let activeMotion: string | null = null;
+    let scale = 1.0;
 
     const numRe = /([XYZF])\s*(-?[\d.]+)/gi;
 
     for (const raw of lines) {
-        const line = raw.replace(/;.*$/, '').trim().toUpperCase();
+        const line = raw.replace(/\([^)]*\)/g, ' ').replace(/;.*$/, '').trim().toUpperCase();
         if (!line) continue;
 
+        if (line.includes('G20')) scale = 25.4;
+        if (line.includes('G21')) scale = 1.0;
         if (line.includes('G90')) isAbsolute = true;
         if (line.includes('G91')) isAbsolute = false;
 
-        // G0, G1, G2, G3 moves
-        if (/^G[0-3]\b/.test(line) || /^G0[0-3]\b/.test(line)) {
-            const coords: Record<string, number> = {};
-            let m: RegExpExecArray | null;
-            numRe.lastIndex = 0;
-            while ((m = numRe.exec(line)) !== null) {
-                coords[m[1]] = parseFloat(m[2]);
-            }
+        const gMatch = line.match(/\bG0?([0-3])\b/);
+        if (gMatch) {
+            activeMotion = 'G' + gMatch[1];
+        }
 
+        const coords: Record<string, number> = {};
+        let m: RegExpExecArray | null;
+        numRe.lastIndex = 0;
+        while ((m = numRe.exec(line)) !== null) {
+            coords[m[1]] = parseFloat(m[2]);
+        }
+
+        const hasCoords = coords.X !== undefined || coords.Y !== undefined || coords.Z !== undefined;
+        if (hasCoords && activeMotion) {
             if (isAbsolute) {
-                if (coords.X !== undefined) x = coords.X;
-                if (coords.Y !== undefined) y = coords.Y;
-                if (coords.Z !== undefined) z = coords.Z;
+                if (coords.X !== undefined) x = coords.X * scale;
+                if (coords.Y !== undefined) y = coords.Y * scale;
+                if (coords.Z !== undefined) z = coords.Z * scale;
             } else {
-                if (coords.X !== undefined) x += coords.X;
-                if (coords.Y !== undefined) y += coords.Y;
-                if (coords.Z !== undefined) z += coords.Z;
+                if (coords.X !== undefined) x += coords.X * scale;
+                if (coords.Y !== undefined) y += coords.Y * scale;
+                if (coords.Z !== undefined) z += coords.Z * scale;
             }
 
             if (coords.X !== undefined || coords.Y !== undefined) {
@@ -77,6 +86,7 @@ function calculateBoundingBox(rawGcode: string): BoundingBox | null {
 // Generate square outline G-code (rectangle at safe height)
 function generateSquareOutline(bb: BoundingBox, safeZ: number, feedRate: number): string {
     const lines = [
+        'G21',
         'G90',
         `G0 Z${safeZ.toFixed(3)}`,
         `G0 X${bb.minX.toFixed(3)} Y${bb.minY.toFixed(3)}`,
@@ -95,31 +105,38 @@ function generateDetailedOutline(rawGcode: string, safeZ: number, feedRate: numb
     const moves: Array<[number, number]> = [];
     let x = 0, y = 0;
     let isAbsolute = true;
+    let activeMotion: string | null = null;
+    let scale = 1.0;
     const numRe = /([XY])\s*(-?[\d.]+)/gi;
 
     for (const raw of lines) {
-        const line = raw.replace(/;.*$/, '').trim().toUpperCase();
+        const line = raw.replace(/\([^)]*\)/g, ' ').replace(/;.*$/, '').trim().toUpperCase();
         if (!line) continue;
+        if (line.includes('G20')) scale = 25.4;
+        if (line.includes('G21')) scale = 1.0;
         if (line.includes('G90')) isAbsolute = true;
         if (line.includes('G91')) isAbsolute = false;
 
-        if (/^G[0-3]\b/.test(line) || /^G0[0-3]\b/.test(line)) {
-            const coords: Record<string, number> = {};
-            let m: RegExpExecArray | null;
-            numRe.lastIndex = 0;
-            while ((m = numRe.exec(line)) !== null) {
-                coords[m[1]] = parseFloat(m[2]);
+        const gMatch = line.match(/\bG0?([0-3])\b/);
+        if (gMatch) {
+            activeMotion = 'G' + gMatch[1];
+        }
+
+        const coords: Record<string, number> = {};
+        let m: RegExpExecArray | null;
+        numRe.lastIndex = 0;
+        while ((m = numRe.exec(line)) !== null) {
+            coords[m[1]] = parseFloat(m[2]);
+        }
+        if ((coords.X !== undefined || coords.Y !== undefined) && activeMotion) {
+            if (isAbsolute) {
+                if (coords.X !== undefined) x = coords.X * scale;
+                if (coords.Y !== undefined) y = coords.Y * scale;
+            } else {
+                if (coords.X !== undefined) x += coords.X * scale;
+                if (coords.Y !== undefined) y += coords.Y * scale;
             }
-            if (coords.X !== undefined || coords.Y !== undefined) {
-                if (isAbsolute) {
-                    if (coords.X !== undefined) x = coords.X;
-                    if (coords.Y !== undefined) y = coords.Y;
-                } else {
-                    if (coords.X !== undefined) x += coords.X;
-                    if (coords.Y !== undefined) y += coords.Y;
-                }
-                moves.push([x, y]);
-            }
+            moves.push([x, y]);
         }
     }
 
@@ -134,6 +151,7 @@ function generateDetailedOutline(rawGcode: string, safeZ: number, feedRate: numb
     }
 
     const outLines = [
+        'G21',
         'G90',
         `G0 Z${safeZ.toFixed(3)}`,
         `G0 X${sampled[0][0].toFixed(3)} Y${sampled[0][1].toFixed(3)}`,

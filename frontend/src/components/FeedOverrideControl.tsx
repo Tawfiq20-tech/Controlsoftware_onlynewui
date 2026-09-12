@@ -14,7 +14,7 @@ export default function FeedOverrideControl() {
 
     const handleFeedChange = (fn: () => void, delta: number, label: string) => () => {
         if (!connected) return;
-        const nextPct = delta === 0 ? 100 : Math.min(150, Math.max(50, Math.round(feedOverridePct + delta)));
+        const nextPct = delta === 0 ? 100 : Math.min(200, Math.max(10, Math.round(feedOverridePct + delta)));
         setFeedOverridePct(nextPct);
         fn();
         addConsoleLog('info', `Feed override: ${label} (${nextPct}%)`);

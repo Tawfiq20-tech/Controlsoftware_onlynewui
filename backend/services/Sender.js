@@ -75,7 +75,7 @@ class Sender extends EventEmitter {
         this.lines = this.gcode
             .split(/\r?\n/)
             .map((l) => l.trim())
-            .filter((l) => l.length > 0);
+            .filter((l) => l.length > 0 && !l.startsWith('%'));
         this.total = this.lines.length;
 
         this.rewind();

@@ -358,8 +358,27 @@ class GrblController extends EventEmitter {
                     return;
                 }
 
-                this.connection.writeln(line);
-                this.debugMonitor.logTx(line, { source: 'sender' });
+                // Check for operator notice in comments (e.g. Buildbotics MSG comments)
+                const msgMatch = line.match(/\((?:MSG,?\s*)(.*?)\)/i);
+                if (msgMatch) {
+                    const notice = msgMatch[1].trim();
+                    this.emit('console', `💬 [Operator Notice] ${notice}`);
+                    this.emit('operator:message', notice);
+                }
+
+                // Sanitize unsupported modal codes for standard Grbl firmware
+                // G64 (continuous mode / path blending) is standard in LinuxCNC/Buildbotics but unsupported by Grbl (causes error:20)
+                let toSend = line;
+                if (/\bG64(?:\.\d+)?(?:\s*P\s*[\d.]+)?\b/i.test(toSend)) {
+                    toSend = toSend.replace(/\bG64(?:\.\d+)?(?:\s*P\s*[\d.]+)?\b/gi, '').trim();
+                    // If line became empty after stripping G64, send harmless comment so Grbl responds with 'ok'
+                    if (!toSend) {
+                        toSend = '(G64 bypassed)';
+                    }
+                }
+
+                this.connection.writeln(toSend);
+                this.debugMonitor.logTx(toSend, { source: 'sender' });
             }
         });
 

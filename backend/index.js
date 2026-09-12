@@ -256,11 +256,15 @@ app.get('/api/remote/info', (req, res) => {
 });
 
 // QR image for the control PC's own Settings panel to scan-and-connect
-// from a phone. Loopback-only in practice (the operator's own browser).
+// from a phone. Supports explicit URL (e.g. global HTTPS tunnel) or local LAN IP.
 app.get('/api/remote/qr', async (req, res) => {
-    const ip = req.query.ip || remoteAccessService.getLanIps()[0];
-    if (!ip) return res.status(404).json({ error: 'No LAN IP detected' });
-    const url = `http://${ip}:${PORT}`;
+    const rawUrl = req.query.url;
+    let url = rawUrl;
+    if (!url) {
+        const ip = req.query.ip || remoteAccessService.getLanIps()[0];
+        if (!ip) return res.status(404).json({ error: 'No LAN IP detected' });
+        url = `http://${ip}:${PORT}`;
+    }
     try {
         const dataUrl = await remoteAccessService.getQrDataUrl(url);
         res.json({ url, dataUrl });
@@ -291,14 +295,55 @@ app.delete('/api/remote/pin', (req, res) => {
     res.json({ ok: true });
 });
 
-// Remote clients exchange the PIN for a session token once; the frontend
-// caches the token client-side and sends it as X-Remote-Token after that.
+// Remote clients exchange the PIN for a session token once with brute-force rate-limiting;
+// the frontend caches the token client-side and sends it as X-Remote-Token after that.
 app.post('/api/remote/verify-pin', (req, res) => {
-    if (!remoteAccessService.hasPin()) return res.status(400).json({ error: 'No PIN is set' });
-    if (!remoteAccessService.verifyPin(req.body && req.body.pin)) {
-        return res.status(401).json({ error: 'Incorrect PIN' });
+    const clientIp = req.ip || (req.connection && req.connection.remoteAddress);
+    const result = remoteAccessService.verifyPinWithRateLimit(req.body && req.body.pin, clientIp);
+    if (!result.ok) {
+        return res.status(result.locked ? 429 : 401).json({
+            error: result.error,
+            remainingAttempts: result.remainingAttempts,
+        });
     }
-    res.json({ token: remoteAccessService.issueToken() });
+    res.json({ token: result.token });
+});
+
+// ─── Global Remote Tunnel & Session Management ────────────────────
+
+app.get('/api/remote/tunnel/status', (req, res) => {
+    res.json(remoteAccessService.getTunnelStatus());
+});
+
+app.post('/api/remote/tunnel/start', async (req, res) => {
+    if (!remoteAccessService.isLoopback(req)) {
+        return res.status(403).json({ error: 'Global tunnel can only be started from this machine' });
+    }
+    try {
+        const result = await remoteAccessService.startTunnel();
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message || String(err) });
+    }
+});
+
+app.post('/api/remote/tunnel/stop', async (req, res) => {
+    if (!remoteAccessService.isLoopback(req)) {
+        return res.status(403).json({ error: 'Global tunnel can only be stopped from this machine' });
+    }
+    try {
+        const result = await remoteAccessService.stopTunnel();
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message || String(err) });
+    }
+});
+
+app.post('/api/remote/sessions/revoke', (req, res) => {
+    if (!remoteAccessService.isLoopback(req)) {
+        return res.status(403).json({ error: 'Sessions can only be revoked from this machine' });
+    }
+    res.json(remoteAccessService.revokeAllSessions());
 });
 
 // ─── Macro REST API ──────────────────────────────────────────────

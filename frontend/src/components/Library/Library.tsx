@@ -128,7 +128,7 @@ export default function Library() {
                     <button className="lib-btn lib-btn-primary" onClick={() => fileInputRef.current?.click()}>
                         <Plus size={14} /> Add file
                     </button>
-                    <input type="file" accept=".gcode,.nc,.tap,.cnc" ref={fileInputRef}
+                    <input type="file" accept=".gcode,.nc,.tap,.cnc,.ngc" ref={fileInputRef}
                         style={{ display: 'none' }} onChange={onUpload} />
                 </header>
 

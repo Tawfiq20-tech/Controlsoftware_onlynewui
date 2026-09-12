@@ -8,28 +8,45 @@ const BASE = (() => {
     const env = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
     if (env) return String(env).replace(/\/$/, '');
     if (typeof window !== 'undefined') {
-        const { protocol, hostname } = window.location;
-        return `${protocol}//${hostname}:4000`;
+        const { protocol, hostname, port, origin } = window.location;
+        if (port === '5173') return `${protocol}//${hostname}:4000`;
+        if (port === '4000') return `${protocol}//${hostname}:4000`;
+        return origin;
     }
     return 'http://localhost:4000';
 })();
 
 async function jget<T>(path: string): Promise<T> {
-    const r = await fetch(`${BASE}${path}`, { headers: remoteAuthHeaders() });
+    const r = await fetch(`${BASE}${path}`, {
+        headers: {
+            'bypass-tunnel-reminder': 'true',
+            ...remoteAuthHeaders(),
+        },
+    });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
 }
 async function jpost<T>(path: string, body: unknown): Promise<T> {
     const r = await fetch(`${BASE}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
+        headers: {
+            'Content-Type': 'application/json',
+            'bypass-tunnel-reminder': 'true',
+            ...remoteAuthHeaders(),
+        },
         body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
 }
 async function jdelete(path: string): Promise<void> {
-    const r = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: remoteAuthHeaders() });
+    const r = await fetch(`${BASE}${path}`, {
+        method: 'DELETE',
+        headers: {
+            'bypass-tunnel-reminder': 'true',
+            ...remoteAuthHeaders(),
+        },
+    });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
 }
 
@@ -195,16 +212,35 @@ export const config = {
         jpost<{ ok: true }>('/api/config', { key, value }),
 };
 
-// Remote access — LAN parity with gSender's Wireless Control + optional PIN gate.
+// Remote access — Dual-mode LAN & Global Internet Tunnel with PIN protection.
+export interface TunnelStatus {
+    status: 'stopped' | 'starting' | 'running' | 'error';
+    url: string | null;
+    error: string | null;
+    tunnelPassword?: string | null;
+    hasPin: boolean;
+    activeSessions: number;
+}
+
 export interface RemoteInfo {
     ips: string[];
     port: number;
     pinSet: boolean;
+    tunnel?: TunnelStatus;
 }
+
 export const remote = {
     info: () => jget<RemoteInfo>('/api/remote/info'),
-    qr: (ip?: string) => jget<{ url: string; dataUrl: string }>(`/api/remote/qr${ip ? `?ip=${encodeURIComponent(ip)}` : ''}`),
+    qr: (urlOrIp?: string, isDirectUrl?: boolean) => {
+        if (!urlOrIp) return jget<{ url: string; dataUrl: string }>('/api/remote/qr');
+        if (isDirectUrl) return jget<{ url: string; dataUrl: string }>(`/api/remote/qr?url=${encodeURIComponent(urlOrIp)}`);
+        return jget<{ url: string; dataUrl: string }>(`/api/remote/qr?ip=${encodeURIComponent(urlOrIp)}`);
+    },
     setPin: (pin: string) => jpost<{ ok: true }>('/api/remote/pin', { pin }),
     clearPin: () => jdelete('/api/remote/pin'),
     verifyPin: (pin: string) => jpost<{ token: string }>('/api/remote/verify-pin', { pin }),
+    tunnelStatus: () => jget<TunnelStatus>('/api/remote/tunnel/status'),
+    startTunnel: () => jpost<{ ok: true; url: string; tunnelPassword?: string }>('/api/remote/tunnel/start', {}),
+    stopTunnel: () => jpost<{ ok: true }>('/api/remote/tunnel/stop', {}),
+    revokeSessions: () => jpost<{ ok: true }>('/api/remote/sessions/revoke', {}),
 };

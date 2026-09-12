@@ -71,15 +71,32 @@ const ARC_CHORD_ERR = 0.05;
 const MIN_ARC_SEGMENTS = 6;
 const MAX_ARC_SEGMENTS = 200;
 
-function parseLineFields(text: string): Map<string, number> {
-    const out = new Map<string, number>();
-    const cleaned = text.replace(/\([^)]*\)/g, '').replace(/;.*$/, '');
+interface ParsedWords {
+    gCodes: number[];
+    mCodes: number[];
+    params: Map<string, number>;
+}
+
+function parseLineWords(text: string): ParsedWords {
+    const gCodes: number[] = [];
+    const mCodes: number[] = [];
+    const params = new Map<string, number>();
+    // Replace parenthesized comments with space so attached words like M0(MSG, ...) remain separate tokens
+    const cleaned = text.replace(/\([^)]*\)/g, ' ').replace(/;.*$/, '');
     const re = /([A-Z])\s*(-?\d*\.?\d+)/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(cleaned)) !== null) {
-        out.set(m[1].toUpperCase(), parseFloat(m[2]));
+        const letter = m[1].toUpperCase();
+        const val = parseFloat(m[2]);
+        if (letter === 'G') {
+            gCodes.push(val);
+        } else if (letter === 'M') {
+            mCodes.push(val);
+        } else {
+            params.set(letter, val);
+        }
     }
-    return out;
+    return { gCodes, mCodes, params };
 }
 
 function extractComment(line: string): string | undefined {
@@ -134,21 +151,24 @@ export function parseGcodeFileCore(content: string): GCodeParseResult {
             continue;
         }
 
-        const fields = parseLineFields(trimmed);
+        const words = parseLineWords(trimmed);
         const comment = extractComment(trimmed);
 
-        if (fields.size === 0) {
+        if (words.gCodes.length === 0 && words.mCodes.length === 0 && words.params.size === 0) {
             parsedLines.push({ command: trimmed, comment });
             continue;
         }
 
-        // Check for G/M codes
-        const gVal = fields.get('G');
-        if (gVal !== undefined) {
-            if (gVal === 0) activeMotion = 'G0';
-            else if (gVal === 1) activeMotion = 'G1';
-            else if (gVal === 2) activeMotion = 'G2';
-            else if (gVal === 3) activeMotion = 'G3';
+        // Check for G/M codes - process all G codes in block order
+        let lineMotion: 'G0' | 'G1' | 'G2' | 'G3' | null = null;
+        let oneShotMachine = false;
+        let hasG92 = false;
+
+        for (const gVal of words.gCodes) {
+            if (gVal === 0) lineMotion = 'G0';
+            else if (gVal === 1) lineMotion = 'G1';
+            else if (gVal === 2) lineMotion = 'G2';
+            else if (gVal === 3) lineMotion = 'G3';
             else if (gVal === 17) state.plane = 'XY';
             else if (gVal === 18) state.plane = 'XZ';
             else if (gVal === 19) state.plane = 'YZ';
@@ -156,12 +176,25 @@ export function parseGcodeFileCore(content: string): GCodeParseResult {
             else if (gVal === 21) state.units = 'mm';
             else if (gVal === 90) state.absolute = true;
             else if (gVal === 91) state.absolute = false;
+            else if (gVal === 53) oneShotMachine = true;
+            else if (gVal === 92) hasG92 = true;
         }
 
-        if (fields.has('T')) tools.add(fields.get('T')!);
-        if (fields.has('S')) state.spindle = fields.get('S')!;
-        if (fields.has('F')) {
-            const rawF = fields.get('F')!;
+        if (lineMotion !== null) {
+            activeMotion = lineMotion;
+        }
+
+        // Process M codes
+        for (const mVal of words.mCodes) {
+            if (mVal === 5) {
+                state.spindle = 0;
+            }
+        }
+
+        if (words.params.has('T')) tools.add(words.params.get('T')!);
+        if (words.params.has('S')) state.spindle = words.params.get('S')!;
+        if (words.params.has('F')) {
+            const rawF = words.params.get('F')!;
             state.feed = rawF * (state.units === 'in' ? 25.4 : 1);
             if (state.feed > 0) {
                 feedMin = Math.min(feedMin, state.feed);
@@ -170,20 +203,19 @@ export function parseGcodeFileCore(content: string): GCodeParseResult {
         }
 
         // G92: set persistent work offset
-        if (gVal === 92) {
+        if (hasG92) {
             const scale = state.units === 'in' ? 25.4 : 1;
-            if (fields.has('X')) state.offsetX = state.x - fields.get('X')! * scale;
-            if (fields.has('Y')) state.offsetY = state.y - fields.get('Y')! * scale;
-            if (fields.has('Z')) state.offsetZ = state.z - fields.get('Z')! * scale;
+            if (words.params.has('X')) state.offsetX = state.x - words.params.get('X')! * scale;
+            if (words.params.has('Y')) state.offsetY = state.y - words.params.get('Y')! * scale;
+            if (words.params.has('Z')) state.offsetZ = state.z - words.params.get('Z')! * scale;
             parsedLines.push({ command: trimmed, comment });
             continue;
         }
 
-        const oneShotMachine = gVal === 53;
-        const hasMotionField = fields.has('X') || fields.has('Y') || fields.has('Z') ||
-                               fields.has('I') || fields.has('J') || fields.has('K') || fields.has('R');
+        const hasMotionField = words.params.has('X') || words.params.has('Y') || words.params.has('Z') ||
+                               words.params.has('I') || words.params.has('J') || words.params.has('K') || words.params.has('R');
 
-        if (!hasMotionField && gVal === undefined) {
+        if (!hasMotionField && words.gCodes.length === 0) {
             parsedLines.push({ command: trimmed, comment });
             continue;
         }
@@ -196,16 +228,16 @@ export function parseGcodeFileCore(content: string): GCodeParseResult {
             return v;
         };
 
-        const targetX = resolveAxis(fields.get('X'), state.x, state.offsetX);
-        const targetY = resolveAxis(fields.get('Y'), state.y, state.offsetY);
-        const targetZ = resolveAxis(fields.get('Z'), state.z, state.offsetZ);
+        const targetX = resolveAxis(words.params.get('X'), state.x, state.offsetX);
+        const targetY = resolveAxis(words.params.get('Y'), state.y, state.offsetY);
+        const targetZ = resolveAxis(words.params.get('Z'), state.z, state.offsetZ);
 
         parsedLines.push({
             command: trimmed,
             x: targetX,
             y: targetY,
             z: targetZ,
-            f: fields.get('F'),
+            f: words.params.get('F'),
             comment,
         });
 
@@ -254,8 +286,8 @@ export function parseGcodeFileCore(content: string): GCodeParseResult {
         } else {
             // G2 / G3 Arc
             const cw = activeMotion === 'G2';
-            const i = (fields.get('I') ?? 0) * scale;
-            const j = (fields.get('J') ?? 0) * scale;
+            const i = (words.params.get('I') ?? 0) * scale;
+            const j = (words.params.get('J') ?? 0) * scale;
             const cx = startX + i;
             const cy = startY + j;
             const r = Math.hypot(startX - cx, startY - cy);

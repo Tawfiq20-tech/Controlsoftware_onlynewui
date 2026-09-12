@@ -21,8 +21,10 @@ const getBackendBase = (): string => {
     const env = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
     if (env) return String(env).replace(/\/$/, '');
     if (typeof window !== 'undefined') {
-        const { protocol, hostname } = window.location;
-        return `${protocol}//${hostname}:4000`;
+        const { protocol, hostname, port, origin } = window.location;
+        if (port === '5173') return `${protocol}//${hostname}:4000`;
+        if (port === '4000') return `${protocol}//${hostname}:4000`;
+        return origin;
     }
     return 'http://localhost:4000';
 };
@@ -40,7 +42,9 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
     async function check() {
         const base = getBackendBase();
         try {
-            const infoRes = await fetch(`${base}/api/remote/info`);
+            const infoRes = await fetch(`${base}/api/remote/info`, {
+                headers: { 'bypass-tunnel-reminder': 'true' },
+            });
             const info = await infoRes.json();
             if (!info.pinSet) { setState('open'); return; }
 
@@ -50,7 +54,9 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
             // Loopback always passes regardless of token; a stale/wrong
             // remote token gets a real 401 here and falls back to the PIN
             // screen instead of silently rendering a half-broken app.
-            const probe = await fetch(`${base}/api/state`, { headers: { 'X-Remote-Token': token } });
+            const probe = await fetch(`${base}/api/state`, {
+                headers: { 'X-Remote-Token': token, 'bypass-tunnel-reminder': 'true' },
+            });
             if (probe.ok) { setState('remote-session'); return; }
             clearRemoteToken();
             setState('needs-pin');
@@ -68,7 +74,10 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
             const base = getBackendBase();
             const r = await fetch(`${base}/api/remote/verify-pin`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'bypass-tunnel-reminder': 'true',
+                },
                 body: JSON.stringify({ pin: pin.trim() }),
             });
             const data = await r.json().catch(() => ({}));
