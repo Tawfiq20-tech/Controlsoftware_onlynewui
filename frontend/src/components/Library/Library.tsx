@@ -3,7 +3,10 @@
  *   • Custom Library — designs the user has saved. Backed by the LibraryService
  *     on the backend (files on disk in backend/data/library/); designs survive
  *     a browser change / cache clear.
- *   • FILEFINITY — Onefinity community files (forum) in a new tab.
+ *   • FILEFINITY — real import via PKCE auth + our /api/external/import gate
+ *     (see backend/services/filefinity/FilefinityService.js). Falls back to
+ *     the community forum link since Filefinity's real browse/redirect URLs
+ *     are still unconfirmed -- see parseFilefinityImportParams() below.
  *   • Documentation — placeholder for the docs site (Tawfiq msg 7396).
  */
 import { useEffect, useRef, useState } from 'react';
@@ -37,9 +40,35 @@ const BACKEND_BASE = (() => {
 
 type View = 'home' | 'custom';
 
+// Filefinity's real model-browse/redirect shape is unconfirmed (no signoff
+// from their eng team -- see FILEFINITY_API_SPECIFICATION_FIXED.md). This is
+// our best-guess landing contract: after auth, whatever picks the model
+// (their site or a future in-app browser) sends the user back here with
+// these params. Everything downstream of parsing them IS real and tested:
+// mint a local import token, call our own gated /api/external/import.
+type FilefinityImportParams = {
+    modelId: string;
+    fileName: string;
+    downloadUrl: string;
+    modelTitle: string | null;
+};
+
+function parseFilefinityImportParams(search: string): FilefinityImportParams | null {
+    const p = new URLSearchParams(search);
+    if (p.get('filefinity_import') !== '1') return null;
+    const modelId = p.get('modelId');
+    const fileName = p.get('fileName');
+    const downloadUrl = p.get('downloadUrl');
+    if (!modelId || !fileName || !downloadUrl) return null;
+    return { modelId, fileName, downloadUrl, modelTitle: p.get('modelTitle') };
+}
+
 export default function Library() {
     const [view, setView] = useState<View>('home');
     const [items, setItems] = useState<LibraryItem[]>([]);
+    const [filefinityStatus, setFilefinityStatus] = useState<
+        { kind: 'idle' } | { kind: 'importing' } | { kind: 'done'; name: string } | { kind: 'error'; message: string }
+    >({ kind: 'idle' });
     const fileInputRef = useRef<HTMLInputElement>(null);
     const setRawGcodeContent = useCNCStore((s) => s.setRawGcodeContent);
     const setFileInfo = useCNCStore((s) => s.setFileInfo);
@@ -48,6 +77,65 @@ export default function Library() {
     const addConsoleLog = useCNCStore((s) => s.addConsoleLog);
 
     useEffect(() => { reload(); }, []);
+
+    useEffect(() => {
+        const params = parseFilefinityImportParams(window.location.search);
+        if (!params) return;
+        // Strip the params immediately so a refresh doesn't re-trigger the import.
+        window.history.replaceState({}, '', window.location.pathname);
+        importFromFilefinity(params);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    async function importFromFilefinity(params: FilefinityImportParams) {
+        setView('custom');
+        setFilefinityStatus({ kind: 'importing' });
+        try {
+            const tokenRes = await fetch(`${BACKEND_BASE}/api/filefinity/import-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ modelId: params.modelId }),
+            });
+            if (!tokenRes.ok) throw new Error(`Could not mint import token (HTTP ${tokenRes.status})`);
+            const { token } = await tokenRes.json() as { token: string };
+
+            const importRes = await fetch(`${BACKEND_BASE}/api/external/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Import-Token': token },
+                body: JSON.stringify({
+                    source: 'filefinity',
+                    modelId: params.modelId,
+                    modelTitle: params.modelTitle,
+                    fileName: params.fileName,
+                    downloadUrl: params.downloadUrl,
+                }),
+            });
+            const data = await importRes.json();
+            if (!importRes.ok) throw new Error(data?.error || `Import failed (HTTP ${importRes.status})`);
+
+            setFilefinityStatus({ kind: 'done', name: data.meta.name });
+            addConsoleLog('success', `Imported "${data.meta.name}" from Filefinity`);
+            reload();
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            setFilefinityStatus({ kind: 'error', message });
+            addConsoleLog('error', `Filefinity import failed: ${message}`);
+        }
+    }
+
+    async function connectFilefinity() {
+        try {
+            const r = await fetch(`${BACKEND_BASE}/api/filefinity/auth/start`);
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const { authorizeUrl } = await r.json() as { authorizeUrl: string };
+            window.location.href = authorizeUrl;
+        } catch (err) {
+            // Expected until Filefinity confirms their real authorize URL —
+            // see FilefinityService.js header. Fall back to the forum link.
+            addConsoleLog('warning', 'Filefinity connect unavailable — opening community forum instead.');
+            window.open(FILEFINITY_URL, '_blank', 'noopener,noreferrer');
+        }
+    }
 
     async function reload() {
         try {
@@ -131,6 +219,18 @@ export default function Library() {
                         style={{ display: 'none' }} onChange={onUpload} />
                 </header>
 
+                {filefinityStatus.kind === 'importing' && (
+                    <div className="lib-empty" style={{ padding: '8px 0' }}>Importing from Filefinity…</div>
+                )}
+                {filefinityStatus.kind === 'done' && (
+                    <div className="lib-empty" style={{ padding: '8px 0' }}>Imported "{filefinityStatus.name}" from Filefinity.</div>
+                )}
+                {filefinityStatus.kind === 'error' && (
+                    <div className="lib-empty" style={{ padding: '8px 0', color: '#c0392b' }}>
+                        Filefinity import failed: {filefinityStatus.message}
+                    </div>
+                )}
+
                 {items.length === 0 ? (
                     <div className="lib-empty">
                         <FolderOpen size={56} />
@@ -194,19 +294,16 @@ export default function Library() {
                     <div className="lib-card-meta">{items.length} saved</div>
                 </button>
 
-                <a className="lib-card"
-                    href={FILEFINITY_URL}
-                    target="_blank"
-                    rel="noopener noreferrer">
+                <button className="lib-card" onClick={connectFilefinity}>
                     <div className="lib-card-icon"><Globe size={28} /></div>
                     <div className="lib-card-name">FILEFINITY</div>
                     <div className="lib-card-desc">
-                        Onefinity community files + templates. Opens in a new tab —
-                        download a file from the forum, then add it to your Custom
-                        Library to load it here.
+                        Connect your Filefinity account to import models directly into
+                        your library. Falls back to the community forum if Filefinity
+                        connect isn't available yet.
                     </div>
-                    <div className="lib-card-meta">Onefinity community ↗</div>
-                </a>
+                    <div className="lib-card-meta">Connect →</div>
+                </button>
 
                 {/* Documentation card — Tawfiq msg 7396: leave URL simple, wired in later. */}
                 <a className="lib-card"

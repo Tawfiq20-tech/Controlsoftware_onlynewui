@@ -30,6 +30,7 @@ const { WhatsAppService } = require('./services/whatsapp/WhatsAppService');
 const { TelegramBotService } = require('./services/telegram/TelegramBotService');
 const { LibraryService } = require('./services/library/LibraryService');
 const { ChatbotService } = require('./services/chatbot/ChatbotService');
+const { FilefinityService } = require('./services/filefinity/FilefinityService');
 const errlog = require('./middleware/errlog');
 const errclient = require('./middleware/errclient');
 const errnotfound = require('./middleware/errnotfound');
@@ -520,6 +521,65 @@ app.post('/api/library', (req, res) => {
 app.delete('/api/library/:id', (req, res) => {
     libraryService.remove(req.params.id);
     res.json({ ok: true });
+});
+
+// ─── Filefinity import (msg12447 redlined spec) ───────────────────
+// PKCE start/callback are real network calls to FILEFINITY_AUTHORIZE_URL /
+// FILEFINITY_TOKEN_URL -- these only work once Filefinity confirms and we
+// point the env vars at their actual endpoints. The import gate itself
+// (X-Import-Token HMAC + downloadUrl allowlist) is fully local and works
+// today regardless -- see FilefinityService.js header for the caveat.
+const filefinityService = new FilefinityService({ logger });
+
+app.get('/api/filefinity/auth/start', (req, res) => {
+    res.json(filefinityService.startAuth());
+});
+
+app.get('/api/filefinity/auth/callback', async (req, res) => {
+    const { code, state } = req.query;
+    try {
+        const tokens = await filefinityService.exchangeCode({ code, state });
+        // Real flow: stash tokens server-side, redirect to a frontend page
+        // that then drives the model browse -> import UI. Kept minimal here
+        // since there's no live Filefinity browse UI to redirect into yet.
+        res.json({ ok: true, tokens });
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Issued to our own frontend right before it calls /api/external/import --
+// this is the "locally-issued" half of the gate (60s TTL, single-use). It
+// does not authenticate the Filefinity account; Fix #29 (whole-backend auth)
+// is the separate, parallel fix for that. This just stops a stray/naive
+// request from writing into the library without going through this flow.
+app.post('/api/filefinity/import-token', (req, res) => {
+    const { modelId } = req.body || {};
+    if (!modelId || typeof modelId !== 'string') {
+        return res.status(400).json({ error: 'modelId required' });
+    }
+    res.json(filefinityService.issueImportToken(modelId));
+});
+
+app.post('/api/external/import', async (req, res) => {
+    const token = req.get('X-Import-Token');
+    const { source, modelId, modelTitle, fileName, downloadUrl, autoLoad } = req.body || {};
+    if (source !== 'filefinity' || !modelId || !fileName || !downloadUrl) {
+        return res.status(400).json({ error: 'Missing required fields: source, modelId, fileName, downloadUrl' });
+    }
+    const check = filefinityService.verifyImportToken(token, modelId);
+    if (!check.ok) {
+        logger.warn('filefinity.import.rejected', { modelId, reason: check.reason });
+        return res.status(403).json({ error: `Import token invalid: ${check.reason}` });
+    }
+    try {
+        const body = await filefinityService.fetchModelBody(downloadUrl);
+        const meta = libraryService.upsert({ name: modelTitle || fileName, fileName, body });
+        res.json({ ok: true, meta, autoLoad: !!autoLoad });
+    } catch (err) {
+        logger.error('filefinity.import.failed', { modelId, err: err.message });
+        res.status(502).json({ error: err.message });
+    }
 });
 
 // ─── Frontend static serving (production build) ──────────────────
