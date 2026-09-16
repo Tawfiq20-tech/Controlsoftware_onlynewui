@@ -47,7 +47,20 @@ jobs:
           PASS="${PI_SERVICE_PASSWORD:-$(openssl rand -base64 24)}"
           echo "::add-mask::$PASS"
           sed -i "s|^FIRST_USER_PASS=.*|FIRST_USER_PASS='$PASS'|" pi-kiosk/image/config
-          bash pi-kiosk/image/build-image.sh
+          set -o pipefail
+          bash -x pi-kiosk/image/build-image.sh 2>&1 | tee build-image.log
+
+      # Job annotations are readable without signing in, unlike the raw log:
+      # surface the end of the build output there when it fails.
+      - name: Report build failure
+        if: failure()
+        run: |
+          for f in build-image.log dist-pi/pi-gen/work/*/build.log dist-pi/pi-gen/deploy/build.log; do
+            [ -f "$f" ] || continue
+            tail -n 45 "$f" | sed 's/%/%25/g' | while IFS= read -r line; do
+              echo "::error title=$(basename "$f")::${line:-.}"
+            done
+          done
 
       - uses: actions/upload-artifact@v4
         with:
