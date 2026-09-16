@@ -52,7 +52,7 @@ fi
 CHROMIUM_PKG=chromium
 apt-cache show chromium >/dev/null 2>&1 || CHROMIUM_PKG=chromium-browser
 apt-get install -y --no-install-recommends \
-    cage seatd wlr-randr "$CHROMIUM_PKG"fonts-dejavu-core fonts-noto-color-emoji \
+    cage seatd wlr-randr "$CHROMIUM_PKG" fonts-dejavu-core fonts-noto-color-emoji \
     libudev-dev build-essential python3 curl rsync exfatprogs dosfstools
 
 # -------------------------------------------------------------- user & app
