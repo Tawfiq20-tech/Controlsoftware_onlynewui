@@ -10,8 +10,9 @@ KEYBOARD_KEYMAP=us
 KEYBOARD_LAYOUT="English (US)"
 TIMEZONE_DEFAULT=Etc/UTC
 
-# Service account for maintenance only (SSH is off; the screen never shows a login).
-FIRST_USER_NAME=service
+# Maintenance account. SSH is on while the image is being tested on hardware;
+# the screen never shows a login. Password comes from the PI_SERVICE_PASSWORD secret.
+FIRST_USER_NAME=tawfiq
 FIRST_USER_PASS=change-me-before-building
 DISABLE_FIRST_BOOT_USER_RENAME=1
-ENABLE_SSH=0
+ENABLE_SSH=1

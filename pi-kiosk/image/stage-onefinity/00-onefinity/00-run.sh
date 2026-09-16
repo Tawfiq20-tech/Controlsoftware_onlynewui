@@ -8,7 +8,8 @@ mkdir -p "${ROOTFS_DIR}/opt/onefinity-build"
 tar -xzf files/bundle.tar.gz -C "${ROOTFS_DIR}/opt/onefinity-build"
 
 on_chroot <<'EOF'
-bash /opt/onefinity-build/OnefinitySender/pi-kiosk/install.sh
+# --keep-ssh while the image is being tested on hardware.
+bash /opt/onefinity-build/OnefinitySender/pi-kiosk/install.sh --keep-ssh
 EOF
 
 rm -rf "${ROOTFS_DIR}/opt/onefinity-build"

@@ -14,6 +14,18 @@ if [ "${1:-}" != "--inside-cage" ]; then
         curl -fs -o /dev/null "$KIOSK_URL" && break
         sleep 1
     done
+    # A Pi 5 has two DRM cards: v3d (render only, no outputs) and vc4 (HDMI).
+    # wlroots can pick v3d, find no screen and exit, leaving the display black.
+    # Hand it only the cards that have connectors (cardN-HDMI-A-1 etc.).
+    if [ -z "${WLR_DRM_DEVICES:-}" ]; then
+        cards=""
+        for c in /sys/class/drm/card[0-9]; do
+            ls -d "$c"-* >/dev/null 2>&1 || continue
+            cards="${cards:+$cards:}/dev/dri/$(basename "$c")"
+        done
+        [ -n "$cards" ] && export WLR_DRM_DEVICES="$cards"
+    fi
+    echo "onefinity-kiosk: WLR_DRM_DEVICES=${WLR_DRM_DEVICES:-auto}" >&2
     exec cage -d -- "$0" --inside-cage
 fi
 

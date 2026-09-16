@@ -49,7 +49,7 @@ jobs:
         env:
           PI_SERVICE_PASSWORD: ${{ secrets.PI_SERVICE_PASSWORD }}
         run: |
-          # The "service" account is for maintenance only (no SSH, no screen login).
+          # The "tawfiq" account is for maintenance over SSH (no screen login).
           # Without the PI_SERVICE_PASSWORD secret it gets a random, unknown password.
           PASS="${PI_SERVICE_PASSWORD:-$(openssl rand -base64 24)}"
           echo "::add-mask::$PASS"
