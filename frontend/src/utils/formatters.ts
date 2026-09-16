@@ -1,8 +1,11 @@
 /**
  * Format axis value to 3 decimal places
  */
-export function formatAxisValue(value: number): string {
-    return value.toFixed(3);
+export function formatAxisValue(value: number, inches = false): string {
+    // The machine always reports millimetres. Showing those numbers under an
+    // "in" label without converting them was simply wrong -- 12.700 mm read as
+    // 12.700 in, a factor of 25.4 on every axis.
+    return inches ? (value / 25.4).toFixed(4) : value.toFixed(3);
 }
 
 /**

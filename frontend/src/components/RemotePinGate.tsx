@@ -13,7 +13,7 @@
  * a reminder that E-Stop lives at the machine, not on the phone screen.
  */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Lock } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { getRemoteToken, setRemoteToken, clearRemoteToken } from '../utils/remoteAuth';
 import './RemotePinGate.css';
 
@@ -29,7 +29,7 @@ const getBackendBase = (): string => {
     return 'http://localhost:4000';
 };
 
-type GateState = 'checking' | 'open' | 'needs-pin' | 'remote-session';
+type GateState = 'checking' | 'open' | 'needs-pin' | 'remote-session' | 'remote-off';
 
 export default function RemotePinGate({ children }: { children: React.ReactNode }) {
     const [state, setState] = useState<GateState>('checking');
@@ -46,20 +46,24 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
                 headers: { 'bypass-tunnel-reminder': 'true' },
             });
             const info = await infoRes.json();
-            if (!info.pinSet) { setState('open'); return; }
-
             const token = getRemoteToken();
-            if (!token) { setState('needs-pin'); return; }
 
-            // Loopback always passes regardless of token; a stale/wrong
-            // remote token gets a real 401 here and falls back to the PIN
-            // screen instead of silently rendering a half-broken app.
+            // Ask the backend whether THIS client counts as the operator at
+            // the machine. Its answer is what decides -- a client reached
+            // through the internet tunnel arrives on loopback too, so "no PIN
+            // set" no longer means "everyone may drive the machine".
             const probe = await fetch(`${base}/api/state`, {
-                headers: { 'X-Remote-Token': token, 'bypass-tunnel-reminder': 'true' },
+                headers: token
+                    ? { 'X-Remote-Token': token, 'bypass-tunnel-reminder': 'true' }
+                    : { 'bypass-tunnel-reminder': 'true' },
             });
-            if (probe.ok) { setState('remote-session'); return; }
+            if (probe.ok) { setState(token ? 'remote-session' : 'open'); return; }
+            // Only a 401 is the gate talking; anything else (offline backend,
+            // server error) is not a reason to block the operator's own screen.
+            if (probe.status !== 401) { setState('open'); return; }
+            const body = await probe.json().catch(() => ({}));
             clearRemoteToken();
-            setState('needs-pin');
+            setState(body.needsPin || !info.pinSet ? 'remote-off' : 'needs-pin');
         } catch (_) {
             // Backend unreachable -- let the rest of the app's own
             // connection-status UI surface that instead of hard-blocking here.
@@ -94,6 +98,25 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
 
     if (state === 'checking') return null;
 
+    if (state === 'remote-off') {
+        return (
+            <div className="remote-pin-screen">
+                <div className="remote-pin-card">
+                    <Lock size={28} />
+                    <h2>Remote access is off</h2>
+                    <p>
+                        This machine can only be controlled from the PC it is plugged into.
+                        To use it from here, set a remote PIN on that PC:
+                        <strong> Settings → Remote Access</strong>.
+                    </p>
+                    <button className="remote-pin-btn" onClick={() => { setState('checking'); check(); }}>
+                        Try again
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     if (state === 'needs-pin') {
         return (
             <div className="remote-pin-screen">
@@ -123,12 +146,6 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
 
     return (
         <>
-            {state === 'remote-session' && (
-                <div className="remote-session-banner">
-                    <AlertTriangle size={14} />
-                    Remote session — E-Stop stays at the machine, not on this screen.
-                </div>
-            )}
             {children}
         </>
     );

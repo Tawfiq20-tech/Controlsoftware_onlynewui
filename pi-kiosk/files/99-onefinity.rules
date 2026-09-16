@@ -1,0 +1,13 @@
+# Onefinity kiosk device access.
+
+# USB-serial controllers (CH340, CP210x, FTDI, STM32 CDC): the kiosk user is
+# in "dialout"; make sure ttyACM/ttyUSB nodes are in that group.
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*|ttyUSB[0-9]*", GROUP="dialout", MODE="0660"
+
+# STM32 DFU bootloader (firmware update, lib/Firmware/Flashing/DFU.js: 0483:df11).
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", GROUP="plugdev", MODE="0664"
+
+# USB sticks with G-code: mount under /media/usb-<device> so the file
+# picker can open them. No desktop automounter runs on the kiosk.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN{program}+="/usr/local/bin/onefinity-usb-mount add %k"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", RUN{program}+="/usr/local/bin/onefinity-usb-mount remove %k"

@@ -1,0 +1,23 @@
+[Unit]
+Description=Onefinity Sender backend
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=cnc
+Group=cnc
+WorkingDirectory=/opt/onefinity-sender/backend
+Environment=PORT=4000
+# The kiosk service shows the UI; the backend must not try to open a browser.
+Environment=NO_BROWSER=1
+Environment=PUPPETEER_SKIP_DOWNLOAD=1
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=2
+# index.js stops a running job cleanly on SIGTERM (up to 1.5 s) before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

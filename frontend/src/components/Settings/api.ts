@@ -51,10 +51,18 @@ async function jdelete(path: string): Promise<void> {
 }
 
 // Webcams
+export interface CameraDevice {
+    id: string;
+    name: string;
+    type: string;
+    device?: string;
+    instanceId?: string;
+}
+
 export interface CameraCfg {
     id?: string;
     name: string;
-    type: 'mjpeg-url' | 'rtsp' | 'v4l2';
+    type: 'mjpeg-url' | 'rtsp' | 'v4l2' | 'usb';
     url?: string;
     device?: string;
     resolution?: string;
@@ -65,8 +73,19 @@ export interface CameraCfg {
 }
 export const webcam = {
     list: () => jget<CameraCfg[]>('/api/webcam/cameras'),
+    detectDevices: () => jget<{ devices: CameraDevice[] }>('/api/webcam/devices'),
+    autoDetect: () => jpost<{ ok: boolean; camera?: CameraCfg; created?: boolean; error?: string }>('/api/webcam/auto-detect', {}),
     upsert: (cfg: CameraCfg) => jpost<CameraCfg>('/api/webcam/cameras', cfg),
     remove: (id: string) => jdelete(`/api/webcam/cameras/${id}`),
+    postFrame: async (id: string, blob: Blob) => {
+        try {
+            await fetch(`${BASE}/api/webcam/frame/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'image/jpeg', ...remoteAuthHeaders() },
+                body: blob,
+            });
+        } catch (_) {}
+    },
     streamUrl: (id: string) => `${BASE}/api/webcam/stream/${id}`,
     snapshotUrl: (id: string) => `${BASE}/api/webcam/snapshot/${id}`,
 };
@@ -227,6 +246,9 @@ export interface RemoteInfo {
     port: number;
     pinSet: boolean;
     tunnel?: TunnelStatus;
+    unifiedUrl?: string;
+    connectionMode?: 'global' | 'local';
+    lanUrl?: string;
 }
 
 export const remote = {

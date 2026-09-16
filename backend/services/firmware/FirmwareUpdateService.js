@@ -24,8 +24,10 @@ class FirmwareUpdateService {
     constructor(options = {}) {
         this.dataDir = options.dataDir || path.join(__dirname, '../../data/firmware');
         this.manifestPath = path.join(this.dataDir, 'manifest.json');
+        this.onlineManifestUrl = options.onlineManifestUrl || 'https://raw.githubusercontent.com/axio-cnc/firmware-releases/main/manifest.json';
         this.io = options.io || null;
         this.logger = options.logger || console;
+        this.remoteManifest = null;
 
         if (!fs.existsSync(this.dataDir)) {
             fs.mkdirSync(this.dataDir, { recursive: true });
@@ -183,21 +185,167 @@ class FirmwareUpdateService {
     }
 
     /**
-     * Helper to download remote file as text.
+     * Check the internet for the latest official firmware release.
+     * Compares remote semantic version against current board version.
+     *
+     * @param {string} [currentBoardVersion]
+     * @returns {Promise<object>}
+     */
+    async checkOnlineUpdate(currentBoardVersion = '') {
+        const currentVersion = currentBoardVersion ? currentBoardVersion.trim() : '';
+        try {
+            this.logger.info(`[FirmwareUpdateService] Checking online OTA endpoint: ${this.onlineManifestUrl}`);
+            const raw = await this.fetchRemoteFile(this.onlineManifestUrl, { timeout: 6000 });
+            const remoteManifest = JSON.parse(raw);
+
+            if (!remoteManifest || !remoteManifest.version) {
+                throw new Error('Invalid remote manifest: missing version');
+            }
+
+            this.remoteManifest = remoteManifest;
+            const latestVersion = remoteManifest.version;
+            const hasUpdate = currentVersion
+                ? this.compareVersions(latestVersion, currentVersion) > 0
+                : true;
+
+            const info = {
+                board: remoteManifest.board || 'STM32H723 (fw_m3)',
+                currentVersion: currentVersion || 'Unknown',
+                latestVersion,
+                hasUpdate,
+                title: remoteManifest.title || `Firmware v${latestVersion}`,
+                releaseDate: remoteManifest.releaseDate || new Date().toISOString().split('T')[0],
+                changelog: Array.isArray(remoteManifest.changelog) ? remoteManifest.changelog : [],
+                minSupportedVersion: remoteManifest.minSupportedVersion || '1.0.0',
+                isOfficial: true,
+                sha256: remoteManifest.sha256 || null,
+                downloadUrl: remoteManifest.downloadUrl || null,
+                isOnline: true,
+                source: 'internet',
+            };
+
+            if (this.io) {
+                this.io.emit('firmware:info:updated', info);
+            }
+
+            return info;
+        } catch (err) {
+            this.logger.warn(`[FirmwareUpdateService] Online check failed (${err.message}). Falling back to local manifest.`);
+            const localInfo = this.getFirmwareInfo(currentBoardVersion);
+            return {
+                ...localInfo,
+                isOnline: false,
+                source: 'local_cache',
+                offlineReason: err.message,
+            };
+        }
+    }
+
+    /**
+     * Download the latest firmware binary from the internet, cryptographically
+     * verify SHA-256 against the manifest, and stage it into the local firmware cache.
+     *
+     * @param {object} [options]
+     * @param {object} [options.manifest] - Explicit manifest, or uses this.remoteManifest
+     * @param {function} [options.onProgress] - (loaded, total, percent)
+     * @returns {Promise<{ success: boolean, version: string, sha256: string }>}
+     */
+    async downloadAndStageOtaRelease(options = {}) {
+        const manifest = options.manifest || this.remoteManifest || this.getManifest();
+        if (!manifest || !manifest.downloadUrl) {
+            throw new Error('No remote downloadUrl configured in manifest for OTA update');
+        }
+
+        if (this.io) {
+            this.io.emit('flash:message', {
+                type: 'info',
+                content: `Downloading firmware v${manifest.version} from cloud repository...`,
+            });
+        }
+
+        const hexData = await this.fetchRemoteFile(manifest.downloadUrl, {
+            timeout: 30000,
+            onProgress: (loaded, total, percent) => {
+                if (typeof options.onProgress === 'function') {
+                    options.onProgress(loaded, total, percent);
+                }
+                if (this.io && total > 0) {
+                    this.io.emit('flash:progress', {
+                        stage: 'download',
+                        current: loaded,
+                        total,
+                        percent: Math.round(percent),
+                    });
+                }
+            },
+        });
+
+        // Strict Cryptographic Integrity Check
+        const calculatedSha = this.computeSha256(hexData);
+        if (manifest.sha256 && calculatedSha.toLowerCase() !== manifest.sha256.toLowerCase()) {
+            const err = `SHA-256 integrity verification failed: expected ${manifest.sha256}, got ${calculatedSha}`;
+            this.logger.error(`[FirmwareUpdateService] ${err}`);
+            throw new Error(err);
+        }
+
+        this.logger.info(`[FirmwareUpdateService] SHA-256 checksum verified for OTA release: ${calculatedSha.slice(0, 16)}...`);
+
+        // Stage binary and update local manifest
+        const hexFileName = manifest.hexFile || 'fw_m3.hex';
+        const localHexPath = path.join(this.dataDir, hexFileName);
+        fs.writeFileSync(localHexPath, hexData, 'utf8');
+
+        manifest.sha256 = calculatedSha;
+        fs.writeFileSync(this.manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+        if (this.io) {
+            this.io.emit('flash:message', {
+                type: 'success',
+                content: `Firmware v${manifest.version} successfully verified and staged for USB DFU flashing.`,
+            });
+            this.io.emit('firmware:info:updated', this.getFirmwareInfo());
+        }
+
+        return {
+            success: true,
+            version: manifest.version,
+            sha256: calculatedSha,
+            hexData,
+        };
+    }
+
+    /**
+     * Helper to download remote file with progress tracking and timeout.
      * @param {string} url
+     * @param {object} [options]
+     * @param {number} [options.timeout=8000]
+     * @param {function} [options.onProgress]
      * @returns {Promise<string>}
      */
-    fetchRemoteFile(url) {
+    fetchRemoteFile(url, options = {}) {
         return new Promise((resolve, reject) => {
             const client = url.startsWith('https') ? https : http;
-            client.get(url, (res) => {
+            const timeout = options.timeout || 8000;
+            const req = client.get(url, (res) => {
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     return reject(new Error(`Failed to download firmware: HTTP ${res.statusCode}`));
                 }
+                const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+                let loadedBytes = 0;
                 let data = '';
-                res.on('data', (chunk) => { data += chunk; });
+                res.on('data', (chunk) => {
+                    data += chunk;
+                    loadedBytes += chunk.length;
+                    if (typeof options.onProgress === 'function' && totalBytes > 0) {
+                        options.onProgress(loadedBytes, totalBytes, (loadedBytes / totalBytes) * 100);
+                    }
+                });
                 res.on('end', () => resolve(data));
-            }).on('error', reject);
+            });
+            req.setTimeout(timeout, () => {
+                req.destroy(new Error(`Download timed out after ${timeout}ms`));
+            });
+            req.on('error', reject);
         });
     }
 

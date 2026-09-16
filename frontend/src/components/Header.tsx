@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Square, Home, ChevronDown, AlertTriangle, Sun, Moon } from 'lucide-react';
+import { Square, Home, ChevronDown, AlertTriangle, Sun, Moon, Columns, Rows, Monitor } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { backendEstop, backendEstopClear, backendUnlock, backendMotorReset, backendClearLimitError } from '../utils/backendConnection';
 import HomeMenu from './HomeMenu';
@@ -10,16 +10,22 @@ import './Header.css';
 interface HeaderProps {
     activeTab: string;
     setActiveTab: (tab: string) => void;
+    layout?: 'auto' | 'horizontal' | 'vertical';
+    onLayoutChange?: (layout: 'auto' | 'horizontal' | 'vertical') => void;
 }
 
 const NAV_TABS = ['Prepare', 'Carve', 'Device', 'Project', 'Library', 'Settings'];
 
 // RSP protocol axis byte (RSPController.js AXIS_X/Y/Z, confirmed backend/
 // services/controllers/RSPController.js:67-69) -- EV_FAULT reports this
-// same 0/1/2 index, not a per-motor id, so a Y fault could be either belt.
 const RSP_AXIS_NAMES: Record<number, string> = { 0: 'X', 1: 'Y', 2: 'Z' };
 
-export default function Header({ activeTab, setActiveTab }: HeaderProps) {
+export default function Header({
+    activeTab,
+    setActiveTab,
+    layout = 'auto',
+    onLayoutChange,
+}: HeaderProps) {
     const [homeMenuOpen, setHomeMenuOpen] = useState(false);
     const homeBtnRef = useRef<HTMLButtonElement>(null);
     const [alarmDetailsOpen, setAlarmDetailsOpen] = useState(false);
@@ -148,6 +154,25 @@ export default function Header({ activeTab, setActiveTab }: HeaderProps) {
 
             {/* Right — Actions */}
             <div className="header-right">
+                {/* Layout Mode Switcher */}
+                {onLayoutChange && (
+                    <button
+                        type="button"
+                        className="layout-toggle-btn flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-border-ui bg-bg-panel text-text-dim hover:text-text-main transition-all duration-fast"
+                        onClick={() => {
+                            const next = layout === 'auto' ? 'horizontal' : layout === 'horizontal' ? 'vertical' : 'auto';
+                            onLayoutChange(next);
+                        }}
+                        title={`Current Layout: ${layout.toUpperCase()} (Click to toggle: Auto → Horizontal → Vertical)`}
+                        aria-label="Toggle Layout Mode"
+                    >
+                        {layout === 'horizontal' && <Columns size={14} className="text-sky-400" />}
+                        {layout === 'vertical' && <Rows size={14} className="text-emerald-400" />}
+                        {layout === 'auto' && <Monitor size={14} className="text-slate-400" />}
+                        <span className="hidden sm:inline capitalize font-semibold">{layout}</span>
+                    </button>
+                )}
+
                 {/* Theme Toggle Button */}
                 <button
                     type="button"

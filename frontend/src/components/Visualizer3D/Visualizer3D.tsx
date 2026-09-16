@@ -27,8 +27,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
     Grid3x3, Box, Move3d, Crosshair, RotateCcw,
     Maximize2, Eye, EyeOff, Ruler,
-    Play, Pause, Palette, Video, Sparkles,
-    Check, AlertTriangle, Activity,
+    Play, Pause, Sparkles,
+    Check, AlertTriangle, Activity, SkipForward, Square,
 } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
 import type { GCodeLine, ToolpathSegment } from '../../types/cnc';
@@ -43,10 +43,14 @@ function safeSetAttribute(
     name: string,
     newAttribute: THREE.BufferAttribute
 ): void {
+    // A BufferAttribute has no dispose(): replacing one left its WebGL buffer
+    // allocated. The progress overlay replaces its buffer on every line
+    // update, so a long carve piled up GPU memory until the browser hung
+    // (file dialog "Not Responding" when loading the next file).
+    // geometry.dispose() frees the GPU buffers now; the geometry stays usable
+    // and the current attributes are re-uploaded on the next render.
     const oldAttr = geometry.getAttribute(name);
-    if (oldAttr && 'dispose' in oldAttr && typeof (oldAttr as unknown as { dispose?: () => void }).dispose === 'function') {
-        (oldAttr as unknown as { dispose: () => void }).dispose();
-    }
+    if (oldAttr && oldAttr !== newAttribute) geometry.dispose();
     geometry.setAttribute(name, newAttribute);
 }
 
@@ -54,10 +58,7 @@ function safeDeleteAttribute(
     geometry: THREE.BufferGeometry,
     name: string
 ): void {
-    const oldAttr = geometry.getAttribute(name);
-    if (oldAttr && 'dispose' in oldAttr && typeof (oldAttr as unknown as { dispose?: () => void }).dispose === 'function') {
-        (oldAttr as unknown as { dispose: () => void }).dispose();
-    }
+    if (geometry.getAttribute(name)) geometry.dispose();
     geometry.deleteAttribute(name);
 }
 
@@ -148,13 +149,7 @@ function segmentAtTime(cumSec: Float32Array, positions: Float32Array, t: number)
     };
 }
 
-function fmtClock(s: number) {
-    s = Math.max(0, Math.floor(s));
-    const m = Math.floor(s / 60), rs = s - m * 60;
-    if (m < 60) return `${m}:${String(rs).padStart(2, '0')}`;
-    const h = Math.floor(m / 60), rm = m - h * 60;
-    return `${h}:${String(rm).padStart(2, '0')}:${String(rs).padStart(2, '0')}`;
-}
+
 
 // Fallbacks — used only if a CSS variable is missing at read time.
 const COLOR_FALLBACK = {
@@ -233,9 +228,10 @@ export type ViewerMode = 'prepare' | 'carve';
 
 interface Visualizer3DProps {
     mode?: ViewerMode;
+    hideGcodePanel?: boolean;
 }
 
-export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {}) {
+export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false }: Visualizer3DProps = {}) {
     const mountRef = useRef<HTMLDivElement>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const camRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -254,6 +250,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         arcsMaterial: THREE.LineBasicMaterial;
     } | null>(null);
     const parsedRef = useRef<ParsedToolpath | null>(null);
+    const progressKeyRef = useRef<{ parsed: ParsedToolpath | null; key: string }>({ parsed: null, key: '' });
     // Refs read inside the RAF tick so the closure stays cheap and reactive.
     const cursorActiveRef = useRef(false);
     const cursorSecRef    = useRef(0);
@@ -294,10 +291,6 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
     // 'carve' mode never enters simulation (it's the execution view).
     const [simulating, setSimulating] = useState(false);
     const cursorActive = mode === 'prepare' && simulating && (playing || cursorSec > 0);
-    // Show the bottom scrubber bar only while previewing in 'prepare'.
-    const showPlaybackBar = mode === 'prepare' && simulating;
-    // Show the Simulate launcher in 'prepare' when NOT simulating.
-    const showSimulateLauncher = mode === 'prepare' && !simulating;
     // Show the Carve action bar in 'carve' mode.
     const showCarveBar = mode === 'carve';
 
@@ -781,6 +774,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
         const p = parsedRef.current;
         if (!g || !p) return;
         if (!showProgress || (!cursorActive && currentLine <= 0)) {
+            progressKeyRef.current = { parsed: null, key: '' };
             safeSetAttribute(g.progress.geometry, 'position', new THREE.BufferAttribute(new Float32Array(0), 3));
             return;
         }
@@ -829,6 +823,12 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                     arcEndVerts = lo * 6;
                 }
             }
+
+            // Most line updates do not complete a new cut segment (rapids,
+            // M-codes, arcs split into many lines): nothing to rebuild.
+            const key = `${cutEndVerts}|${arcEndVerts}`;
+            if (progressKeyRef.current.parsed === p && progressKeyRef.current.key === key) return;
+            progressKeyRef.current = { parsed: p, key };
 
             const totalFloats = cutEndVerts + arcEndVerts;
             if (totalFloats === 0) {
@@ -946,7 +946,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
     }, [parsed, currentLine]);
 
     return (
-        <div className={`v3d-root ${mode === 'carve' ? 'v3d-root-carve' : ''}`}>
+        <div className={`v3d-root ${mode === 'carve' && !hideGcodePanel ? 'v3d-root-carve' : ''}`}>
             <div className="v3d-canvas-area">
             <div className="v3d-mount" ref={mountRef} />
 
@@ -957,24 +957,23 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                                 onClick={() => {
                                     setView(v);
                                     if (camRef.current && ctrlRef.current) {
-                                        applyView(v, camRef.current, ctrlRef.current, envelope, parsed, carveOrigin);
+                                        applyView(v, camRef.current, ctrlRef.current, envelope, parsedRef.current || parsed, carveOriginRef.current || carveOrigin, toolpathSegments);
                                     }
                                 }}>{v.toUpperCase()}</button>
                     ))}
                     <span className="v3d-divider" />
                     <button className="v3d-btn" title="Fit to part"
                             onClick={() => {
-                                if (parsedRef.current && camRef.current && ctrlRef.current) {
-                                    fitToBox({
-                                        min: [parsedRef.current.bbox.min[0] + carveOrigin.x, parsedRef.current.bbox.min[1] + carveOrigin.y, parsedRef.current.bbox.min[2]],
-                                        max: [parsedRef.current.bbox.max[0] + carveOrigin.x, parsedRef.current.bbox.max[1] + carveOrigin.y, parsedRef.current.bbox.max[2]],
-                                    }, camRef.current, ctrlRef.current);
+                                setView('top');
+                                if (camRef.current && ctrlRef.current) {
+                                    applyView('top', camRef.current, ctrlRef.current, envelope, parsedRef.current || parsed, carveOriginRef.current || carveOrigin, toolpathSegments);
                                 }
                             }}><Maximize2 size={14} /></button>
                     <button className="v3d-btn" title="Reset view"
                             onClick={() => {
+                                setView('iso');
                                 if (camRef.current && ctrlRef.current) {
-                                    applyView('iso', camRef.current, ctrlRef.current, envelope, parsed, carveOrigin);
+                                    applyView('iso', camRef.current, ctrlRef.current, envelope, parsedRef.current || parsed, carveOriginRef.current || carveOrigin, toolpathSegments);
                                 }
                             }}>
                         <RotateCcw size={14} />
@@ -1060,99 +1059,98 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
                 </div>
             )}
 
-            {/* PREPARE / no-sim: Simulate launcher BOTTOM bar (matches Carve position). */}
-            {showSimulateLauncher && parsed && parsed.durationSec > 0 && (
-                <div className="v3d-simulate-launcher">
-                    <button className="v3d-sim-cta" onClick={() => {
-                        setSimulating(true);
-                        setCursorSec(0);
-                        setPlaying(true);
-                    }}>
-                        <Play size={16} /> Simulate
+            {/* PREPARE mode Simulate Bar — Light card matching user design */}
+            {mode === 'prepare' && parsed && parsed.durationSec > 0 && (
+                <div className="v3d-simulate-card">
+                    {/* Play / Pause button */}
+                    <button
+                        className={`v3d-sim-play-btn ${playing ? 'playing' : ''}`}
+                        onClick={() => {
+                            if (!simulating) setSimulating(true);
+                            if (playing) {
+                                setPlaying(false);
+                            } else {
+                                if (cursorSec >= parsed.durationSec) setCursorSec(0);
+                                setPlaying(true);
+                            }
+                        }}
+                        title={playing ? 'Pause' : 'Simulate'}
+                    >
+                        {playing ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: '2px' }} />}
                     </button>
-                    <label className="v3d-speed-dd">
-                        <span className="v3d-speed-dd-label">Speed</span>
-                        <select className="v3d-speed-dd-sel"
+
+                    {/* Middle: Lines metadata + Progress bar slider */}
+                    <div className="v3d-sim-scrubber-group">
+                        <div className="v3d-sim-stats-row">
+                            <span className="v3d-sim-stat">LINES <b>{parsed.lineCount}</b></span>
+                            <span className="v3d-sim-stat">CURRENT <b>{Math.min(parsed.lineCount, Math.floor((cursorSec / Math.max(0.001, parsed.durationSec)) * parsed.lineCount))}</b></span>
+                            <span className="v3d-sim-stat"><b>{Math.min(100, Math.round((cursorSec / Math.max(0.001, parsed.durationSec)) * 100))}%</b></span>
+                        </div>
+                        <input
+                            type="range"
+                            className="v3d-sim-slider"
+                            min={0}
+                            max={parsed.durationSec}
+                            step={parsed.durationSec / 1000}
+                            value={cursorSec}
+                            onChange={(e) => {
+                                if (!simulating) setSimulating(true);
+                                setPlaying(false);
+                                setCursorSec(+e.target.value);
+                            }}
+                        />
+                    </div>
+
+                    {/* Right: Actions */}
+                    <div className="v3d-sim-actions">
+                        <button
+                            className="v3d-sim-icon-btn"
+                            title="Fit to design"
+                            onClick={() => {
+                                if (camRef.current && ctrlRef.current) {
+                                    applyView('top', camRef.current, ctrlRef.current, envelope, parsedRef.current || parsed, carveOriginRef.current || carveOrigin, toolpathSegments);
+                                }
+                            }}
+                        >
+                            <Maximize2 size={15} />
+                        </button>
+                        <button
+                            className="v3d-sim-icon-btn"
+                            title="Skip / Step forward"
+                            onClick={() => {
+                                if (!simulating) setSimulating(true);
+                                setCursorSec(prev => Math.min(parsed.durationSec, prev + Math.max(5, parsed.durationSec * 0.05)));
+                            }}
+                        >
+                            <SkipForward size={15} />
+                        </button>
+                        <button
+                            className="v3d-sim-icon-btn v3d-sim-stop-btn"
+                            title="Reset simulation"
+                            onClick={() => {
+                                setSimulating(false);
+                                setPlaying(false);
+                                setCursorSec(0);
+                                setColorBy('motion');
+                                setCameraFollow(false);
+                            }}
+                        >
+                            <Square size={14} />
+                        </button>
+                        <select
+                            className="v3d-sim-speed-select"
                             value={playSpeed}
-                            onChange={(e) => setPlaySpeed(Number(e.target.value))}>
+                            onChange={(e) => setPlaySpeed(Number(e.target.value))}
+                            title="Simulation speed"
+                        >
                             <option value={0.5}>0.5×</option>
                             <option value={1}>1×</option>
                             <option value={2}>2×</option>
-                            <option value={3}>3×</option>
-                            <option value={6}>6×</option>
+                            <option value={5}>5×</option>
                             <option value={10}>10×</option>
-                            <option value={14}>14×</option>
+                            <option value={20}>20×</option>
                         </select>
-                    </label>
-                    <div className="v3d-sim-spacer" />
-                    <span className="v3d-sim-meta">
-                        Est. time <b>{fmtClock(parsed.durationSec)}</b>
-                        {parsed.tools.length > 0 && <> · Tools <b>{parsed.tools.map(t => `T${t}`).join(' ')}</b></>}
-                        · <b>{parsed.lineCount}</b> lines
-                    </span>
-                </div>
-            )}
-
-            {/* PREPARE / simulating: scrubber bar + exit button. */}
-            {showPlaybackBar && parsed && parsed.durationSec > 0 && (
-                <div className="v3d-playback">
-                    <button className="v3d-btn primary" onClick={() => {
-                        if (playing) { setPlaying(false); return; }
-                        if (cursorSec >= parsed.durationSec) setCursorSec(0);
-                        setPlaying(true);
-                    }} title={playing ? 'Pause' : 'Play'}>
-                        {playing ? <Pause size={14} /> : <Play size={14} />}
-                    </button>
-                    <span className="v3d-clock">{fmtClock(cursorSec)}</span>
-                    <input
-                        type="range"
-                        className="v3d-slider"
-                        min={0}
-                        max={parsed.durationSec}
-                        step={parsed.durationSec / 1000}
-                        value={cursorSec}
-                        onChange={e => { setPlaying(false); setCursorSec(+e.target.value); }}
-                    />
-                    <span className="v3d-clock">{fmtClock(parsed.durationSec)}</span>
-                    <select className="v3d-speed-dd-sel"
-                        value={playSpeed}
-                        onChange={(e) => setPlaySpeed(Number(e.target.value))}
-                        title="Playback speed">
-                        <option value={0.5}>0.5×</option>
-                        <option value={1}>1×</option>
-                        <option value={2}>2×</option>
-                        <option value={3}>3×</option>
-                        <option value={6}>6×</option>
-                        <option value={10}>10×</option>
-                        <option value={14}>14×</option>
-                    </select>
-                    <button className="v3d-btn" onClick={() => setCursorSec(0)} title="Rewind to start">
-                        <RotateCcw size={14} />
-                    </button>
-                    <span className="v3d-divider" />
-                    <label className="v3d-color-by" title="Color toolpath by">
-                        <Palette size={14} />
-                        <select value={colorBy} onChange={e => setColorBy(e.target.value as ColorBy)}>
-                            <option value="motion">motion</option>
-                            <option value="feed">feed</option>
-                            <option value="depth">depth</option>
-                        </select>
-                    </label>
-                    <button className={`v3d-btn ${cameraFollow ? 'active' : ''}`}
-                        onClick={() => setCameraFollow(v => !v)}
-                        title="Camera follow toolhead">
-                        <Video size={14} />
-                    </button>
-                    <span className="v3d-divider" />
-                    <button className="v3d-btn danger" onClick={() => {
-                        setSimulating(false);
-                        setPlaying(false);
-                        setCursorSec(0);
-                        setColorBy('motion');
-                        setCameraFollow(false);
-                    }} title="Exit simulation">
-                        ✕ Exit
-                    </button>
+                    </div>
                 </div>
             )}
 
@@ -1167,7 +1165,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
             {showCarveBar && <JobControlBar />}
             </div>{/* /.v3d-canvas-area */}
 
-            {mode === 'carve' && (
+            {mode === 'carve' && !hideGcodePanel && (
                 <>
                     <ResizeHandle
                         targetSelector=".v3d-gp"
@@ -1240,7 +1238,7 @@ export default function Visualizer3D({ mode = 'prepare' }: Visualizer3DProps = {
 const ROW_HEIGHT = 22;
 const OVERSCAN = 12;
 
-function GcodePanel({ gcode, currentLine, fileName }: {
+export function GcodePanel({ gcode, currentLine, fileName }: {
     gcode: GCodeLine[];
     currentLine: number;
     fileName?: string;
@@ -1366,49 +1364,73 @@ function applyView(
     env: { x: number; y: number; z: number },
     parsed?: ParsedToolpath | null,
     carveOrigin?: { x: number; y: number; z: number },
+    toolpathSegments?: ToolpathSegment[] | null,
 ) {
-    let cx: number, cy: number, cz: number, D: number;
+    let cx: number, cy: number, cz: number, span: number;
+    const ox = carveOrigin?.x ?? 0;
+    const oy = carveOrigin?.y ?? 0;
+    const oz = carveOrigin?.z ?? 0;
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
 
     if (parsed && parsed.bbox) {
-        const ox = carveOrigin?.x ?? 0;
-        const oy = carveOrigin?.y ?? 0;
-        const oz = carveOrigin?.z ?? 0;
+        minX = parsed.bbox.min[0] + ox;
+        maxX = parsed.bbox.max[0] + ox;
+        minY = parsed.bbox.min[1] + oy;
+        maxY = parsed.bbox.max[1] + oy;
+        minZ = parsed.bbox.min[2] + oz;
+        maxZ = parsed.bbox.max[2] + oz;
+    } else if (toolpathSegments && toolpathSegments.length > 0) {
+        for (const s of toolpathSegments) {
+            minX = Math.min(minX, s.start.x + ox, s.end.x + ox);
+            maxX = Math.max(maxX, s.start.x + ox, s.end.x + ox);
+            minY = Math.min(minY, s.start.y + oy, s.end.y + oy);
+            maxY = Math.max(maxY, s.start.y + oy, s.end.y + oy);
+            minZ = Math.min(minZ, (s.start.z ?? 0) + oz, (s.end.z ?? 0) + oz);
+            maxZ = Math.max(maxZ, (s.start.z ?? 0) + oz, (s.end.z ?? 0) + oz);
+        }
+    }
 
-        const minX = parsed.bbox.min[0] + ox;
-        const maxX = parsed.bbox.max[0] + ox;
-        const minY = parsed.bbox.min[1] + oy;
-        const maxY = parsed.bbox.max[1] + oy;
-        const minZ = parsed.bbox.min[2] + oz;
-        const maxZ = parsed.bbox.max[2] + oz;
-
+    if (isFinite(minX) && isFinite(maxX) && isFinite(minY) && isFinite(maxY)) {
         cx = (minX + maxX) / 2;
         cy = (minY + maxY) / 2;
-        cz = (minZ + maxZ) / 2;
+        cz = isFinite(minZ) && isFinite(maxZ) ? (minZ + maxZ) / 2 : 0;
 
         const spanX = Math.max(1, maxX - minX);
         const spanY = Math.max(1, maxY - minY);
-        const spanZ = Math.max(0.1, maxZ - minZ);
-        const maxSpan = Math.max(spanX, spanY, spanZ, 50);
-
-        // Distance factor chosen so the workpiece/design nicely fills the viewport with ~20-25% margin (matching user reference image)
-        D = maxSpan * 1.35;
+        const spanZ = Math.max(0.1, (isFinite(maxZ) ? maxZ : 0) - (isFinite(minZ) ? minZ : 0));
+        span = Math.max(spanX, spanY, spanZ, 40);
     } else {
         cx = env.x / 2;
         cy = env.y / 2;
         cz = env.z / 2;
-        D = Math.max(env.x, env.y, env.z) * 1.3;
+        span = Math.max(env.x, env.y, env.z) * 0.8;
     }
 
     cam.up.set(0, 0, 1);
 
-    const positions: Record<ViewPreset, [number, number, number]> = {
-        iso:   [cx + D * 0.8, cy - D * 0.8, cz + D * 0.7],
-        top:   [cx, cy - D * 0.001, cz + D * 1.35],
-        front: [cx, cy - D * 1.35, cz + D * 0.15],
-        left:  [cx - D * 1.35, cy, cz + D * 0.15],
-        right: [cx + D * 1.35, cy, cz + D * 0.15],
-    };
-    cam.position.set(...positions[v]);
+    if (v === 'iso') {
+        // ISO view: user can freely orbit, tilt, and change 3D orientation
+        ctrl.enableRotate = true;
+        const D = span * 1.60;
+        cam.position.set(cx + D * 0.8, cy - D * 0.8, cz + D * 0.7);
+    } else {
+        // 2D orthographic-aligned views: lock 3D rotation, centered directly on the design
+        ctrl.enableRotate = false;
+        
+        // Slightly zoomed-out framing to comfortably display labels and surrounding grid
+        const D = span * 1.48;
+        const positions: Record<Exclude<ViewPreset, 'iso'>, [number, number, number]> = {
+            top:   [cx, cy - D * 0.0001, cz + D],
+            front: [cx, cy - D, cz + D * 0.05],
+            left:  [cx - D, cy, cz + D * 0.05],
+            right: [cx + D, cy, cz + D * 0.05],
+        };
+        cam.position.set(...positions[v]);
+    }
+
     ctrl.target.set(cx, cy, cz);
     ctrl.update();
 }

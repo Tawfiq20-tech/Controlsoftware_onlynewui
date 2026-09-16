@@ -386,9 +386,56 @@ function _wireControllerToStore(): void {
     });
 
     // File events — flips the gate that lets START become clickable
+    // Backend refused the file: it cannot run correctly on this machine.
+    // Keep it un-loaded (Start disabled) and say exactly which lines and why.
+    // Where a stopped job would continue from, so the Start button can say so.
+    controller.on('job:resumePoint', (data: unknown) => {
+        const p = data as import('../stores/cncStore').ResumePointInfo | null;
+        getStore().setResumePoint(p && p.line > 1 ? p : null);
+    });
+
+    // The machine is holding at an M0/M1 in the program.
+    controller.on('job:programPause', (data: unknown) => {
+        const p = data as import('../stores/cncStore').ProgramPause | null;
+        const s = getStore();
+        s.setProgramPause(p);
+        if (p) {
+            s.setMachineState('paused');
+            s.addConsoleLog('warning', `Program paused at line ${p.line}${p.message ? ` — ${p.message}` : ''}. Press Resume to continue.`);
+        }
+    });
+
+    controller.on('file:loadError', (data: import('../stores/cncStore').FileLoadError) => {
+        const s = getStore();
+        // "A job is running": the file was not judged, and the file that IS
+        // running is still loaded -- do not mark anything as refused.
+        if (data.busy) {
+            s.addConsoleLog('warning', data.errors?.[0]?.msg || 'A job is running. Stop it before loading another file.');
+            return;
+        }
+        s.setFileLoadedBackend(false);
+        s.setFileLoadError(data);
+        s.addConsoleLog('error', `"${data.name}" cannot run on this machine (${data.errorCount} problem${data.errorCount === 1 ? '' : 's'}):`);
+        for (const e of (data.errors || []).slice(0, 5)) {
+            s.addConsoleLog('error', `  ${e.line ? `Line ${e.line}: ` : ''}${e.msg}`);
+        }
+    });
+
     controller.on('file:load', (data: { name: string; total: number }) => {
         const s = getStore();
+        // Someone else (another tab, another screen) loaded a different file
+        // onto the machine. This screen still shows ITS file in the preview,
+        // so pressing Start here would cut the other one. Say so and make them
+        // re-load deliberately.
+        const mine = s.fileInfo?.name;
+        if (mine && data?.name && data.name !== mine) {
+            s.setFileLoadedBackend(false);
+            s.addConsoleLog('error',
+                `Another screen loaded "${data.name}" onto the machine. The file shown here ("${mine}") is NOT the one that would run — load it again if you want it.`);
+            return;
+        }
         s.setFileLoadedBackend(true);
+        s.setFileLoadError(null);
         // MED#10: without this, currentLine/jobProgress kept showing the
         // PREVIOUS file's last values until the newly loaded job's first
         // sender:status arrived -- old job's line count/percentage bled

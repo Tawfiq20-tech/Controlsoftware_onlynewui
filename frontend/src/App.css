@@ -2,15 +2,26 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
+    background: var(--bg-main, #16191e);
+}
+
+.app-body-wrap {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    height: calc(100vh - 74px);
+    height: calc(100dvh - 74px);
+    width: 100%;
 }
 
 .app-main {
     display: flex;
     flex: 1;
     overflow: hidden;
-    /* 48px header + 26px status bar */
-    height: calc(100vh - 74px);
+    height: 100%;
+    position: relative;
 }
 
 .viewport-container {
@@ -19,32 +30,198 @@
     flex-direction: column;
     overflow: hidden;
     background: #0d1b2a;
+    position: relative;
+    min-width: 0;
+    min-height: 0;
 }
 
-/* Responsive (Tawfiq msg 7324–7331 — vertical preview v2 approved).
-   Sidebar stays on the LEFT at all widths; only its width slims down as
-   the viewport shrinks. Viewer always sits beside it (no column-stack).
-   At < 420 px the sidebar collapses entirely so the viewer gets the full
-   screen — operator on a true phone can rotate landscape instead. */
-@media (max-width: 1024px) {
-    .app { height: 100vh; height: 100dvh; }
-    .app-main { height: calc(100vh - 48px); height: calc(100dvh - 48px); }
+/* ─── HORIZONTAL DESKTOP (Landscape / Widescreen) ─── */
+.app.force-horizontal .app-main {
+    flex-direction: row !important;
 }
-@media (max-width: 420px) {
-    .sidebar { display: none !important; }
+.app.force-horizontal .sidebar {
+    width: var(--sb-w, 360px) !important;
+    min-width: 220px !important;
+    max-width: 600px !important;
+    height: 100% !important;
+    border-right: 1px solid var(--border-ui) !important;
+    border-bottom: none !important;
+}
+.app.force-horizontal .viewport-container {
+    flex: 1 !important;
+    height: 100% !important;
+    border-bottom: none !important;
 }
 
-@media (max-width: 480px) {
-    .app-main {
-        height: calc(100vh - 44px);
-        height: calc(100dvh - 44px);
+@media (min-aspect-ratio: 1/1) and (min-width: 901px) {
+    .app:not(.force-vertical) .app-main {
+        flex-direction: row;
     }
-    
-    .viewport-container {
-        min-height: 50vh;
+    .app:not(.force-vertical) .sidebar {
+        width: var(--sb-w, 360px);
+        min-width: 220px;
+        max-width: 600px;
+        height: 100%;
+        border-right: 1px solid var(--border-ui);
+        border-bottom: none;
     }
-    
-    .sidebar {
-        max-height: 50vh;
+    .app:not(.force-vertical) .viewport-container {
+        flex: 1;
+        height: 100%;
     }
 }
+
+/* ─── VERTICAL DESKTOP (Portrait / 9:16 / CNC Touchscreen) ─── */
+.app.force-vertical .app-main {
+    flex-direction: column !important;
+}
+.app.force-vertical .sidebar {
+    flex: none !important;
+    height: var(--sb-h, 48vh) !important;
+    min-height: 200px !important;
+    max-height: 75vh !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border-ui) !important;
+    overflow-y: auto !important;
+}
+.app.force-vertical .viewport-container {
+    flex: 1 !important;
+    height: auto !important;
+    min-height: 200px !important;
+    width: 100% !important;
+    border-bottom: none !important;
+}
+
+@media (max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px) {
+    .app:not(.force-horizontal) .app-main {
+        flex-direction: column;
+    }
+    .app:not(.force-horizontal) .sidebar {
+        flex: none;
+        height: var(--sb-h, 48vh);
+        min-height: 200px;
+        max-height: 75vh;
+        width: 100% !important;
+        min-width: 100% !important;
+        max-width: 100% !important;
+        border-right: none;
+        border-bottom: 1px solid var(--border-ui);
+        overflow-y: auto;
+    }
+    .app:not(.force-horizontal) .viewport-container {
+        flex: 1;
+        height: auto;
+        min-height: 200px;
+        width: 100%;
+        border-bottom: none;
+    }
+}
+
+/* ─── VERTICAL CNC TOUCHSCREEN 2-COLUMN LAYOUT ─── */
+.app-vertical-grid-2x2 {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    background: var(--bg-main, #12161f);
+}
+
+.vgrid-left-col {
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-ui, #242c3d);
+    background: var(--bg-sidebar, #121721);
+    overflow: hidden;
+}
+
+.app.force-vertical .app-vertical-grid-2x2 .sidebar,
+.app .app-vertical-grid-2x2 .sidebar,
+.vgrid-left-col .sidebar {
+    flex: 1 1 auto !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+
+.app.force-vertical .app-vertical-grid-2x2 .sidebar-scroll,
+.app .app-vertical-grid-2x2 .sidebar-scroll,
+.vgrid-left-col .sidebar-scroll {
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    min-height: 0 !important;
+}
+
+.vgrid-right-col {
+    position: relative;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.vgrid-right-col.has-gcode {
+    display: grid;
+    grid-template-rows: 1.15fr 0.85fr;
+}
+
+.vgrid-top-right {
+    flex: 1 1 auto;
+    height: 100%;
+    border-bottom: none;
+    background: #0d1b2a;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.vgrid-right-col.has-gcode .vgrid-top-right {
+    border-bottom: 1px solid var(--border-ui, #242c3d);
+}
+
+.vgrid-top-right .v3d-root {
+    height: 100%;
+    width: 100%;
+}
+
+.vgrid-bottom-right {
+    background: var(--bg-sidebar, #15171f);
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.vgrid-bottom-right .v3d-gp {
+    display: flex !important;
+    height: 100%;
+    width: 100%;
+    border-left: none;
+}
+
+/* ─── TOUCH PENDANT CONTAINER (Vertical Full View) ─── */
+.app-vertical-pendant-container {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-main, #0b0f17);
+}
+
+

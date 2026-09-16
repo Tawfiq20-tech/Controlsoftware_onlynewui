@@ -128,12 +128,21 @@ class CNCEngine extends EventEmitter {
             socket.on('writeln', (portPath, data, context) => this._handleWriteln(socket, portPath, data, context));
 
             // [GENERIC MODE] Raw command passthrough — writes directly to serial port
+            // Raw text is written THROUGH the controller, never straight to the
+            // port: on the RSP board every non-framed byte reaches the
+            // firmware's plain-text G-code parser, so a raw line could move the
+            // machine in the middle of a carve (RSPController.write() refuses
+            // it and says why). Blocked outright while a job is running.
             socket.on('command:raw', (cmd) => {
-                if (this.connection && this.connection.isOpen) {
-                    const data = String(cmd).endsWith('\n') ? String(cmd) : String(cmd) + '\n';
-                    logger.info(`[RAW CMD] ${data.trim()}`);
-                    this.connection.write(data);
+                if (!this.controller || !this.connection || !this.connection.isOpen) return;
+                if (this.controller.job && this.controller.job.active) {
+                    logger.warn(`[RAW CMD] refused while a job is running: ${String(cmd).slice(0, 64)}`);
+                    socket.emit('serialport:read', '[RAW CMD] refused: a job is running');
+                    return;
                 }
+                const data = String(cmd).endsWith('\n') ? String(cmd) : String(cmd) + '\n';
+                logger.info(`[RAW CMD] ${data.trim()}`);
+                this.controller.write(data);
             });
 
             // ─── File Management ─────────────────────────────────
@@ -365,6 +374,14 @@ class CNCEngine extends EventEmitter {
             if (typeof this.controller.getSenderStatus === 'function') {
                 socket.emit('sender:status', this.controller.getSenderStatus());
             }
+
+            // Where a stopped job can continue, and whether the machine is
+            // waiting at a program pause right now (a client that connects or
+            // refreshes mid-job has to see both).
+            if (typeof this.controller.getResumePoint === 'function') {
+                socket.emit('job:resumePoint', this.controller.getResumePoint());
+            }
+            if (this._programPause) socket.emit('job:programPause', this._programPause);
 
             // Send feeder status
             if (typeof this.controller.getFeederStatus === 'function') {
@@ -604,6 +621,10 @@ class CNCEngine extends EventEmitter {
                     dbg_tim2_isr_count: status.dbgTim2IsrCount,
                     dbg_steps_done: status.dbgStepsDone,
                     dbg_steps_total: status.dbgStepsTotal,
+                    fault_flags: status.faultFlags,
+                    limit_flags: status.limitFlags,
+                    pos_exact: status.posExact,
+                    feed: status.feedrate,
                 });
             }
         });
@@ -683,6 +704,60 @@ class CNCEngine extends EventEmitter {
         // Alarms and errors
         this.controller.on('alarm', (alarm) => {
             this.io.emit('controller:alarm', alarm);
+            // Session .ndjson previously had no record of WHY a job stopped
+            // (fault axis/code only reached app.log) -- keep it with the run.
+            if (this.sessionLogger) this.sessionLogger.logJob({ event: 'alarm', ...alarm });
+        });
+
+        // Resume point (RSP): where a stopped/alarmed job can continue, and
+        // the Start From Line dialog's preview of what a resume will do.
+        this.controller.on('job:resumePoint', (point) => {
+            this.io.emit('job:resumePoint', point);
+            if (this.sessionLogger && point && point.line) {
+                this.sessionLogger.logJob({ event: 'resumePoint', line: point.line, reason: point.reason, positionExact: point.positionExact });
+            }
+        });
+        this.controller.on('job:resumePreview', (preview) => {
+            this.io.emit('job:resumePreview', preview);
+        });
+        // Durable power-cut checkpoint. JobResumeService has always had the
+        // machinery, but onLoad()/onStart() had NO caller anywhere in the
+        // product -- so nothing was ever written to disk and "resume after a
+        // power cut" could never find a checkpoint. The in-memory resume point
+        // in the controller only survives while the process does.
+        this.controller.on('sender:start', (info) => {
+            if (!this.jobResumeService) return;
+            try {
+                this.jobResumeService.onLoad({
+                    filename: (this.loadedFile && this.loadedFile.name) || 'untitled.nc',
+                    gcodeText: this._loadedGcodeContent || '',
+                    modalState: typeof this.controller.getModalState === 'function' ? this.controller.getModalState() : {},
+                });
+                this.jobResumeService.onStart({
+                    totalLines: (info && info.total) || (this.loadedFile && this.loadedFile.total) || 0,
+                });
+            } catch (err) {
+                logger.warn(`[Engine] could not start the resume checkpoint: ${err.message}`);
+            }
+        });
+
+        // Program pause (M0/M1): the machine is holding until the operator
+        // presses Resume -- the UI shows it as a banner with its message.
+        this.controller.on('job:programPause', (p) => {
+            this._programPause = p;
+            this.io.emit('job:programPause', p);
+            if (this.sessionLogger) this.sessionLogger.logJob({ event: 'programPause', ...p });
+        });
+        for (const ev of ['sender:resume', 'sender:end', 'sender:error']) {
+            this.controller.on(ev, () => {
+                if (!this._programPause) return;
+                this._programPause = null;
+                this.io.emit('job:programPause', null);
+            });
+        }
+        // Once-a-minute summary of ignored driver-ALM blips (RSP fw 0.1.1+)
+        this.controller.on('alm:noise', (summary) => {
+            if (this.sessionLogger) this.sessionLogger.logJob({ event: 'almNoise', ...summary });
         });
 
         this.controller.on('error', (err) => {
@@ -802,6 +877,20 @@ class CNCEngine extends EventEmitter {
             // already does this. Mirror that here so a job survives an
             // open-a-different-port or manual-disconnect the same way it
             // survives a real USB drop.
+            // Tell the MACHINE first. Closing the port under a running job
+            // leaves the controller hearing nothing, and it stops itself on
+            // its 5 s host watchdog -- an uncontrolled stop with the tool
+            // still in the cut. An abort frame costs a millisecond and stops
+            // it properly: drivers off, position kept, resume point saved.
+            const jobRunning = !!(this.controller.job && this.controller.job.active);
+            if (jobRunning) {
+                logger.warn('[Engine] disconnecting while a job is running -- stopping the machine first');
+                try {
+                    this.controller.command('gcode:stop');
+                } catch (err) {
+                    logger.warn(`[Engine] stop-before-disconnect failed: ${err.message}`);
+                }
+            }
             let lostJob = null;
             if (typeof this.controller.notifyConnectionLost === 'function') {
                 try {
@@ -816,9 +905,21 @@ class CNCEngine extends EventEmitter {
                     resumeLine: lostJob.resumeLine,
                 });
             }
-            this.controller.unbind();
-            this.controller.removeAllListeners();
+            const ctl = this.controller;
             this.controller = null;
+            if (jobRunning) {
+                // give the abort frame a moment on the wire before the port
+                // is torn down under it
+                const conn = this.connection;
+                this.connection = null;
+                setTimeout(() => {
+                    try { ctl.unbind(); ctl.removeAllListeners(); } catch (_) { /* best effort */ }
+                    try { if (conn) conn.close(); } catch (_) { /* best effort */ }
+                }, 250);
+            } else {
+                ctl.unbind();
+                ctl.removeAllListeners();
+            }
         }
 
         if (this.connection) {
@@ -928,6 +1029,16 @@ class CNCEngine extends EventEmitter {
             this._pendingUpload = null;
         }
 
+        // Save the durable checkpoint at the moments worth saving it.
+        if (this.jobResumeService) {
+            try {
+                if (cmd === 'gcode:stop') this.jobResumeService.onStop();
+                else if (cmd === 'gcode:pause' || cmd === 'feedhold') this.jobResumeService.onPause();
+            } catch (err) {
+                logger.warn(`[Engine] checkpoint save failed: ${err.message}`);
+            }
+        }
+
         try {
             this.controller.command(cmd, ...args);
         } catch (err) {
@@ -967,10 +1078,29 @@ class CNCEngine extends EventEmitter {
         const fileName = name || 'untitled.gcode';
         logger.info(`[Engine] file:load received: name="${fileName}" bytes=${gcodeContent.length}`);
 
-        // ─── Clean Job Replacement on File Load ──────────────────────
-        // If a prior job was active or paused, loading a new file aborts the
-        // previous job and clears paused state so the newly uploaded file can
-        // be started cleanly from line 1.
+        // ─── A running job is never replaced by a file load ──────────
+        // The browser re-uploads the open file on every refresh/reconnect.
+        // This used to send gcode:stop first, so refreshing the page (or a
+        // second tab opening) stopped the carve mid-job. The same file is
+        // simply re-announced; a different file is refused until the
+        // operator stops the job.
+        const rspJobActive = typeof this.controller.getResumePoint === 'function' && this.controller.job && this.controller.job.active;
+        if (rspJobActive) {
+            if (this.loadedFile && this._loadedGcodeContent === gcodeContent) {
+                logger.info(`[Engine] file:load "${fileName}" is the file already running -- job left untouched`);
+                socket.emit('file:load', this.loadedFile);
+                if (typeof this.controller.getResumePoint === 'function') socket.emit('job:resumePoint', this.controller.getResumePoint());
+                return;
+            }
+            logger.warn(`[Engine] file:load "${fileName}" refused: a job is running`);
+            socket.emit('file:loadError', {
+                name: fileName,
+                errorCount: 1,
+                errors: [{ line: null, msg: 'A job is running. Stop it before loading another file.' }],
+                busy: true,
+            });
+            return;
+        }
         if (this._jobPaused || (this.controller && this.controller.job && this.controller.job.active)) {
             logger.info(`[Engine] file:load replacing previous active/paused job with "${fileName}"`);
             try {
@@ -985,10 +1115,40 @@ class CNCEngine extends EventEmitter {
         // passed through so RSPController can inject a spin-up dwell after
         // every M3/M4 -- see FIXFILE.html FIX-16.
         const spindleDelay = Number(this.config.get('preferences.spindleDelay', 0)) || 0;
-        this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay);
+        // Wire-compile options for RSP boards (lib/wireCompiler.js). Machine
+        // limits live under `machine.*` in data/config.json; defaults are the
+        // conservative values the plan specifies until CAL-1 measures them.
+        const compileOptions = {
+            rapidFeed: Number(this.config.get('machine.rapidFeed', 3000)) || 3000,
+            maxRate: this.config.get('machine.maxRate', { x: 5000, y: 5000, z: 3000 }),
+            zHeadroom: this.config.get('machine.zHeadroom', null),
+            safeHeight: Number(this.config.get('preferences.safeHeight', 10)) || 10,
+            // M0/M1 program pauses stop the job until Resume. Off by default:
+            // the operator starts the spindle before pressing Start.
+            honorProgramPauses: this.config.get('preferences.honorProgramPauses', false) === true,
+        };
+        this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay, compileOptions);
+
+        // A file the controller refused (cannot run correctly on this machine)
+        // is never announced as loaded -- clients keep Start disabled and show why.
+        const loadResult = this.controller.lastLoadResult;
+        if (loadResult && loadResult.ok === false) {
+            this.loadedFile = null;
+            this._loadedGcodeContent = null;
+            this.io.emit('file:loadError', {
+                name: fileName,
+                errorCount: loadResult.meta.errorCount,
+                errors: (loadResult.meta.errors || []).slice(0, 20),
+            });
+            if (this.sessionLogger) {
+                this.sessionLogger.logJob({ event: 'loadRejected', name: fileName, errorCount: loadResult.meta.errorCount, errors: (loadResult.meta.errors || []).slice(0, 5) });
+            }
+            return;
+        }
 
         // Store file info for reconnecting clients
-        const senderTotal = (this.controller && this.controller.job && this.controller.job.totalLineCount)
+        const senderTotal = (this.controller && this.controller._loadedLines && this.controller._loadedLines.length)
+            || (this.controller && this.controller.job && this.controller.job.totalLineCount)
             || this.controller.sender?.total
             || gcodeContent.split(/\r?\n/).length;
         this.loadedFile = {

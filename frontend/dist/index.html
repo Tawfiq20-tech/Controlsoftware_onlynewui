@@ -4,13 +4,94 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Slicer Pro - Custom Theme</title>
-  <script type="module" crossorigin src="/assets/index-BEKtf6tv.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-DkNdWQO_.css">
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Onefinity Sender</title>
+  <style>
+    *, *::before, *::after, html, body, div, span, applet, object, iframe,
+    h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+    a, abbr, acronym, address, big, cite, code,
+    del, dfn, em, img, ins, kbd, q, s, samp,
+    small, strike, strong, sub, sup, tt, var,
+    b, u, i, center,
+    dl, dt, dd, ol, ul, li,
+    fieldset, form, label, legend,
+    table, caption, tbody, tfoot, thead, tr, th, td,
+    article, aside, canvas, details, embed, 
+    figure, figcaption, footer, header, hgroup, 
+    menu, nav, output, ruby, section, summary,
+    time, mark, audio, video, button, svg {
+      -webkit-user-select: none !important;
+      -moz-user-select: none !important;
+      user-select: none !important;
+      -webkit-touch-callout: none !important;
+      -webkit-user-drag: none !important;
+    }
+    input, textarea, [contenteditable="true"] {
+      -webkit-user-select: text !important;
+      -moz-user-select: text !important;
+      user-select: text !important;
+    }
+    ::-moz-selection {
+      background: transparent !important;
+      color: inherit !important;
+    }
+    ::selection {
+      background: transparent !important;
+      color: inherit !important;
+    }
+    ::-moz-selection {
+      background: transparent !important;
+      color: inherit !important;
+    }
+    input::-moz-selection, textarea::-moz-selection, [contenteditable="true"]::-moz-selection {
+      background: #38bdf8 !important;
+      color: #0f172a !important;
+    }
+    input::selection, textarea::selection, [contenteditable="true"]::selection {
+      background: #38bdf8 !important;
+      color: #0f172a !important;
+    }
+    input::-moz-selection, textarea::-moz-selection, [contenteditable="true"]::-moz-selection {
+      background: #38bdf8 !important;
+      color: #0f172a !important;
+    }
+  </style>
+  <script>
+    document.addEventListener('selectstart', function(e) {
+      if (!e.target || !e.target.closest || !e.target.closest('input, textarea, [contenteditable="true"]')) {
+        e.preventDefault();
+        return false;
+      }
+    }, true);
+    document.addEventListener('copy', function(e) {
+      if (!e.target || !e.target.closest || !e.target.closest('input, textarea, [contenteditable="true"]')) {
+        e.preventDefault();
+        return false;
+      }
+    }, true);
+    document.addEventListener('cut', function(e) {
+      if (!e.target || !e.target.closest || !e.target.closest('input, textarea, [contenteditable="true"]')) {
+        e.preventDefault();
+        return false;
+      }
+    }, true);
+    document.addEventListener('contextmenu', function(e) {
+      if (!e.target || !e.target.closest || !e.target.closest('input, textarea, [contenteditable="true"]')) {
+        e.preventDefault();
+        return false;
+      }
+    }, true);
+  </script>
+  <script type="module" crossorigin src="/assets/index-wzIsoORt.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DuLcbyt3.css">
 </head>
 
-<body>
+<body onselectstart="return !!(event.target && event.target.closest && event.target.closest('input, textarea, [contenteditable=\'true\']'))">
   <div id="root"></div>
 </body>
 

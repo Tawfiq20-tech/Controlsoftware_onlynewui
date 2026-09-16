@@ -38,6 +38,8 @@ const { ReliableStream, LinkLost, RspTimeoutError } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
 const injectSpindleDelay = require('../../lib/injectSpindleDelay');
+const { cleanGcodeLines, buildResumeProgram, scanModalState } = require('../../lib/resumeFromLine');
+const { compileWire } = require('../../lib/wireCompiler');
 
 // Power-cut survival: durable checkpoint persistence is now handled
 // entirely by JobResumeService (services/jobresume/), which owns the
@@ -77,6 +79,13 @@ const FEED_OVERRIDE_FINE = 1.0;
 // hardcoded Z retreat rather than plumbing config through for one constant.
 const PROBE_FAIL_RETRACT_MM = 5.0;
 const PROBE_FAIL_RETRACT_FEED = 500;
+
+// Commands refused while a job is running (see _dispatch()).
+const MOTION_COMMANDS = new Set([
+    'jog', 'homing', 'home', 'homing:x', 'home:x', 'homing:y', 'home:y', 'homing:z', 'home:z',
+    'zero', 'wcs:zero', 'zero:x', 'zero:y', 'zero:z', 'wcs:zeroAll', 'zero:all',
+    'probe', 'macro:run', 'reset:hard',
+]);
 
 /**
  * Transport adapter bridging AXIO's Connection (rawData events / writeRaw)
@@ -173,6 +182,9 @@ class RSPController extends EventEmitter {
 
         // job load/run bookkeeping
         this._loadedGcode = '';
+        this._loadedLines = [];     // compiled wire lines (lib/wireCompiler.js), cached once per load
+        this._loadedMeta = null;    // compile report: pauses, tools, extents, warnings
+        this.lastLoadResult = null; // { ok, name, meta } -- read by CNCEngine to broadcast or refuse
         this._loadedName = '';
         // Resume-after-stop bookkeeping (Tawfiq msg11237: "if started job and
         // stopped it should continue from where it stopped"). _resumeLine is
@@ -183,6 +195,23 @@ class RSPController extends EventEmitter {
         // cleanly) clears it, so a genuinely new run always starts at line 1.
         this._resumeLine = 0;
         this._resumeGcode = null;
+        this._resumeReason = '';
+        this._resumeAt = 0;
+        // Start-from-line runs a rebuilt program (safe-Z preamble + the file
+        // from line N, see lib/resumeFromLine.js). Job line L of that program
+        // is file line L + _lineOffset; preamble lines map to _lineOffsetMin
+        // (line N itself) so a stop during the preamble resumes at line N.
+        this._lineOffset = 0;
+        this._lineOffsetMin = 0;
+        // Last EV_FAULT from firmware -- the telemetry alarm state arrives
+        // ~0.5 s later, this is what says WHICH driver tripped.
+        this._lastFault = null;
+        this._almGlitchLastConsole = {};
+        // Set when an interrupted move left the controller's x/y/z wrong
+        // (firmware without the POS_EXACT capability drops the steps of an
+        // aborted move). Blocks resume until the operator re-zeroes/homes.
+        this._positionUncertain = null;
+        this._positionUncertainSig = '';
         this._feedOverridePct = 100.0;
         this._debugEnabled = false;
         // Bumped at the top of every _startJob() call. _startJob() awaits
@@ -196,6 +225,10 @@ class RSPController extends EventEmitter {
         // call captures its own generation and re-checks it after every
         // await; a stale call bails instead of proceeding.
         this._startJobGeneration = 0;
+        // Orphan-job guard (plan BE-4): when the host job ended, and when an
+        // orphan abort was last sent -- see _abortOrphanJob().
+        this._jobEndedAt = 0;
+        this._lastOrphanAbortAt = 0;
 
         this._bindJobListeners = this._bindJobListeners.bind(this);
     }
@@ -263,9 +296,12 @@ class RSPController extends EventEmitter {
             firmwareVersion: 'RSP (Reliable Stream Protocol)',
         });
 
-        // Request initial status telemetry frame to synchronize stream seq
-        // (consumes seq 0 with telemetry request so user's first jog is seq >= 1)
+        // A previous session's job may still be running on the board: hold it
+        // at the next line now; the first telemetry frame then aborts it by
+        // its real job id (_abortOrphanJob -- OP_JOB_ABORT(0) never matched).
+        this._sendFeedHold();
         this._requestStatus();
+        this._requestConfig();
     }
 
     // ------------------------------------------------------------------
@@ -309,59 +345,137 @@ class RSPController extends EventEmitter {
             // controller types. Previously this emitted {executed,total,
             // remaining}, which don't exist on SenderStatus, so the
             // highlight/progress bar silently never updated on RSP boards.
-            this._currentLine = lineNo;
+            const fileLine = this._fileLine(lineNo);
+            this._currentLine = fileLine;
+            // A resume streams a REBUILT program (preamble + the rest of the
+            // file), so counting its own lines restarted the bar at 0% and
+            // called a job that is 80% cut "just started". Count file lines.
+            const fileTotal = this._lineOffsetMin ? this._loadedLines.length : total;
+            const fileDone = this._lineOffsetMin ? fileLine : executed;
             this.emit('sender:status', {
-                total,
-                sent: executed,
-                received: lineNo,
-                progress: total > 0 ? Math.round((executed / total) * 100) : 0,
-                remaining: Math.max(0, total - executed),
-                lineNo,
+                total: fileTotal,
+                sent: fileDone,
+                received: fileLine,
+                progress: fileTotal > 0 ? Math.round((fileDone / fileTotal) * 100) : 0,
+                remaining: Math.max(0, fileTotal - fileDone),
+                lineNo: fileLine,
                 pos: pos || this.state?.status?.mpos || { x: 0, y: 0, z: 0 },
             });
         });
-        this.job.on('done', ({ jobId, failReason }) => {
-            if (failReason) {
-                this._resumeLine = 0;
-                this._resumeGcode = null;
-                this.emit('sender:error', { jobId, reason: failReason });
-                // Plain Error instances lose .message when JSON-serialized over
-                // Socket.IO (Error.message is non-enumerable -- JSON.stringify(new
-                // Error('x')) === '{}'), so the frontend's controller:error handler
-                // renders "Error undefined: undefined". Emit a plain object instead,
-                // matching the convention already used in RTSController.js.
-                this.emit('error', { message: `RSP job ${jobId} failed: ${failReason}` });
-                this.emit('job:error', { message: failReason });
-            } else {
-                // Clean finish -- clear any resume point so a later START on
-                // the same file runs from line 1, not "resume from the end".
-                this._resumeLine = 0;
-                this._resumeGcode = null;
-                this.emit('sender:end', { jobId });
-                // LOW#14: JobHistoryService listens for 'job:end'/'job:error'/
-                // 'job:abort', not 'sender:*' -- those never existed on this
-                // controller, so every run went unrecorded. Fire alongside
-                // the existing sender:* emits the frontend already relies on.
-                this.emit('job:end', {});
-            }
+        // 'done' is a clean finish only; every failure arrives as 'failed'.
+        this.job.on('done', ({ jobId }) => {
+            this._jobEndedAt = Date.now();
+            // Clean finish -- clear any resume point so a later START on
+            // the same file runs from line 1, not "resume from the end".
+            if (!this._jobIsMacro) this._clearResumePoint();
+            this.emit('sender:end', { jobId });
+            // LOW#14: JobHistoryService listens for 'job:end'/'job:error'/
+            // 'job:abort', not 'sender:*'.
+            this.emit('job:end', {});
+            this.emit('workflow:state', 'idle');
         });
         this.job.on('aborted', () => {
+            this._jobEndedAt = Date.now();
+            this._feedHoldSent = false;
             this.emit('sender:end', { aborted: true });
             this.emit('job:abort');
         });
         this.job.on('failed', (reason) => {
-            const stopLine = this.job ? this.job.nextLineToRun() : 0;
-            const totalLines = (this.job && this.job.totalLineCount) || 0;
-            if (stopLine > 1 && totalLines > 0 && stopLine < totalLines) {
-                this._resumeLine = stopLine;
-                this._resumeGcode = this._loadedGcode;
+            this._jobEndedAt = Date.now();
+            const stopLine = this.job ? this._fileLine(this.job.nextLineToRun()) : 0;
+            const totalLines = this._fileTotalLines();
+            // A failed job always keeps its resume point (it used to be wiped
+            // when the failure came through the old 'done' path).
+            if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
+                this._setResumePoint(stopLine, `job stopped: ${reason}`);
+                this.emit('console', `⚠️ Job stopped at line ${stopLine}: ${reason}. Press START to continue from line ${stopLine}.`);
             } else {
-                this._resumeLine = 0;
-                this._resumeGcode = null;
+                this.emit('console', `⚠️ Job stopped: ${reason}`);
             }
-            this.emit('console', `⚠️ Job failed: ${reason}`);
             this.emit('sender:error', { reason });
+            // Plain object: Error.message does not survive Socket.IO JSON.
+            this.emit('error', { message: `Job stopped: ${reason}` });
+            this.emit('job:error', { message: reason });
+            this.emit('workflow:state', 'idle');
         });
+        // M0/M1 in the program: every move before it has run. Hold the
+        // machine and wait for the operator (plan BE-14).
+        this.job.on('programPause', ({ line, message, optional }) => {
+            const fileLine = this._fileLine(line);
+            this._sendFeedHold();
+            const text = message ? `: ${message}` : '';
+            logger.info(`[RSP] program pause (${optional ? 'M1' : 'M0'}) at line ${fileLine}${text}`);
+            this.emit('console', `⏸️ Program paused at line ${fileLine} (${optional ? 'M1' : 'M0'})${text}. Press Resume to continue.`);
+            this.emit('job:programPause', { line: fileLine, message: message || '', optional: !!optional });
+            this.emit('sender:pause');
+            this.emit('workflow:state', 'paused');
+        });
+        // A move finished just after Stop/failure: it was cut, so the saved
+        // resume point moves past it (only forward, only for this job's point).
+        this.job.on('lateProgress', ({ nextLine }) => {
+            if (this.job.active || this._jobIsMacro) return;
+            const line = this._fileLine(nextLine);
+            if (this._resumeLine > 1 && line > this._resumeLine && this._resumeGcode === this._loadedGcode) {
+                const total = this._fileTotalLines();
+                if (!total || line <= total) this._setResumePoint(line, this._resumeReason);
+            }
+        });
+        // G4: the machine sits still for a while. Shown in the same banner as a
+        // program pause so it never looks like the job has hung, and it can be
+        // skipped (a post that writes milliseconds asks for minutes here).
+        this.job.on('dwell', ({ line, seconds }) => {
+            const fileLine = this._fileLine(line);
+            this.emit('console', `⏳ Line ${fileLine}: waiting ${seconds} s (G4 dwell). Press Resume to skip the wait.`);
+            this.emit('job:programPause', {
+                line: fileLine,
+                message: `Waiting ${seconds} s (G4 dwell in the file)`,
+                optional: false,
+                kind: 'dwell',
+                seconds,
+            });
+        });
+        this.job.on('dwellDone', ({ line }) => {
+            this.emit('console', `▶️ Line ${this._fileLine(line)}: wait finished, continuing.`);
+            this.emit('job:programPause', null);
+        });
+    }
+
+    /**
+     * The device dropped the running job by itself (driver alarm, E-stop,
+     * lost host). Record the exact resume point and hold the host job so
+     * Resume/START restart from there with the safe preamble.
+     */
+    _onFirmwareJobLost(cause) {
+        if (!this.job || !this.job.active || this.job.firmwareLost) return;
+        const stopLine = this._fileLine(this.job.nextLineToRun());
+        if (stopLine > 1) this._setResumePoint(stopLine, cause);
+        this.job.markFirmwareLost(cause);
+        this.emit('sender:pause');
+        return stopLine;
+    }
+
+    /**
+     * Firmware still RUNNING/HOLD with no host job behind it (a previous
+     * session's job, or a job whose OP_JOB_END was lost). Abort it by the job
+     * id it reports -- the old OP_JOB_ABORT(0) never matched, and the old
+     * OP_FEED_HOLD left it stuck in HOLD so the next job could not start
+     * (plan BE-4). Rate-limited; skipped right after a host job ends while
+     * the firmware finishes switching to IDLE.
+     */
+    _abortOrphanJob(dict) {
+        const t = Date.now();
+        if (t - this._jobEndedAt < 1500 || t - this._lastOrphanAbortAt < 2000) return;
+        this._lastOrphanAbortAt = t;
+        logger.warn(`[RSP] firmware is ${dict.state_name} with job ${dict.job_id} but no job is running here -- aborting it`);
+        try {
+            // 0xFFFF is "stop whatever job you are running" (firmware 0.2.0,
+            // FW-19) -- used when telemetry has not told us the id yet. Older
+            // firmware answers ERR_JOB to it, which is harmless.
+            const id = dict.job_id || 0xFFFF;
+            this.stream.sendNowait(defs.OP_JOB_ABORT, codec.buildJobAbort(id), true, { force: true });
+        } catch (exc) {
+            logger.warn(`[RSP] orphan job abort not queued: ${exc.message || exc}`);
+        }
     }
 
     /**
@@ -380,16 +494,131 @@ class RSPController extends EventEmitter {
         const jobWasActive = !!(this.job && this.job.active);
         let resumeLine = 0;
         if (jobWasActive) {
-            resumeLine = this.job.nextLineToRun();
+            resumeLine = this._fileLine(this.job.nextLineToRun());
             if (resumeLine > 1) {
-                this._resumeLine = resumeLine;
-                this._resumeGcode = this._loadedGcode;
+                this._setResumePoint(resumeLine, 'connection lost');
             }
         }
         return { jobWasActive, resumeLine };
     }
 
+    // ------------------------------------------------------------------
+    // resume point / line mapping
+    // ------------------------------------------------------------------
+    /** Job-local line number -> line number in the loaded file. */
+    _fileLine(jobLine) {
+        if (!jobLine) return 0;
+        if (!this._lineOffset && !this._lineOffsetMin) return jobLine;
+        return Math.max(jobLine + this._lineOffset, this._lineOffsetMin);
+    }
+
+    _fileTotalLines() {
+        if (this._lineOffsetMin) return this._loadedLines.length;
+        return (this.job && this.job.totalLineCount) || 0;
+    }
+
+    /** Work zero (or homing) changed -- flag any resume point that predates it. */
+    _noteOriginChanged(how) {
+        if (!(this._resumeLine > 1)) return;
+        this._originChangedSinceStop = true;
+        this.emit('console', `⚠️ You ${how} after the job stopped. Resume from line ${this._resumeLine} only if this is the SAME zero the job started from -- otherwise everything from here will be cut in the wrong place.`);
+        this._emitResumePoint();
+    }
+
+    _setResumePoint(line, reason) {
+        if (this._jobIsMacro) return;
+        this._originChangedSinceStop = false;
+        this._resumeLine = line;
+        this._resumeGcode = this._loadedGcode;
+        this._resumeReason = reason || '';
+        this._resumeAt = Date.now();
+        this._emitResumePoint();
+    }
+
+    _clearResumePoint() {
+        const had = this._resumeLine > 0;
+        this._resumeLine = 0;
+        this._resumeGcode = null;
+        this._resumeReason = '';
+        this._resumeAt = 0;
+        if (had) this._emitResumePoint();
+    }
+
+    getResumePoint() {
+        const valid = this._resumeLine > 1 && this._resumeGcode !== null && this._resumeGcode === this._loadedGcode;
+        return {
+            line: valid ? this._resumeLine : 0,
+            total: this._loadedLines.length,
+            name: this._loadedName,
+            reason: valid ? this._resumeReason : '',
+            at: valid ? this._resumeAt : 0,
+            positionExact: !this._positionUncertain,
+            positionWarning: this._positionUncertain ? this._positionUncertain.message : '',
+            // The work zero was re-set after the job stopped. Resuming is only
+            // right if it was re-set to the SAME origin; otherwise everything
+            // from here on is cut in the wrong place.
+            originChanged: valid && !!this._originChangedSinceStop,
+        };
+    }
+
+    _emitResumePoint() {
+        this.emit('job:resumePoint', this.getResumePoint());
+    }
+
+    /**
+     * EV_ALM_GLITCH (fw 0.1.1+): ALM blips the firmware filtered out -- the
+     * job was NOT affected. Firmware 0.1.1 reports up to 10x/s; logging each
+     * one as a warning flooded app.log (2026-09-15 19:13, ~3,500 lines in 7
+     * min for Y1). Summed per axis and written once a minute at info level;
+     * the console gets one plain explanation per axis per 10 minutes.
+     */
+    _noteAlmGlitch({ axis, count, maxMs }) {
+        const nowMs = Date.now();
+        if (!this._almNoise) this._almNoise = { since: nowMs, axes: {} };
+        const a = this._almNoise.axes[axis] || (this._almNoise.axes[axis] = { count: 0, maxMs: 0, saturated: false });
+        a.count += count;
+        a.maxMs = Math.max(a.maxMs, maxMs);
+        if (count >= 0xFFFF) a.saturated = true;
+
+        const axisName = this._faultAxisName(axis);
+        if (!this._almGlitchLastConsole[axis] || nowMs - this._almGlitchLastConsole[axis] > 10 * 60 * 1000) {
+            this._almGlitchLastConsole[axis] = nowMs;
+            this.emit('console', `ℹ️ ${axisName} motor-driver alarm (ALM) wire is noisy: short blips under ${Math.max(1, maxMs)} ms are being ignored and the job keeps running. To remove them, check the ${axisName} ALM wiring (see firmware README).`);
+        }
+        if (nowMs - this._almNoise.since >= 60 * 1000) this._flushAlmNoise(nowMs);
+    }
+
+    _flushAlmNoise(nowMs = Date.now()) {
+        if (!this._almNoise) return;
+        const secs = Math.max(1, (nowMs - this._almNoise.since) / 1000);
+        const summary = [];
+        for (const [axis, a] of Object.entries(this._almNoise.axes)) {
+            if (!a.count) continue;
+            summary.push({ axis: this._faultAxisName(Number(axis)), blips: a.count, perSecond: Math.round(a.count / secs), longestMs: a.maxMs, saturated: a.saturated });
+        }
+        this._almNoise = { since: nowMs, axes: {} };
+        if (!summary.length) return;
+        logger.info(`[RSP] ALM noise ignored over ${Math.round(secs)} s (job not affected): ${summary.map((s) => `${s.axis} ${s.blips}${s.saturated ? '+' : ''} blips (~${s.perSecond}/s, longest ${s.longestMs} ms)`).join(', ')}`);
+        this.emit('alm:noise', { seconds: Math.round(secs), axes: summary });
+    }
+
+    /** "X", "Y1", ... for an EV_FAULT axis index. */
+    _faultAxisName(axis) {
+        return defs.FAULT_AXIS_NAMES[axis] || `axis ${axis}`;
+    }
+
+    /**
+     * Refuse to resume while the controller's position is known to be wrong.
+     * @returns {boolean} true if blocked (and a console message was emitted)
+     */
+    _blockIfPositionUncertain(what) {
+        if (!this._positionUncertain) return false;
+        this.emit('console', `⛔ ${what} blocked: ${this._positionUncertain.message} Re-zero X/Y/Z at the job's original origin (or home), then try again.`);
+        return true;
+    }
+
     unbind() {
+        try { this._flushAlmNoise(); } catch (_) { /* never throw from unbind */ }
         if (this.job) {
             try { this.job.destroy(); } catch (_) { /* never throw from unbind */ }
         }
@@ -427,6 +656,7 @@ class RSPController extends EventEmitter {
         // with GRBL/RTS controllers, which DO have a real WCO) has something
         // to read for RSP too.
         const pos = { x: dict.x, y: dict.y, z: dict.z };
+        this._lastTelemetryJobId = dict.job_id;
         this.state.status = {
             activeState: dict.state_name,
             state: dict.state,
@@ -455,9 +685,64 @@ class RSPController extends EventEmitter {
             dbgTim2IsrCount: dict.dbg_tim2_isr_count,
             dbgStepsDone: dict.dbg_steps_done,
             dbgStepsTotal: dict.dbg_steps_total,
+            faultFlags: dict.fault_flags,
+            limitFlags: dict.limit_flags,
+            posExact: !!dict.pos_exact,
         };
         this.state.parserstate.feedrate = dict.feed;
         this.state.parserstate.spindle = dict.spindle_speed;
+
+        if (this.job && this.job.active) {
+            // Before any alarm handling below, so the resume point includes
+            // every move this frame proves finished (heals lost EV_EXECUTED).
+            this.job.noteTelemetry(dict);
+            // A program pause (M0) or a host-side hold shows as Hold, not Run,
+            // so the UI offers Resume rather than Pause.
+            if (this.job.paused && dict.state === defs.ST_RUNNING) {
+                this.state.status.activeState = 'Hold';
+            }
+            // The machine is held but nobody here asked for it (a hold from
+            // another client, or the firmware's own). Without this the job
+            // would sit forever: no line finishes, and a hold is deliberately
+            // not treated as a stall, so nothing would ever say so.
+            if (dict.state === defs.ST_HOLD && !this.job.paused) {
+                this.job.pause();
+                this.emit('sender:pause');
+                this.emit('workflow:state', 'paused');
+                this.emit('console', '⏸️ The machine is on feed hold. Press Resume to continue the job.');
+            }
+        }
+
+        // An interrupted move (steps_done < steps_total with the engine
+        // stopped) on firmware WITHOUT the POS_EXACT capability means x/y/z
+        // still hold the START of that move -- every later move, resume or
+        // start-from-line would be offset by the steps that did run (the
+        // 2026-09-15 log: ~20 mm in X). Remember it until the operator
+        // re-establishes position. Keyed on the engine counters so the same
+        // stale abort doesn't re-flag right after a re-zero.
+        // dbg_steps_done === 0 means the move never started stepping: nothing
+        // was lost, so that is not an uncertain position.
+        if (!dict.pos_exact && !dict.dbg_jog_active && dict.dbg_steps_total > 0 &&
+            dict.dbg_steps_done > 0 && dict.dbg_steps_done < dict.dbg_steps_total) {
+            const sig = `${dict.dbg_tim2_isr_count}/${dict.dbg_steps_done}/${dict.dbg_steps_total}`;
+            if (sig !== this._positionUncertainSig) {
+                this._positionUncertainSig = sig;
+                const lost = dict.dbg_steps_done;
+                this._positionUncertain = {
+                    at: Date.now(),
+                    message: `A move was interrupted after ${lost} of ${dict.dbg_steps_total} steps and this firmware does not keep those steps, so the X/Y/Z shown can be off by up to ${(lost / 200).toFixed(1)} mm.`,
+                };
+                logger.warn(`[RSP] position uncertain after interrupted move (${sig}); firmware lacks POS_EXACT`);
+                this.emit('console', `⚠️ Position may be wrong: ${this._positionUncertain.message} Flash firmware 0.1.1-almfilter to fix this permanently.`);
+                this._emitResumePoint();
+            }
+        }
+
+        // Board running a job nobody here is streaming (previous session, or
+        // a lost OP_JOB_END): stop it by its real job id.
+        if ((dict.state === defs.ST_RUNNING || dict.state === defs.ST_HOLD) && (!this.job || !this.job.active)) {
+            this._abortOrphanJob(dict);
+        }
 
         // Alarm / Fault / E-Stop detection: surface telemetry alarm states to frontend UI
         //
@@ -494,35 +779,43 @@ class RSPController extends EventEmitter {
             if (!this._lastAlarmEmitted || this._lastAlarmEmitted !== alarmType) {
                 this._lastAlarmEmitted = alarmType;
                 logger.warn(`[RSP] Controller in alarm state: ${alarmType} (state=${dict.state}, estop=${dict.estop_active}, limit_flags=${dict.limit_flags}, fault_flags=${dict.fault_flags})`);
-                
-                // If a job was running, capture the resume line immediately and pause!
+
+                // EV_FAULT arrives just before the state flips -- it's the
+                // only thing that says which driver tripped.
+                const recentFault = (!dict.estop_active && this._lastFault && (Date.now() - this._lastFault.at) < 5000)
+                    ? this._lastFault : null;
+                const cause = dict.estop_active ? 'E-STOP'
+                    : recentFault ? `${this._faultAxisName(recentFault.axis)}-axis driver alarm (ALM)`
+                        : alarmType.toUpperCase();
+
+                // A running job was dropped by the firmware: keep the exact
+                // resume point (the job's executed watermark -- telemetry's
+                // last_executed_line can name a line received but not cut).
                 if (this.job && this.job.active) {
-                    // dict.last_executed_line is firmware's own telemetry
-                    // counter, which is chunk-local (resets to 0 on every
-                    // OP_JOB_START -- see job.js chunkStartLine's doc) once a
-                    // file is split into >60,000-line chunks. Add
-                    // chunkStartLine to land on the correct whole-file
-                    // resume line instead of jumping back to an early line
-                    // in the current chunk.
-                    const stopLine = dict.last_executed_line
-                        ? (this.job.chunkStartLine + dict.last_executed_line + 1)
-                        : this.job.nextLineToRun();
+                    const stopLine = this.job.firmwareLost
+                        ? this._resumeLine
+                        : this._onFirmwareJobLost(cause);
                     if (stopLine > 1) {
-                        this._resumeLine = stopLine;
-                        this._resumeGcode = this._loadedGcode;
                         logger.info(`[RSP] Job halted by ${alarmType} at line ${stopLine}. Saved resume point.`);
-                        this.emit('console', `⚠️ Job paused by ${alarmType.toUpperCase()} at line ${stopLine}. Clear alarm / unlock ($X) and press START to resume.`);
+                        const how = dict.pos_exact
+                            ? 'press START to continue from the exact spot (the tool lifts, returns and plunges), or use Start From Line.'
+                            : 'check the position (see warning), then press START.';
+                        this.emit('console', `⚠️ Job paused by ${cause} at line ${stopLine}. Clear alarm / unlock ($X), then ${how}`);
                     }
-                    this.job.pause();
-                    this.emit('sender:pause');
                 }
 
                 this.emit('alarm', {
                     type: alarmType,
-                    code: dict.error_code || 0,
+                    code: recentFault ? recentFault.code : (dict.error_code || 0),
+                    axis: recentFault ? this._faultAxisName(recentFault.axis) : undefined,
                     message: dict.estop_active ? 'E-Stop Triggered'
-                        : `${dict.state_name || 'Alarm'} state`,
-                    description: 'E-Stop was engaged or the controller entered an alarm/fault state. Click Clear / Unlock to reset.',
+                        : recentFault ? `${this._faultAxisName(recentFault.axis)}-axis driver alarm`
+                            : `${dict.state_name || 'Alarm'} state`,
+                    description: dict.estop_active
+                        ? 'E-Stop was engaged. Release it, then click Clear / Unlock.'
+                        : recentFault
+                            ? `The ${this._faultAxisName(recentFault.axis)} motor driver signalled an alarm and motion was stopped. Check that driver (alarm LED, wiring, binding), then click Clear / Unlock.`
+                            : 'The controller entered an alarm/fault state. Click Clear / Unlock to reset.',
                     limitFlags: dict.limit_flags || 0,
                     faultFlags: dict.fault_flags || 0,
                 });
@@ -531,12 +824,6 @@ class RSPController extends EventEmitter {
             this._lastAlarmEmitted = null;
         }
 
-        if (this.job && this.job.active) {
-            // EV_EXECUTED is fire-and-forget/lossy (see job.js noteProgress
-            // doc) -- telemetry's last_executed_line is the ground truth
-            // that self-heals past any dropped event.
-            this.job.noteProgress(dict.last_executed_line, dict.job_id);
-        }
         this.emit('status', this.state.status);
     }
 
@@ -557,40 +844,24 @@ class RSPController extends EventEmitter {
         try {
             if (op === defs.EV_FAULT) {
                 const { axis, code } = codec.parseEvFault(f.payload.subarray(1));
-                logger.warn(`[RSP] EV_FAULT axis=${axis} code=${code}`);
-                if (this.job && this.job.active) {
-                    const stopLine = this.job.nextLineToRun();
-                    if (stopLine > 1) {
-                        this._resumeLine = stopLine;
-                        this._resumeGcode = this._loadedGcode;
-                    }
-                    this.job.pause();
-                    this.emit('sender:pause');
-                }
-                this.emit('alarm', { type: 'fault', axis, code });
+                const axisName = this._faultAxisName(axis);
+                this._lastFault = { axis, code, at: Date.now() };
+                logger.warn(`[RSP] EV_FAULT axis=${axis} (${axisName}) code=${code}`);
+                const detail = code === defs.FAULT_CODE_ALM_MOTION ? ' (alarm held for 50 ms while moving)'
+                    : code === defs.FAULT_CODE_ALM_ENABLE ? ' (alarm already active when the drivers were enabled)'
+                        : '';
+                this.emit('console', `🛑 ${axisName}-axis motor driver ALARM${detail} -- firmware stopped motion.`);
+                this._onFirmwareJobLost(`${axisName}-axis driver alarm (ALM)`);
+                this.emit('alarm', { type: 'fault', axis, axisName, code });
+            } else if (op === defs.EV_ALM_GLITCH) {
+                this._noteAlmGlitch(codec.parseEvAlmGlitch(f.payload.subarray(1)));
             } else if (op === defs.EV_ESTOP) {
                 logger.warn('[RSP] EV_ESTOP received');
-                if (this.job && this.job.active) {
-                    const stopLine = this.job.nextLineToRun();
-                    if (stopLine > 1) {
-                        this._resumeLine = stopLine;
-                        this._resumeGcode = this._loadedGcode;
-                    }
-                    this.job.pause();
-                    this.emit('sender:pause');
-                }
+                this._onFirmwareJobLost('E-STOP');
                 this.emit('alarm', { type: 'estop' });
             } else if (op === defs.EV_COMM_LOST) {
                 logger.warn('[RSP] EV_COMM_LOST received (device entered safe-stop)');
-                if (this.job && this.job.active) {
-                    const stopLine = this.job.nextLineToRun();
-                    if (stopLine > 1) {
-                        this._resumeLine = stopLine;
-                        this._resumeGcode = this._loadedGcode;
-                    }
-                    this.job.pause();
-                    this.emit('sender:pause');
-                }
+                this._onFirmwareJobLost('device lost contact with the PC');
                 this.emit('alarm', { type: 'comm_lost' });
             }
             // EV_EXECUTED / EV_JOB_DONE / EV_STATUS are consumed internally
@@ -650,6 +921,15 @@ class RSPController extends EventEmitter {
             return;
         }
 
+        // Job interlock (plan BE-11): nothing else moves the machine or
+        // changes its zero while a job owns it. A job the firmware already
+        // dropped (alarm / E-stop) is excluded -- recovering from it needs
+        // jog, re-zero and home before Resume.
+        if (MOTION_COMMANDS.has(cmd) && this.job && this.job.active && !this.job.firmwareLost) {
+            this.emit('console', `⛔ "${cmd}" is not available while a job is running. Pause is not enough -- stop the job first.`);
+            return;
+        }
+
         switch (cmd) {
             case 'jog': {
                 const p = args[0] || {};
@@ -657,7 +937,7 @@ class RSPController extends EventEmitter {
                 const axes = [
                     ['x', AXIS_X], ['y', AXIS_Y], ['z', AXIS_Z],
                 ];
-                const requested = axes.filter(([key]) => p[key] !== undefined && p[key] !== null && p[key] !== 0);
+                const requested = axes.filter(([key]) => p[key] !== undefined && p[key] !== null && !isNaN(Number(p[key])) && Math.abs(Number(p[key])) > 0.0001);
                 if (requested.length > 1) {
                     // Diagonal jog (>1 axis nonzero): OP_JOG only moves one axis at
                     // a time, so firing it per-axis in a loop moved X to completion
@@ -687,6 +967,8 @@ class RSPController extends EventEmitter {
 
             case 'homing':
             case 'home':
+                this._clearPositionUncertain('homed');
+                this._noteOriginChanged('homed the machine');
                 this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL));
                 break;
             case 'homing:x':
@@ -702,14 +984,16 @@ class RSPController extends EventEmitter {
                 this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_BIT_Z));
                 break;
 
+            // The E-STOP button (frontend controller.reset()) and 'estop' both
+            // land here. It used to send FEED_HOLD + SOFT_RESET: the hold only
+            // takes effect at the end of the current move, and the reboot
+            // wiped the work zero and dropped USB. OP_E_STOP stops the step
+            // engine at once, disables the drivers and keeps the exact
+            // position, so the job can be resumed (plan BE-12).
             case 'estop':
             case 'emergency_stop':
-                this._lastAlarmEmitted = 'estop';
-                if (this.job) this.job.abort();
-                this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
-                this._fireAndForget(defs.OP_SOFT_RESET, Buffer.alloc(0));
-                this.emit('workflow:state', 'alarm');
-                this.emit('console', '🛑 [RSP] EMERGENCY STOP sent.');
+            case 'reset':
+                this._emergencyStop();
                 break;
 
             // 'motor:reset'/'motor:resetAll'/'estop:clear'/'limit:clear' used
@@ -745,18 +1029,16 @@ class RSPController extends EventEmitter {
                 this.stream.sendCommand(defs.OP_UNLOCK, Buffer.alloc(0), { timeout: 3.0 })
                     .then(() => {
                         this._lastAlarmEmitted = null;
-                        if (this.state && this.state.status) {
-                            if (this.state.status.state === defs.ST_ALARM ||
-                                this.state.status.state === defs.ST_ESTOP ||
-                                this.state.status.state === defs.ST_FAULT) {
-                                this.state.status.state = defs.ST_IDLE;
-                                this.state.status.activeState = 'Idle';
-                                this.state.status.estop = false;
-                            }
-                        }
+                        // The reply means "unlock was received", NOT "the
+                        // machine is clear": the firmware refuses to leave
+                        // E-stop while the button is still pressed
+                        // (handle_unlock -> estop_is_active). Forcing the state
+                        // to Idle here showed a ready machine that was still
+                        // latched. Telemetry (10 Hz) says what really happened.
                         this.emit('console', '[RSP] Alarm cleared / unlocked ($X)');
+                        this._requestStatus();
                         if (this._resumeLine > 1) {
-                            this.emit('console', `▶️ Machine ready. Press START to resume from line ${this._resumeLine}.`);
+                            this.emit('console', `▶️ Press START to resume from line ${this._resumeLine} once the machine reads Idle.`);
                         }
                     })
                     .catch((exc) => {
@@ -765,21 +1047,22 @@ class RSPController extends EventEmitter {
                 break;
             }
 
-            case 'reset':
+            case 'reset:hard':
+                if (this.job && this.job.active) {
+                    this.emit('console', '⛔ Controller restart refused while a job is running. Stop the job first.');
+                    break;
+                }
                 this._lastAlarmEmitted = null;
                 this._fireAndForget(defs.OP_SOFT_RESET, Buffer.alloc(0));
-                this.emit('console', '[RSP] Soft reset sent.');
+                this._setPositionUncertain('the controller restarted, so its X/Y/Z position was reset to 0');
+                this.emit('console', '[RSP] Controller restart sent.');
                 break;
 
             case 'feedhold':
-                this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
-                if (this.job) this.job.pause();
-                break;
+                return this._dispatch('gcode:pause', []);
 
             case 'cyclestart':
-                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-                if (this.job) this.job.resume();
-                break;
+                return this._dispatch('gcode:resume', []);
 
             case 'zero':
             case 'wcs:zero': {
@@ -794,6 +1077,8 @@ class RSPController extends EventEmitter {
                 if (p.y !== undefined) mask |= AXIS_BIT_Y;
                 if (p.z !== undefined) mask |= AXIS_BIT_Z;
                 if (!mask) mask = AXIS_MASK_ALL;
+                if (mask === AXIS_MASK_ALL) this._clearPositionUncertain('re-zeroed X/Y/Z');
+                this._noteOriginChanged('set a new work zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(mask));
                 break;
             }
@@ -808,21 +1093,25 @@ class RSPController extends EventEmitter {
                 break;
             case 'wcs:zeroAll':
             case 'zero:all':
+                this._clearPositionUncertain('re-zeroed X/Y/Z');
+                this._noteOriginChanged('set a new work zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_MASK_ALL));
                 break;
 
             case 'gcode:load': {
-                const [name, gcode, spindleDelaySeconds] = args;
+                const [name, gcode, spindleDelaySeconds, compileOptions] = args;
                 const incoming = gcode || '';
-                // If a job is still active (e.g. user stopped mid-carve but
-                // the JobStream hasn't fully wound down yet), abort it now so
-                // the new file can be started cleanly -- without this the old
-                // job's `active` flag stays true and _startJob() rejects the
-                // next START with "a job is already running".
-                if (this.job && this.job.active) {
-                    logger.info('[RSP] gcode:load — aborting previous active job before loading new file');
-                    this.job.abort();
+                // Never replace the program under a running job (CNCEngine
+                // re-announces the same file itself; this guards every other
+                // caller). A job the firmware already dropped (alarm) is fine
+                // to replace: its resume point survives a same-file reload.
+                if (this.job && this.job.active && !this.job.firmwareLost) {
+                    logger.warn(`[RSP] gcode:load "${name || ''}" refused: a job is running`);
+                    this.emit('console', '⛔ A job is running. Stop it before loading another file.');
+                    this.lastLoadResult = { ok: false, busy: true, name: name || '', meta: { errorCount: 1, errors: [{ line: null, msg: 'A job is running. Stop it before loading another file.' }], warnings: [] } };
+                    break;
                 }
+                if (this.job && this.job.active) this.job.abort();
                 // MED#10: an aborted job object's .progress getter still
                 // reports its old executed/total counts (abort() doesn't
                 // clear _executed), and _currentLine was never reset here
@@ -833,14 +1122,6 @@ class RSPController extends EventEmitter {
                 if (this.job) this.job.resetProgress();
                 this._currentLine = 0;
                 this._loadedName = name || '';
-
-                // Ensure machine is released from any residual feed hold so it is ready in ST_IDLE
-                if (this.state && this.state.status && (this.state.status.state === defs.ST_HOLD || this.state.status.feedHold)) {
-                    this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-                    this.state.status.state = defs.ST_IDLE;
-                    this.state.status.activeState = 'Idle';
-                    this.state.status.feedHold = 0;
-                }
 
                 // Firmware (easycnc_protocol.c, GcodeMove struct) has no
                 // arc-center field and rejects G2/G3 outright. Linearize
@@ -855,7 +1136,25 @@ class RSPController extends EventEmitter {
                     // this, preferences.spindleDelay was stored but never
                     // read anywhere (FIXFILE.html FIX-16).
                     const { text, insertedCount } = injectSpindleDelay(linearized, spindleDelaySeconds);
-                    this._loadedGcode = text;
+                    // BE-1: compile to the exact wire lines the firmware reads
+                    // correctly (absolute G21 on the step grid, explicit feed,
+                    // no hex-float pattern) or refuse the file with line numbers.
+                    const compiled = compileWire(text, compileOptions || {});
+                    const meta = compiled.meta;
+                    if (meta.errorCount > 0) {
+                        const shown = meta.errors.slice(0, 5)
+                            .map((e) => (e.line ? `line ${e.line}: ${e.msg}` : e.msg)).join(' | ');
+                        const more = meta.errorCount > 5 ? ` (+${meta.errorCount - 5} more)` : '';
+                        logger.warn(`[RSP] gcode:load refused "${this._loadedName}": ${meta.errorCount} problem(s): ${shown}${more}`);
+                        this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${shown}${more}`);
+                        this._setLoadRejected(name, meta);
+                        break;
+                    }
+                    this._loadedGcode = compiled.text;
+                    this._loadedLines = compiled.lines;
+                    this._loadedMeta = meta;
+                    this._lastCompileOptions = compileOptions || {};
+                    this.lastLoadResult = { ok: true, name: this._loadedName, meta };
                     if (arcCount > 0) {
                         logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
                         this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
@@ -864,19 +1163,28 @@ class RSPController extends EventEmitter {
                         logger.info(`[RSP] gcode:load inserted ${insertedCount} spindle spin-up dwell(s) (G4 P${spindleDelaySeconds}) after M3/M4`);
                         this.emit('console', `ℹ️ Added a ${spindleDelaySeconds}s spindle spin-up dwell after each M3/M4 (your file is unchanged).`);
                     }
+                    for (const w of meta.warnings.slice(0, 8)) {
+                        this.emit('console', `ℹ️ ${w.line ? `Line ${w.line}: ` : ''}${w.msg}`);
+                    }
+                    logger.info(`[RSP] gcode:load compiled ${meta.lineCount} lines (${meta.motionCount} moves, ${meta.clampedCount} feed-clamped, ${meta.pauses.length} program pause(s), ${meta.warnings.length} warning(s))`);
                 } catch (err) {
-                    logger.warn(`[RSP] gcode:load arc linearization failed: ${err.message}`);
-                    this.emit('console', `⚠️ Could not load "${this._loadedName}": ${err.message}`);
-                    this._loadedGcode = '';
-                    this._loadedName = '';
+                    logger.warn(`[RSP] gcode:load failed: ${err.message}`);
+                    this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${err.message}`);
+                    this._setLoadRejected(name, { errorCount: 1, errors: [{ line: null, msg: err.message }], warnings: [] });
                     break;
                 }
                 // Power-cut recovery is now handled by JobResumeService,
-                // which intercepts at a higher level. Here we just treat
-                // every load as a fresh start for the volatile in-session
-                // resume bookkeeping.
-                this._resumeLine = 0;
-                this._resumeGcode = null;
+                // which intercepts at a higher level. A load of a DIFFERENT
+                // file drops the in-session resume point; re-sending the SAME
+                // file keeps it -- the frontend re-uploads the open file on
+                // reconnect/refresh, and on 2026-09-15 that silently wiped the
+                // line-3237 resume point and forced a restart from scratch.
+                if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
+                    logger.info(`[RSP] gcode:load same file re-sent -- keeping resume point at line ${this._resumeLine}`);
+                    this._emitResumePoint();
+                } else {
+                    this._clearResumePoint();
+                }
                 logger.info(`[RSP] gcode:load "${this._loadedName}" (${this._loadedGcode.length} bytes)`);
                 break;
             }
@@ -884,72 +1192,120 @@ class RSPController extends EventEmitter {
             case 'gcode:unload':
                 if (this.job && this.job.active) this.job.abort();
                 this._loadedGcode = '';
+                this._loadedLines = [];
+                this._loadedMeta = null;
+                this.lastLoadResult = null;
                 this._loadedName = '';
-                this._resumeLine = 0;
-                this._resumeGcode = null;
+                this._clearResumePoint();
                 break;
 
             case 'gcode:start': {
-                const totalLines = (this.job && this.job.totalLineCount) || 0;
+                // A double-click or a second client pressing START used to
+                // abort the running job and restart the file from line 1.
+                if (this.job && this.job.active && !this.job.firmwareLost) {
+                    if (this.job.paused) return this._dispatch('gcode:resume', []);
+                    this.emit('console', 'ℹ️ The job is already running.');
+                    return undefined;
+                }
+                const totalLines = this._loadedLines.length;
                 if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
                     if (totalLines > 0 && this._resumeLine > totalLines) {
                         logger.info(`[RSP] resumeLine ${this._resumeLine} exceeds total lines ${totalLines}, starting fresh from line 1`);
-                        this._resumeLine = 0;
-                        this._resumeGcode = null;
-                        return this._startJob(this._loadedGcode);
-                    } else {
-                        logger.info(`[RSP] gcode:start resuming stopped job at line ${this._resumeLine}`);
-                        this.emit('console', `▶️ Resuming from line ${this._resumeLine} (where it was stopped).`);
-                        return this._startJob(this._loadedGcode, this._resumeLine);
+                        this._clearResumePoint();
+                        return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
                     }
-                } else {
-                    return this._startJob(this._loadedGcode);
+                    return this._resumeFromPoint();
                 }
+                return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
             }
 
             case 'gcode:startFromLine': {
-                const lineNumber = args[0];
-                return this._startJob(this._loadedGcode, typeof lineNumber === 'number' ? lineNumber : 0);
+                if (this.job && this.job.active && !this.job.firmwareLost) {
+                    this.emit('console', '⛔ Start From Line is not available while a job is running. Stop the job first.');
+                    return undefined;
+                }
+                // Always the safe program: lift to safe Z, travel to where line
+                // N starts, plunge, continue. (The bare [line] form streamed
+                // the file from line N with no retract or travel -- a straight
+                // cut from wherever the tool was.)
+                const [lineNumber, opts] = args;
+                return this._startFromLineSafe(Number(lineNumber), (opts && typeof opts === 'object') ? opts : {});
+            }
+
+            case 'gcode:resumePoint':
+                this._emitResumePoint();
+                break;
+
+            case 'gcode:resumePreview': {
+                const [lineNumber, opts] = args;
+                this.emit('job:resumePreview', this._resumePreview(Number(lineNumber), opts || {}));
+                break;
             }
 
             case 'gcode:pause':
-                if (this.job) this.job.pause();
-                this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
+                if (!this.job || !this.job.active) break;
+                this.job.pause();
+                this._sendFeedHold();
                 this.emit('sender:pause');
                 this.emit('workflow:state', 'paused');
                 break;
 
             case 'gcode:resume':
-                if (this.job) this.job.resume();
-                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-                this.emit('sender:resume');
-                this.emit('workflow:state', 'running');
+                if (this.job && this.job.active && !this.job.firmwareLost) {
+                    this.job.resume();
+                    // Only ever sent to lift a hold. On firmware up to 0.1.2
+                    // OP_RESUME also acts as the legacy "cycle start": from
+                    // IDLE it sets the machine running on whatever is left in
+                    // the planner. Sending it unconditionally (as this used
+                    // to) could therefore start motion that nobody asked for.
+                    // 0.2.0 refuses that firmware-side as well (FW-10).
+                    if (this._firmwareIsHolding()) {
+                        this._feedHoldSent = false;
+                        this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                    }
+                    this.emit('sender:resume');
+                    this.emit('workflow:state', 'running');
+                    break;
+                }
+                // The firmware dropped the job (alarm / E-stop) or it was
+                // stopped: continue from the saved point with a fresh job.
+                if (this.getResumePoint().line > 1) return this._resumeFromPoint();
                 break;
 
             case 'gcode:stop': {
-                // Capture the resume point BEFORE abort() -- nextLineToRun()
-                // still reflects real progress at this instant; abort()
-                // doesn't touch it, but the NEXT upload() (a fresh start)
-                // would reset it to 1, so it has to be saved out here.
-                const stopLine = this.job ? this.job.nextLineToRun() : 0;
-                const totalLines = (this.job && this.job.totalLineCount) || 0;
-                if (this.job) this.job.abort();
-                // Release any feed hold so firmware returns to ST_IDLE and doesn't get stuck in ST_HOLD
-                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-                this.emit('sender:end', { aborted: true });
-                this.emit('workflow:state', 'idle');
-                if (this.state && this.state.status && (this.state.status.state === defs.ST_HOLD || this.state.status.state === defs.ST_STOPPING)) {
-                    this.state.status.state = defs.ST_IDLE;
-                    this.state.status.activeState = 'Idle';
-                    this.state.status.feedHold = 0;
+                const wasActive = !!(this.job && this.job.active);
+                if (wasActive && this._jobIsMacro) {
+                    // A macro is not the loaded file: stopping one must not
+                    // touch (or claim to set) the file's resume point.
+                    this.job.abort();
+                    this.emit('workflow:state', 'idle');
+                    this.emit('console', '⏹️ Macro stopped.');
+                    break;
                 }
-                if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
-                    this._resumeLine = stopLine;
-                    this._resumeGcode = this._loadedGcode;
-                    this.emit('console', `⏹️ Stopped at line ${stopLine}. Press START to resume from here, or load a new file to restart.`);
+                // Capture before abort(): the exact executed watermark.
+                const stopLine = wasActive ? this._fileLine(this.job.nextLineToRun()) : 0;
+                const totalLines = this._fileTotalLines();
+                if (wasActive) {
+                    // Sends OP_JOB_ABORT (forced), which also takes the firmware
+                    // out of HOLD to IDLE -- no blind OP_RESUME needed.
+                    this.job.abort();
                 } else {
-                    this._resumeLine = 0;
-                    this._resumeGcode = null;
+                    const st = this.state && this.state.status;
+                    if (st && (st.state === defs.ST_RUNNING || st.state === defs.ST_HOLD)) {
+                        this._lastOrphanAbortAt = 0;
+                        this._jobEndedAt = 0;
+                        this._abortOrphanJob({ state_name: st.activeState, job_id: this._lastTelemetryJobId || 0 });
+                    }
+                    this.emit('sender:end', { aborted: true });
+                }
+                this.emit('workflow:state', 'idle');
+                if (wasActive && stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
+                    // Stopping an already alarm-paused job keeps the alarm as the reason.
+                    const reason = (this._resumeLine === stopLine && this._resumeReason) ? this._resumeReason : 'stopped';
+                    this._setResumePoint(stopLine, reason);
+                    this.emit('console', `⏹️ Stopped at line ${stopLine}. Press START to resume from here, use Start From Line, or load a new file to restart.`);
+                } else if (wasActive) {
+                    this._clearResumePoint();
                 }
                 break;
             }
@@ -1019,8 +1375,23 @@ class RSPController extends EventEmitter {
             }
 
             case 'macro:run': {
+                // Macros go through the same arc conversion + wire compiler as
+                // files -- raw text hit the firmware's hex-float and feed-lag
+                // parsing bugs. A macro job has no file line mapping or resume.
                 const [content] = args;
-                this._startJob(content || '');
+                let compiled;
+                try {
+                    compiled = compileWire(linearizeArcs(String(content || '')).text, this._lastCompileOptions || {});
+                } catch (err) {
+                    this.emit('console', `⛔ Macro not run: ${err.message}`);
+                    break;
+                }
+                if (compiled.meta.errorCount > 0) {
+                    const e = compiled.meta.errors[0];
+                    this.emit('console', `⛔ Macro not run: ${e.line ? `line ${e.line}: ` : ''}${e.msg}`);
+                    break;
+                }
+                this._startJob(compiled.text, 0, { lineOffset: 0, lineOffsetMin: 0, macro: true }, this._holdsFromMeta(compiled.meta));
                 break;
             }
 
@@ -1091,6 +1462,44 @@ class RSPController extends EventEmitter {
             if (!(exc instanceof LinkLost)) throw exc;
             logger.warn(`[RSP] op 0x${op.toString(16)} not sent -- link down`);
         }
+    }
+
+    /**
+     * Ask the board what it actually is. Nothing here used to: the UI showed a
+     * hardcoded "RSP (Reliable Stream Protocol)" whatever was flashed, so there
+     * was no way to tell 0.1.1 from 0.2.0 short of reading hex files -- and the
+     * hex file NAMES in the firmware folder had already drifted from their
+     * contents. GET_CONFIG carries the firmware's own version string.
+     */
+    _requestConfig() {
+        if (!this.stream) return;
+        this.stream.sendCommand(defs.OP_GET_CONFIG, Buffer.alloc(0), { timeout: 3.0 })
+            .then((rsp) => {
+                if (!rsp || !rsp.payload || rsp.payload.length < 3) return;
+                const json = rsp.payload.subarray(2).toString('utf8').replace(/\0+$/, '');
+                let cfg;
+                try {
+                    cfg = JSON.parse(json);
+                } catch (_) {
+                    logger.warn(`[RSP] GET_CONFIG reply was not JSON: ${json.slice(0, 80)}`);
+                    return;
+                }
+                this.firmwareVersion = cfg.fw || 'unknown';
+                this.firmwareConfig = cfg;
+                const steps = Array.isArray(cfg.steps_per_mm) ? ` steps/mm ${cfg.steps_per_mm.join('/')}` : '';
+                logger.info(`[RSP] controller firmware ${this.firmwareVersion}${steps}`);
+                this.emit('console', `ℹ️ Controller firmware: ${this.firmwareVersion}${steps}`);
+                this.emit('initialized', { firmwareType: this.type, firmwareVersion: `RSP ${this.firmwareVersion}` });
+                if (this.connection) {
+                    this.connection.emitToSockets('controller:initialized', {
+                        firmwareType: this.type,
+                        firmwareVersion: `RSP ${this.firmwareVersion}`,
+                    });
+                }
+            })
+            .catch((exc) => {
+                logger.warn(`[RSP] could not read the firmware version: ${exc.message || exc}`);
+            });
     }
 
     _requestStatus() {
@@ -1259,7 +1668,13 @@ class RSPController extends EventEmitter {
         if (this.state && this.state.status) {
             this.state.status.feedOverridePct = clamped;
         }
-        this._fireAndForget(defs.OP_SET_FEED_OVERRIDE, codec.buildFeedOverride(clamped));
+        // Applied by the host, on the lines not yet streamed: the firmware
+        // accepts OP_SET_FEED_OVERRIDE but never applies it to a move
+        // (easycnc_protocol.c, rsp_feed_override_pct is stored and unused), so
+        // sending it changed nothing on the machine. Not sent any more, so a
+        // future firmware that does apply it cannot scale the feed twice.
+        if (this.job) this.job.setFeedOverride(clamped);
+        this.emit('console', `Feed override ${clamped}%${this.job && this.job.active ? ' — takes effect within the next few moves.' : ''}`);
         this.emit('status', this.state);
         this.emit('sender:status', { feedOverridePct: clamped });
     }
@@ -1269,7 +1684,212 @@ class RSPController extends EventEmitter {
      * @param {number} [resumeLine] if > 1, skip lines 1..resumeLine-1 (already
      *   run) and start sending from resumeLine instead of line 1.
      */
-    async _startJob(gcodeText, resumeLine = 0) {
+    /** A file that cannot run correctly is never left loaded (nothing to Start). */
+    _setLoadRejected(name, meta) {
+        this._loadedGcode = '';
+        this._loadedLines = [];
+        this._loadedMeta = null;
+        this._loadedName = '';
+        this._clearResumePoint();
+        this.lastLoadResult = { ok: false, name: name || '', meta };
+        this.emit('job:loadRejected', {
+            name: name || '',
+            errorCount: meta.errorCount,
+            errors: (meta.errors || []).slice(0, 20),
+            warnings: (meta.warnings || []).slice(0, 20),
+        });
+    }
+
+    _clearPositionUncertain(how) {
+        if (!this._positionUncertain) return;
+        this._positionUncertain = null;
+        logger.info(`[RSP] position-uncertain flag cleared (${how})`);
+        this.emit('console', `✅ Position warning cleared (${how}). Resume is allowed again -- make sure the zero is at the job's original origin.`);
+        this._emitResumePoint();
+    }
+
+    /** Resume preamble uses the same rapid / Z rate / headroom the file was compiled with. */
+    _resumeBuildOptions(opts = {}) {
+        const o = (this._loadedMeta && this._loadedMeta.options) || {};
+        const mpos = (this.state && this.state.status && this.state.status.mpos) || null;
+        const ext = this._loadedMeta && this._loadedMeta.extents;
+        return {
+            safeZMm: opts.safeZ,
+            plungeFeedMm: opts.plungeFeed,
+            rapidFeedMm: o.rapidFeed,
+            zRateMm: o.maxRate ? o.maxRate.z : undefined,
+            xRateMm: o.maxRate ? o.maxRate.x : undefined,
+            yRateMm: o.maxRate ? o.maxRate.y : undefined,
+            zHeadroomMm: o.zHeadroom,
+            // the highest Z the program itself uses -- always clear of the work
+            fileMaxZMm: ext && ext.max && Number.isFinite(ext.max.z) ? ext.max.z : undefined,
+            // so the first move never descends to reach the safe height
+            currentZMm: mpos && Number.isFinite(mpos.z) ? mpos.z : undefined,
+        };
+    }
+
+    /**
+     * What Start From Line would do for `line`, without moving anything.
+     * Drives the dialog's context view and its "will move to X/Y, plunge to
+     * Z" summary, so the operator sees the plan before pressing Start.
+     */
+    _resumePreview(line, opts) {
+        const lines = this._loadedLines;
+        const total = lines.length;
+        const n = Math.floor(line) || 1;
+        const from = Math.max(1, n - 5);
+        const to = Math.min(total, n + 5);
+        const context = [];
+        for (let i = from; i <= to; i++) context.push({ num: i, text: lines[i - 1] });
+        const plan = buildResumeProgram(lines, n, this._resumeBuildOptions(opts));
+        return {
+            line: n,
+            total,
+            name: this._loadedName,
+            context,
+            plan: plan.ok
+                ? { ok: true, preamble: plan.preamble, startMm: plan.startMm, retractMm: plan.retractMm, units: plan.units, warnings: plan.warnings }
+                : { ok: false, error: plan.error },
+            resumePoint: this.getResumePoint(),
+        };
+    }
+
+    /**
+     * Start From Line (safe): lift to safe Z in work coordinates, travel to
+     * where `line` starts, plunge back to its depth, then run the file from
+     * `line`. Reported line numbers stay those of the loaded file.
+     */
+    _startFromLineSafe(line, opts, { resume = false } = {}) {
+        const lines = this._loadedLines;
+        const what = resume ? `Resume from line ${line}` : `Start From Line ${line}`;
+        const plan = buildResumeProgram(lines, line, this._resumeBuildOptions(opts));
+        if (!plan.ok) {
+            this.emit('console', `⚠️ ${what} not started: ${plan.error}`);
+            return undefined;
+        }
+        if (this._blockIfPositionUncertain(what)) return undefined;
+        const p = plan.startMm;
+        logger.info(`[RSP] ${what}: ${plan.preamble.join(' | ')}`);
+        this.emit('console', `▶️ ${what}: raise Z to ${plan.retractMm.toFixed(2)} mm, move to X${p.x.toFixed(3)} Y${p.y.toFixed(3)}${p.z === null ? '' : `, lower to Z${p.z.toFixed(3)}`} (mm), then continue.`);
+        for (const w of plan.warnings) this.emit('console', `ℹ️ ${w}`);
+
+        // Job line L of the program is file line L + lineOffset.
+        const holds = this._holdsForFile(line, plan.lineOffset);
+        // Spindle was on at this line: the program stops after the travel, at
+        // safe height, so the operator confirms the spindle is running before
+        // the tool goes back into the material.
+        const spindleIdx = plan.preamble.findIndex((l) => /^M[34]\b/.test(l));
+        if (spindleIdx >= 0 && p.z !== null) {
+            holds.push({
+                line: spindleIdx + 1,
+                kind: 'pause',
+                message: `Tool is above line ${line}. Make sure the spindle is running at speed, then press Resume to lower the tool and continue`,
+            });
+        }
+        return this._startJob(plan.program.join('\n'), 0, {
+            lineOffset: plan.lineOffset,
+            lineOffsetMin: line,
+            // the preamble's own feeds (lift, travel, slow plunge) are safety
+            // choices -- the feed override applies to the program, not to them
+            fixedFeedLines: plan.preamble.map((_, idx) => idx + 1),
+        }, holds);
+    }
+
+    /**
+     * Continue a stopped / alarmed job from its saved resume point, always
+     * through the safe program (retract, travel, plunge) -- the tool may have
+     * been jogged or stopped mid-move since (plan BE-25).
+     */
+    _resumeFromPoint() {
+        const point = this.getResumePoint();
+        const line = point.line;
+        if (!(line > 1)) return undefined;
+        const opts = { safeZ: (this._loadedMeta && this._loadedMeta.options && this._loadedMeta.options.safeHeight) || 10 };
+        const st = scanModalState(this._loadedLines, line);
+        if (st.pos.x === null || st.pos.y === null) {
+            // No X/Y move before the resume point: nothing has been cut yet,
+            // running the file from line 1 is the same work.
+            if (this._blockIfPositionUncertain(`Resume from line ${line}`)) return undefined;
+            this.emit('console', `▶️ Line ${line} is before the first X/Y move -- starting the file from line 1.`);
+            this._clearResumePoint();
+            return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
+        }
+        if (point.originChanged) {
+            this.emit('console', `⚠️ The work zero was changed after this job stopped. Resuming at line ${line} assumes the SAME zero the job started from.`);
+        }
+        logger.info(`[RSP] resuming stopped job at line ${line}`);
+        return this._startFromLineSafe(line, opts, { resume: true });
+    }
+
+    /** Program pauses (M0/M1) and dwells (G4) of the loaded file at or after `fromLine`, as job lines. */
+    _holdsForFile(fromLine, lineOffset = 0) {
+        return this._holdsFromMeta(this._loadedMeta, fromLine, lineOffset);
+    }
+
+    _holdsFromMeta(meta, fromLine = 1, lineOffset = 0) {
+        if (!meta) return [];
+        const holds = [];
+        // Operator choice (preferences.honorProgramPauses, default off): the
+        // "Click Continue when the spindle is up to speed" M0 of Buildbotics
+        // posts stopped every job at line 5 waiting for Resume. Off = M0/M1
+        // run straight through; G4 dwells are still honoured.
+        const honorPauses = !!(this._lastCompileOptions && this._lastCompileOptions.honorProgramPauses);
+        for (const p of honorPauses ? (meta.pauses || []) : []) {
+            if (p.line >= fromLine) holds.push({ line: p.line - lineOffset, kind: 'pause', message: p.message, optional: p.optional });
+        }
+        for (const d of meta.dwells || []) {
+            if (d.line >= fromLine) holds.push({ line: d.line - lineOffset, kind: 'dwell', seconds: d.seconds });
+        }
+        return holds;
+    }
+
+    /** E-STOP: stop motion now, keep position and the resume point. */
+    _emergencyStop() {
+        this._lastAlarmEmitted = 'estop';
+        let stopLine = 0;
+        const jobActive = !!(this.job && this.job.active);
+        if (jobActive) {
+            stopLine = this.job.firmwareLost ? this._resumeLine : this._fileLine(this.job.nextLineToRun());
+        }
+        // Job abort first: it fills the seqs of cancelled in-flight lines, so
+        // E_STOP directly behind it is processed at once instead of waiting on
+        // a seq hole. Both are forced past a full window / link blip.
+        if (jobActive) {
+            this.job.abort();
+            const totalLines = this._fileTotalLines();
+            if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) this._setResumePoint(stopLine, 'E-STOP');
+        }
+        try {
+            this.stream.sendNowait(defs.OP_E_STOP, Buffer.alloc(0), true, { force: true });
+        } catch (exc) {
+            logger.error(`[RSP] E-STOP could not be queued: ${exc.message || exc}`);
+        }
+        this.emit('workflow:state', 'alarm');
+        this.emit('console', `🛑 EMERGENCY STOP: motion stopped and drivers disabled.${stopLine > 1 ? ` Resume from line ${stopLine} is saved.` : ''} Check the machine, then Clear Alarm.`);
+    }
+
+    /**
+     * Is the machine held, or have we just asked it to hold? Telemetry is only
+     * 10 Hz, so a resume pressed right after a pause must not be judged on a
+     * status frame that predates the hold.
+     */
+    _firmwareIsHolding() {
+        const st = this.state && this.state.status;
+        return !!(this._feedHoldSent || (st && (st.state === defs.ST_HOLD || st.feedHold)));
+    }
+
+    /** Every OP_FEED_HOLD this controller sends goes through here. */
+    _sendFeedHold() {
+        this._feedHoldSent = true;
+        this._fireAndForget(defs.OP_FEED_HOLD, Buffer.alloc(0));
+    }
+
+    _setPositionUncertain(message) {
+        this._positionUncertain = { at: Date.now(), message: `Position may be wrong: ${message}.` };
+        this._emitResumePoint();
+    }
+
+    async _startJob(gcodeText, resumeLine = 0, mapping = null, holds = []) {
         if (!this.job) return;
         if (!gcodeText || !String(gcodeText).trim()) {
             logger.warn('[RSP] gcode:start called but no G-code is loaded -- START is a no-op. Did file:load fire?');
@@ -1286,6 +1906,7 @@ class RSPController extends EventEmitter {
         // touching this.job, so a stale call bails instead of resuming
         // and silently uploading/starting superseded G-code.
         const gen = ++this._startJobGeneration;
+        this._feedHoldSent = false; // a new run is never a continuation of an old hold
         if (this.job.active) {
             logger.info('[RSP] gcode:start aborting previous active/paused job to restart/resume cleanly');
             this.job.abort();
@@ -1296,13 +1917,25 @@ class RSPController extends EventEmitter {
         }
 
         const lines = String(gcodeText || '').split(/\r?\n/);
+        this._lineOffset = mapping ? mapping.lineOffset : 0;
+        this._lineOffsetMin = mapping ? mapping.lineOffsetMin : 0;
+        // A macro is not the loaded file: its progress must never become the
+        // file's resume point, and finishing it must not clear that point.
+        this._jobIsMacro = !!(mapping && mapping.macro);
+        const firstFileLine = mapping ? mapping.lineOffsetMin : resumeLine;
         // Reset so the G-code panel doesn't show the previous job's last
         // highlighted line for the brief window before the first EV_EXECUTED
         // of this job arrives.
-        this._currentLine = resumeLine > 1 ? resumeLine - 1 : 0;
+        this._currentLine = firstFileLine > 1 ? firstFileLine - 1 : 0;
         let jobId;
         try {
-            jobId = this.job.upload(lines);
+            const o = (this._loadedMeta && this._loadedMeta.options) || {};
+            jobId = this.job.upload(lines, null, {
+                holds,
+                feedOverridePct: this._feedOverridePct,
+                feedLimits: { maxRate: o.maxRate || { x: 5000, y: 5000, z: 3000 }, maxFeed: o.maxFeed || 10000 },
+                fixedFeedLines: (mapping && mapping.fixedFeedLines) || [],
+            });
         } catch (uploadErr) {
             logger.error(`[RSP] Failed to upload job: ${uploadErr.message || uploadErr}`);
             this.emit('console', `⚠️ Failed to upload job: ${uploadErr.message || uploadErr}`);
@@ -1314,7 +1947,11 @@ class RSPController extends EventEmitter {
         if (typeof resumeLine === 'number' && resumeLine > 1) {
             this.job.resume(resumeLine);
         }
-        this.emit('sender:start', { jobId, total: lines.length, resumedFrom: resumeLine > 1 ? resumeLine : undefined });
+        this.emit('sender:start', {
+            jobId,
+            total: mapping ? this._fileTotalLines() : lines.length,
+            resumedFrom: firstFileLine > 1 ? firstFileLine : undefined,
+        });
         // LOW#14: matching job:start for JobHistoryService (see job:end/
         // job:abort/job:error alongside the sender:* emits below).
         const modal = this.getModalState();
@@ -1327,39 +1964,59 @@ class RSPController extends EventEmitter {
         });
         this.emit('workflow:state', 'running');
 
-        // If the machine is still running or actively decelerating from a
-        // just-aborted move (ST_STOPPING / ST_HOLD), wait for it to actually reach
-        // ST_IDLE before pipelining the next job's moves.
-        if (this.state && this.state.status && (
-            this.state.status.state === defs.ST_RUNNING ||
-            this.state.status.state === defs.ST_STREAMING ||
-            this.state.status.state === defs.ST_STOPPING ||
-            this.state.status.state === defs.ST_HOLD
-        )) {
-            if (this.state.status.state === defs.ST_HOLD || this.state.status.feedHold) {
-                this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-            }
-            logger.info(`[RSP] Machine is still in state ${this.state.status.activeState || this.state.status.state} -- waiting for motion to complete before starting job...`);
+        // OP_JOB_START needs the firmware IDLE. Right after a stop it can
+        // still report RUNNING/HOLD for a frame or two; a job left over from
+        // an earlier session stays that way until aborted by its own id.
+        // (This used to send a blind OP_RESUME and then pretend the state was
+        // Idle, which resumed whatever was held.)
+        // Jogging and homing count as busy too: the firmware gates OP_JOB_START
+        // on SYS_IDLE, so a START pressed while a jog is still finishing was
+        // refused outright instead of waiting the half second for it to stop.
+        const busy = (s) => s && (s.state === defs.ST_RUNNING || s.state === defs.ST_STREAMING ||
+            s.state === defs.ST_STOPPING || s.state === defs.ST_HOLD ||
+            s.state === defs.ST_JOGGING || s.state === defs.ST_HOMING);
+        if (busy(this.state && this.state.status)) {
+            logger.info(`[RSP] Machine is still ${this.state.status.activeState || this.state.status.state} -- waiting for IDLE before starting the job`);
             const startWait = Date.now();
-            while (this.state.status && (
-                this.state.status.state === defs.ST_RUNNING ||
-                this.state.status.state === defs.ST_STREAMING ||
-                this.state.status.state === defs.ST_STOPPING ||
-                this.state.status.state === defs.ST_HOLD
-            )) {
+            let abortedOrphan = false;
+            let saidWaiting = false;
+            // A jog or a homing cycle is motion the operator started and it
+            // ends by itself, so wait it out (a long traverse legitimately
+            // takes half a minute). Anything else is our own leftover and
+            // should be gone in a moment.
+            const waitLimitMs = () => {
+                const st = this.state.status.state;
+                return (st === defs.ST_JOGGING || st === defs.ST_HOMING) ? 60000 : 6000;
+            };
+            while (busy(this.state.status)) {
                 if (gen !== this._startJobGeneration) {
                     logger.info('[RSP] gcode:start superseded by a newer start request while waiting for idle -- bailing out');
                     return;
                 }
-                if (Date.now() - startWait > 4000) {
-                    logger.warn('[RSP] Timed out waiting for machine to become idle before starting job. Forcing OP_RESUME.');
-                    this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
-                    this.state.status.state = defs.ST_IDLE;
-                    this.state.status.activeState = 'Idle';
-                    this.state.status.feedHold = 0;
-                    break;
+                // the port can close (or the controller be unbound) while we wait
+                if (!this.job || !this.stream) return;
+                const waited = Date.now() - startWait;
+                if (!saidWaiting && waited > 700) {
+                    saidWaiting = true;
+                    const st = this.state.status.state;
+                    if (st === defs.ST_JOGGING || st === defs.ST_HOMING) {
+                        this.emit('console', `⏳ Waiting for ${st === defs.ST_HOMING ? 'homing' : 'the jog'} to finish, then the job will start.`);
+                    }
                 }
-                await new Promise(r => setTimeout(r, 100));
+                if (!abortedOrphan && waited > 1500 && this._lastTelemetryJobId !== jobId
+                    && this.state.status.state !== defs.ST_JOGGING && this.state.status.state !== defs.ST_HOMING) {
+                    abortedOrphan = true;
+                    this._lastOrphanAbortAt = 0;
+                    this._jobEndedAt = 0;
+                    this._abortOrphanJob({ state_name: this.state.status.activeState, job_id: this._lastTelemetryJobId || 0 });
+                }
+                if (waited > waitLimitMs()) {
+                    const reason = `the machine did not become idle (still ${this.state.status.activeState || this.state.status.state})`;
+                    logger.warn(`[RSP] job not started: ${reason}`);
+                    this.job.failBeforeStart(reason);
+                    return;
+                }
+                await new Promise((r) => setTimeout(r, 100));
             }
         }
         if (gen !== this._startJobGeneration) {
@@ -1375,6 +2032,7 @@ class RSPController extends EventEmitter {
     // ------------------------------------------------------------------
     getWorkflowState() {
         if (!this.job) return 'idle';
+        if (this.job.active && this.job.paused) return 'paused';
         if (this.job.active) return this.job.stalled ? 'stalled' : 'running';
         return 'idle';
     }

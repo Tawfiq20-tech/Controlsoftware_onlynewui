@@ -271,6 +271,12 @@ export class JoystickCNCMapper {
         this.speedMultiplier = Math.max(0, Math.min(1, multiplier));
     }
 
+    public static applyDeadzone(value: number, deadzone = 0.08): number {
+        if (Math.abs(value) < deadzone) return 0;
+        const sign = value > 0 ? 1 : -1;
+        return sign * ((Math.abs(value) - deadzone) / (1 - deadzone));
+    }
+
     /**
      * Convert joystick axes to jog commands
      */
@@ -282,19 +288,24 @@ export class JoystickCNCMapper {
     } | null {
         const { leftX, leftY, rightY } = axes;
 
+        // Apply deadzone to eliminate analog stick drift (especially on right stick Z)
+        const lx = JoystickCNCMapper.applyDeadzone(leftX, 0.08);
+        const ly = JoystickCNCMapper.applyDeadzone(leftY, 0.08);
+        const rz = JoystickCNCMapper.applyDeadzone(rightY, 0.08);
+
         // No movement if all axes are at zero
-        if (leftX === 0 && leftY === 0 && rightY === 0) {
+        if (lx === 0 && ly === 0 && rz === 0) {
             return null;
         }
 
         // Calculate feed rate based on maximum axis deflection
-        const maxDeflection = Math.max(Math.abs(leftX), Math.abs(leftY), Math.abs(rightY));
+        const maxDeflection = Math.max(Math.abs(lx), Math.abs(ly), Math.abs(rz));
         const feedRate = this.minSpeed + (this.maxSpeed - this.minSpeed) * maxDeflection * this.speedMultiplier;
 
         return {
-            x: leftX,
-            y: -leftY, // Invert Y axis (joystick up = positive Y)
-            z: rightY, // Right stick Y controls Z
+            x: lx,
+            y: -ly, // Invert Y axis (joystick up = positive Y)
+            z: rz, // Right stick Y controls Z
             feedRate: Math.round(feedRate)
         };
     }

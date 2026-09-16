@@ -22,7 +22,7 @@ interface LibraryItem {
     savedAt: string;     // ISO
 }
 
-const FILEFINITY_URL = 'https://forum.onefinitycnc.com/c/projects-files-and-tools/files-and-templates/9';
+const FILEFINITY_URL = 'https://main.filefinity.com/model/6a9fed70af386fe917fce2f0/';
 // Documentation site URL — Tawfiq said leave it simple, link gets added later.
 const DOCS_URL = '#';
 
@@ -36,7 +36,7 @@ const BACKEND_BASE = (() => {
     return 'http://localhost:4000';
 })();
 
-type View = 'home' | 'custom';
+type View = 'home' | 'custom' | 'filefinity';
 
 export default function Library() {
     const [view, setView] = useState<View>('home');
@@ -46,6 +46,7 @@ export default function Library() {
     const setFileInfo = useCNCStore((s) => s.setFileInfo);
     const setGcode = useCNCStore((s) => s.setGcode);
     const setToolpathSegments = useCNCStore((s) => s.setToolpathSegments);
+    const setParsedToolpath = useCNCStore((s) => s.setParsedToolpath);
     const addConsoleLog = useCNCStore((s) => s.addConsoleLog);
 
     useEffect(() => { reload(); }, []);
@@ -100,6 +101,9 @@ export default function Library() {
 
             setGcode(result.lines);
             setToolpathSegments(result.segments);
+            if (result.parsedToolpath) {
+                setParsedToolpath(result.parsedToolpath);
+            }
             setRawGcodeContent(body);
             setFileInfo({
                 name: item.fileName,
@@ -177,6 +181,49 @@ export default function Library() {
         );
     }
 
+    if (view === 'filefinity') {
+        return (
+            <div className="lib-root">
+                <header className="lib-header">
+                    <button className="lib-back" onClick={() => setView('home')}>← Library</button>
+                    <h2>FILEFINITY</h2>
+                    <div className="lib-spacer" />
+                    <button
+                        className="lib-btn lib-btn-primary"
+                        onClick={() => window.open(FILEFINITY_URL, '_blank', 'noopener,noreferrer')}
+                    >
+                        <Globe size={14} /> Open Filefinity ↗
+                    </button>
+                </header>
+
+                <div className="lib-empty">
+                    <Globe size={56} style={{ color: 'var(--accent, #f59e0b)', opacity: 0.9 }} />
+                    <h3>Onefinity Community & Filefinity</h3>
+                    <p style={{ maxWidth: 520, lineHeight: 1.6, margin: '8px 0 20px', color: 'var(--text-dim, #94a3b8)' }}>
+                        Access community-shared G-code projects, CNC templates, and design files.
+                        Download files from Filefinity, then save them to your Custom Library to load and carve directly on your machine.
+                    </p>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+                        <button
+                            className="lib-btn lib-btn-primary"
+                            style={{ padding: '9px 18px', fontSize: 13 }}
+                            onClick={() => window.open(FILEFINITY_URL, '_blank', 'noopener,noreferrer')}
+                        >
+                            <Globe size={15} /> Open Filefinity ↗
+                        </button>
+                        <button
+                            className="lib-btn"
+                            style={{ padding: '9px 18px', fontSize: 13 }}
+                            onClick={() => setView('custom')}
+                        >
+                            <FolderOpen size={15} /> Go to Custom Library
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="lib-root">
             <header className="lib-header">
@@ -195,19 +242,15 @@ export default function Library() {
                     <div className="lib-card-meta">{items.length} saved</div>
                 </button>
 
-                <a className="lib-card"
-                    href={FILEFINITY_URL}
-                    target="_blank"
-                    rel="noopener noreferrer">
+                <button className="lib-card" onClick={() => setView('filefinity')}>
                     <div className="lib-card-icon"><Globe size={28} /></div>
                     <div className="lib-card-name">FILEFINITY</div>
                     <div className="lib-card-desc">
-                        Onefinity community files + templates. Opens in a new tab —
-                        download a file from the forum, then add it to your Custom
-                        Library to load it here.
+                        Onefinity community files + templates. Browse forum projects,
+                        download community files, and import them into your Custom Library to load here.
                     </div>
                     <div className="lib-card-meta">Onefinity community ↗</div>
-                </a>
+                </button>
 
                 {/* Documentation card — Tawfiq msg 7396: leave URL simple, wired in later. */}
                 <a className="lib-card"

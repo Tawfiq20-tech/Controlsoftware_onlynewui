@@ -17,7 +17,8 @@
     transition: background var(--transition-fast);
 }
 
-.camera-header:hover {
+.camera-header:hover,
+.camera-header.active {
     background: var(--bg-hover);
 }
 
@@ -61,27 +62,143 @@
 .camera-body {
     overflow: hidden;
     transition: max-height var(--transition-slow), opacity var(--transition-normal);
-    max-height: 600px;
+    max-height: 280px;
     opacity: 1;
 }
 
 .camera-body.collapsed {
-    max-height: 0;
+    max-height: 0 !important;
     opacity: 0;
+    pointer-events: none;
+}
+
+/* ── Popup Mode (Anchored at bottom, pops UPWARDS above tab) ── */
+.camera-panel.camera-popup-mode {
+    position: relative;
+    border-top: 1px solid var(--border-ui);
+    background: var(--bg-sidebar);
+    flex-shrink: 0;
+    z-index: 45;
+}
+
+.camera-panel.camera-popup-mode .camera-body {
+    position: absolute;
+    bottom: 100%; /* Sits directly above the bottom header tab */
+    left: 0;
+    right: 0;
+    width: 100%;
+    background: var(--bg-sidebar, #121721);
+    border: 1px solid var(--border-ui, #252d3d);
+    border-bottom: 1px solid var(--bg-sidebar, #121721);
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.65), 0 -2px 8px rgba(0, 0, 0, 0.4);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    max-height: 320px;
+    opacity: 1;
+    transform: translateY(0);
+    transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+                opacity 0.2s ease,
+                max-height 0.22s ease;
+}
+
+.camera-panel.camera-popup-mode .camera-body.collapsed {
+    max-height: 0 !important;
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+    pointer-events: none;
+    visibility: hidden;
+}
+
+.camera-popup-top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.35);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.camera-popup-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-main, #e2e8f0);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.camera-rec-mini-badge {
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 5px;
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    border-radius: 4px;
+    margin-left: 4px;
+}
+
+.camera-mini-live-tag {
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 4px;
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+    border-radius: 3px;
+    margin-left: 2px;
+}
+
+.camera-popup-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.camera-popup-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-dim, #94a3b8);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.12s ease;
+}
+
+.camera-popup-icon-btn:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.camera-popup-icon-btn.close:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
 }
 
 .camera-viewport {
     position: relative;
-    background: var(--bg-elevated);
-    aspect-ratio: 16 / 10;
+    background: #000;
+    aspect-ratio: 16 / 9;
+    max-height: 220px;
     width: 100%;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .camera-video {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    max-height: 220px;
+    object-fit: contain;
     display: block;
 }
 

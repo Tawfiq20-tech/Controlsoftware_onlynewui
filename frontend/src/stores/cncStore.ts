@@ -47,6 +47,23 @@ interface CNCStore {
     fileLoadedBackend: boolean;
     setFileLoadedBackend: (loaded: boolean) => void;
 
+    // Set when the backend refused the file because it cannot run correctly on
+    // this machine (wire compiler errors, with line numbers). Cleared when a new
+    // file is chosen or the backend confirms a load. Start stays disabled meanwhile.
+    fileLoadError: FileLoadError | null;
+    setFileLoadError: (err: FileLoadError | null) => void;
+
+    // Set while the running program is waiting at an M0/M1 pause (e.g. "Click
+    // Continue when the spindle is up to speed"). The machine is holding; the
+    // operator continues with Resume.
+    programPause: ProgramPause | null;
+    setProgramPause: (p: ProgramPause | null) => void;
+
+    // Where a stopped/alarmed job can continue. Shown on the Start button so
+    // pressing ▶ never silently resumes from somewhere the operator forgot.
+    resumePoint: ResumePointInfo | null;
+    setResumePoint: (p: ResumePointInfo | null) => void;
+
     // Whether the backend has a live controller instance for the current serial
     // connection. False the instant 'serialport:open' fires (port is open but
     // firmware detection hasn't finished), true once 'controller:type' arrives
@@ -270,6 +287,31 @@ export interface ZRunawayEvent {
     threshold: number;
     mposZ: number;
 }
+export interface FileLoadError {
+    name: string;
+    errorCount: number;
+    errors: Array<{ line: number | null; msg: string }>;
+    /** The file was not even checked: a job is running. */
+    busy?: boolean;
+}
+export interface ResumePointInfo {
+    line: number;
+    total: number;
+    name: string;
+    reason: string;
+    at: number;
+    positionExact: boolean;
+    positionWarning: string;
+    originChanged?: boolean;
+}
+export interface ProgramPause {
+    line: number;
+    message: string;
+    optional: boolean;
+    /** 'dwell' = a G4 wait in the file (skippable); otherwise an M0/M1 pause. */
+    kind?: 'pause' | 'dwell';
+    seconds?: number;
+}
 export interface RemoteDiagStatus {
     enabled: boolean;
     connected: boolean;
@@ -301,7 +343,7 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // (see gcodeFileStorage doc comment for the incident this fixes).
     rawGcodeContent: restoredGcodeFile?.content ?? null,
     setRawGcodeContent: (rawGcodeContent) => {
-        set({ rawGcodeContent, fileLoadedBackend: false, jobActive: false, safetyValidation: null });
+        set({ rawGcodeContent, fileLoadedBackend: false, fileLoadError: null, jobActive: false, safetyValidation: null });
         const fi = get().fileInfo;
         gcodeFileStorage.save(
             rawGcodeContent && fi ? { name: fi.name, size: fi.size, lines: fi.lines, content: rawGcodeContent } : null
@@ -311,6 +353,15 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // Backend feeder file-loaded flag
     fileLoadedBackend: false,
     setFileLoadedBackend: (fileLoadedBackend) => set({ fileLoadedBackend }),
+
+    fileLoadError: null,
+    setFileLoadError: (fileLoadError) => set({ fileLoadError }),
+
+    programPause: null,
+    setProgramPause: (programPause) => set({ programPause }),
+
+    resumePoint: null,
+    setResumePoint: (resumePoint) => set({ resumePoint }),
 
     // Backend controller-instance-ready flag
     controllerReady: false,

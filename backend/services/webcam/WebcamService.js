@@ -33,15 +33,29 @@ class Camera extends EventEmitter {
         this.proc = null;               // ffmpeg child, if used
         this.upstream = null;           // http.IncomingMessage if proxying
         this.online = false;
+        this._stopped = false;
+        this._reconnectTimer = null;
     }
 
     start() {
+        this._stopped = false;
         if (this.cfg.type === 'mjpeg-url') return this._startProxy();
         if (this.cfg.type === 'rtsp' || this.cfg.type === 'v4l2') return this._startFfmpeg();
+        if (this.cfg.type === 'usb') {
+            this.online = true;
+            this.lastError = null;
+            this.emit('status', { online: true });
+            return;
+        }
         throw new Error(`Unknown camera type: ${this.cfg.type}`);
     }
 
     stop() {
+        this._stopped = true;
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
         try { if (this.proc) this.proc.kill('SIGTERM'); } catch (_) {}
         try { if (this.upstream) this.upstream.destroy(); } catch (_) {}
         for (const res of this.subscribers) { try { res.end(); } catch (_) {} }
@@ -49,6 +63,12 @@ class Camera extends EventEmitter {
         this.online = false;
         this.proc = null;
         this.upstream = null;
+    }
+
+    setFrame(buf) {
+        this.online = true;
+        this.lastError = null;
+        this._broadcast(buf);
     }
 
     subscribe(res) {
@@ -85,31 +105,57 @@ class Camera extends EventEmitter {
         }
     }
 
-    _startProxy() {
-        const u = new URL(this.cfg.url);
-        const lib = u.protocol === 'https:' ? https : http;
-        const req = lib.get(this.cfg.url, (incoming) => {
-            this.upstream = incoming;
-            this.online = true;
-            this.lastError = null;
-            this.emit('status', { online: true });
-
-            // Parse MJPEG: boundary-delimited JPEG frames.
-            const ct = incoming.headers['content-type'] || '';
-            const m = ct.match(/boundary=(?:"?)([^";]+)/i);
-            const boundary = m ? Buffer.from('--' + m[1]) : null;
-            if (!boundary) {
-                // Some cameras just stream raw JPEG concatenated; fall back to SOI/EOI scan.
-                this._scanJpegStream(incoming);
-                return;
+    _scheduleReconnect() {
+        if (this._stopped || this._reconnectTimer) return;
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            if (!this._stopped && this.cfg.type === 'mjpeg-url') {
+                this._startProxy();
             }
-            this._scanMjpegStream(incoming, boundary);
-        });
-        req.on('error', (err) => {
+        }, 4000);
+    }
+
+    _startProxy() {
+        if (this._stopped) return;
+        try {
+            const u = new URL(this.cfg.url);
+            const lib = u.protocol === 'https:' ? https : http;
+            const req = lib.get(this.cfg.url, (incoming) => {
+                if (incoming.statusCode && incoming.statusCode >= 400) {
+                    this.online = false;
+                    this.lastError = `HTTP ${incoming.statusCode}`;
+                    this.emit('status', { online: false, error: this.lastError });
+                    this._scheduleReconnect();
+                    return;
+                }
+                this.upstream = incoming;
+                this.online = true;
+                this.lastError = null;
+                this.emit('status', { online: true });
+
+                // Parse MJPEG: boundary-delimited JPEG frames.
+                const ct = incoming.headers['content-type'] || '';
+                const m = ct.match(/boundary=(?:"?)([^";]+)/i);
+                const boundary = m ? Buffer.from('--' + m[1]) : null;
+                if (!boundary) {
+                    // Some cameras just stream raw JPEG concatenated; fall back to SOI/EOI scan.
+                    this._scanJpegStream(incoming);
+                    return;
+                }
+                this._scanMjpegStream(incoming, boundary);
+            });
+            req.on('error', (err) => {
+                this.online = false;
+                this.lastError = err.message;
+                this.emit('status', { online: false, error: err.message });
+                this._scheduleReconnect();
+            });
+        } catch (err) {
             this.online = false;
             this.lastError = err.message;
             this.emit('status', { online: false, error: err.message });
-        });
+            this._scheduleReconnect();
+        }
     }
 
     _scanMjpegStream(stream, boundary) {
@@ -198,10 +244,20 @@ class WebcamService extends EventEmitter {
         this.cameras = new Map();   // id → Camera
     }
 
-    init() {
+    async init() {
         const list = this._readList();
         for (const cfg of list) this._add(cfg);
         this._broadcastList();
+
+        // If no cameras configured, attempt background auto-detect once on startup
+        if (list.length === 0) {
+            try {
+                const res = await this.autoDetectAndAdd();
+                if (res.ok && res.created) {
+                    this.logger.info(`[webcam] Auto-detected and connected camera: ${res.camera.name}`);
+                }
+            } catch (_) {}
+        }
     }
 
     _readList() {
@@ -224,6 +280,79 @@ class WebcamService extends EventEmitter {
         }));
     }
 
+    async detectLocalDevices() {
+        const isWin = process.platform === 'win32';
+        if (isWin) {
+            try {
+                const { exec } = require('child_process');
+                const cmd = `powershell -NoProfile -Command "Get-PnpDevice -Class Camera -Status OK | Select-Object FriendlyName, InstanceId | ConvertTo-Json -Compress"`;
+                const stdout = await new Promise((resolve) => {
+                    exec(cmd, { timeout: 4000 }, (err, out) => {
+                        if (err) return resolve('');
+                        resolve(out || '');
+                    });
+                });
+                const trimmed = stdout.trim();
+                if (!trimmed) return [];
+                const parsed = JSON.parse(trimmed);
+                const items = Array.isArray(parsed) ? parsed : [parsed];
+                return items
+                    .filter(i => i && i.FriendlyName)
+                    .map((item, idx) => ({
+                        id: `detected_usb_${idx}`,
+                        name: item.FriendlyName,
+                        type: 'usb',
+                        device: item.FriendlyName,
+                        instanceId: item.InstanceId,
+                    }));
+            } catch (err) {
+                this.logger.error(`[webcam] detectLocalDevices failed: ${err.message}`);
+                return [];
+            }
+        } else {
+            // Linux /dev/video* scan
+            try {
+                const fs = require('fs');
+                if (fs.existsSync('/dev')) {
+                    const vids = fs.readdirSync('/dev').filter(f => f.startsWith('video'));
+                    return vids.map((v, idx) => ({
+                        id: `detected_v4l2_${idx}`,
+                        name: `USB Camera (/dev/${v})`,
+                        type: 'v4l2',
+                        device: `/dev/${v}`,
+                    }));
+                }
+            } catch (_) {}
+            return [];
+        }
+    }
+
+    async autoDetectAndAdd() {
+        const devices = await this.detectLocalDevices();
+        if (devices.length === 0) {
+            return { ok: false, error: 'No camera hardware detected' };
+        }
+        // Check if already added
+        const currentList = this.list();
+        const first = devices[0];
+        const already = currentList.find(c => c.device === first.device || c.name === first.name);
+        if (already) {
+            return { ok: true, camera: already, created: false };
+        }
+
+        const newCam = {
+            id: 'cam_' + Date.now().toString(36),
+            name: first.name,
+            type: first.type,
+            device: first.device,
+            resolution: '1280x720',
+            fps: 30,
+            quality: 5,
+        };
+        this.upsert(newCam);
+        return { ok: true, camera: newCam, created: true };
+    }
+
     upsert(cfg) {
         if (!cfg.id) cfg.id = 'cam_' + Date.now().toString(36);
         const existing = this.cameras.get(cfg.id);
@@ -240,6 +369,15 @@ class WebcamService extends EventEmitter {
         this.cameras.delete(id);
         this._writeList();
         this._broadcastList();
+    }
+
+    setFrame(id, buffer) {
+        const cam = this.cameras.get(id);
+        if (cam) {
+            cam.setFrame(buffer);
+            return true;
+        }
+        return false;
     }
 
     subscribe(id, res) {

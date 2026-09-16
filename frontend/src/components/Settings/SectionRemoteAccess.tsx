@@ -1,21 +1,21 @@
 /**
- * SectionRemoteAccess — Dual-mode Remote Access (Global Internet Tunnel + Local LAN)
+ * SectionRemoteAccess — Unified Single Remote Connection (Local LAN & Global Internet Tunnel)
  * with Industrial Multi-Layer Security.
+ *
+ * Provides ONE single QR code and connection link for the user that works
+ * whether on the local workshop Wi-Fi or across the global internet.
  */
 import { useEffect, useState } from 'react';
 import {
-    Wifi, RefreshCw, Lock, Unlock, QrCode, Globe, Power, Copy, Check, Users, ShieldAlert
+    Wifi, RefreshCw, Lock, Unlock, Globe, Power, Copy, Check, Users, ShieldAlert, Smartphone
 } from 'lucide-react';
 import { remote, RemoteInfo, TunnelStatus } from './api';
 
-type AccessMode = 'global' | 'local';
-
 export default function SectionRemoteAccess() {
-    const [mode, setMode] = useState<AccessMode>('global');
     const [info, setInfo] = useState<RemoteInfo | null>(null);
     const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
-    const [selectedIp, setSelectedIp] = useState<string | null>(null);
     const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+    const [activeUrl, setActiveUrl] = useState<string>('');
     const [pinDraft, setPinDraft] = useState('');
     const [busy, setBusy] = useState(false);
     const [tunnelBusy, setTunnelBusy] = useState(false);
@@ -32,11 +32,11 @@ export default function SectionRemoteAccess() {
         return () => clearInterval(timer);
     }, []);
 
-    // Update QR code whenever mode, selectedIp, or tunnel URL changes
+    // Update QR code whenever unified URL or tunnel changes
     useEffect(() => {
         updateQrCode();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mode, selectedIp, tunnel?.url]);
+    }, [tunnel?.url, info?.unifiedUrl, info?.lanUrl]);
 
     async function refresh() {
         setBusy(true);
@@ -49,8 +49,6 @@ export default function SectionRemoteAccess() {
             setInfo(i);
             if (t) setTunnel(t);
             else if (i.tunnel) setTunnel(i.tunnel);
-            const ip = i.ips[0] ?? null;
-            if (!selectedIp) setSelectedIp(ip);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -65,29 +63,16 @@ export default function SectionRemoteAccess() {
         } catch (_) {}
     }
 
-    async function updateQrCode() {
-        if (mode === 'global') {
-            if (tunnel?.url) {
-                try {
-                    const res = await remote.qr(tunnel.url, true);
-                    setQrDataUrl(res.dataUrl);
-                } catch (_) {
-                    setQrDataUrl(null);
-                }
-            } else {
-                setQrDataUrl(null);
-            }
-        } else {
-            if (selectedIp) {
-                try {
-                    const res = await remote.qr(selectedIp, false);
-                    setQrDataUrl(res.dataUrl);
-                } catch (_) {
-                    setQrDataUrl(null);
-                }
-            } else {
-                setQrDataUrl(null);
-            }
+    async function updateQrCode(overrideUrl?: string) {
+        try {
+            const urlToUse = overrideUrl !== undefined 
+                ? overrideUrl 
+                : (tunnel?.status === 'running' && tunnel?.url ? tunnel.url : info?.unifiedUrl);
+            const res = await remote.qr(urlToUse, !!urlToUse);
+            setQrDataUrl(res.dataUrl);
+            setActiveUrl(res.url);
+        } catch (_) {
+            setQrDataUrl(null);
         }
     }
 
@@ -102,7 +87,8 @@ export default function SectionRemoteAccess() {
         try {
             const res = await remote.startTunnel();
             setNotice(`Global access online: ${res.url}`);
-            await refreshTunnelStatus();
+            await refresh();
+            await updateQrCode(res.url);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -116,8 +102,9 @@ export default function SectionRemoteAccess() {
         setNotice(null);
         try {
             await remote.stopTunnel();
-            setNotice('Global internet tunnel stopped.');
-            await refreshTunnelStatus();
+            setNotice('Switched to local workshop Wi-Fi only.');
+            await refresh();
+            await updateQrCode(info?.lanUrl);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -190,16 +177,17 @@ export default function SectionRemoteAccess() {
     }
 
     const isTunnelRunning = tunnel?.status === 'running' && !!tunnel?.url;
+    const targetUrl = (isTunnelRunning ? tunnel?.url : activeUrl) || info?.unifiedUrl || '';
 
     return (
         <div className="settings-section">
             <header className="settings-section-header">
                 <div>
                     <div className="settings-section-title">
-                        <Globe size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Remote Access
+                        <Smartphone size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Single Remote Connection
                     </div>
                     <div className="settings-section-sub">
-                        Monitor and control the CNC machine from phones, tablets, or remote computers.
+                        Connect and control your CNC from any phone, tablet, or laptop using a single QR code for both local Wi-Fi and worldwide internet access.
                     </div>
                 </div>
                 <div className="settings-section-actions">
@@ -212,176 +200,126 @@ export default function SectionRemoteAccess() {
             {error && <div className="settings-error">{error}</div>}
             {notice && <div className="wa-block-sub" style={{ color: '#4ade80', fontWeight: 500 }}>{notice}</div>}
 
-            {/* Mode Switcher */}
-            <div style={{ display: 'flex', gap: 10, margin: '4px 0 12px' }}>
-                <button
-                    className={`settings-btn ${mode === 'global' ? 'primary' : ''}`}
-                    onClick={() => setMode('global')}
-                    style={{ padding: '8px 16px', fontSize: 13, height: 36 }}
-                >
-                    <Globe size={15} /> Global Internet (Anywhere)
-                </button>
-                <button
-                    className={`settings-btn ${mode === 'local' ? 'primary' : ''}`}
-                    onClick={() => setMode('local')}
-                    style={{ padding: '8px 16px', fontSize: 13, height: 36 }}
-                >
-                    <Wifi size={15} /> Local Network (Wi-Fi)
-                </button>
-            </div>
+            {/* ─── SINGLE UNIFIED CONNECTION CARD ─── */}
+            <div className="wa-block">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                        <div className="wa-block-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            {isTunnelRunning ? <Globe size={16} color="#38bdf8" /> : <Wifi size={16} color="#4ade80" />}
+                            <span>Single Connection Point ({isTunnelRunning ? 'Worldwide Global + Local' : 'Local Wi-Fi'})</span>
+                        </div>
+                        <div className="wa-block-sub">
+                            {isTunnelRunning
+                                ? 'Encrypted HTTPS tunnel active: Connect from anywhere in the world on 5G/cellular or inside your local shop.'
+                                : 'Direct local Wi-Fi connection active: Connect from any phone or tablet on the same workshop Wi-Fi network.'}
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span className={`settings-pill ${isTunnelRunning ? 'ok' : 'warn'}`}>
+                            {isTunnelRunning ? 'Global & Local Live' : 'Local Wi-Fi Active'}
+                        </span>
+                    </div>
+                </div>
 
-            {/* ─── GLOBAL INTERNET MODE ─── */}
-            {mode === 'global' && (
-                <div className="wa-block">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                            <div className="wa-block-title">Worldwide Access (Encrypted HTTPS)</div>
-                            <div className="wa-block-sub">
-                                Access from any mobile phone or browser over cellular (5G/4G) or external networks — no router port forwarding needed.
+                {/* Single QR Code & Direct Link */}
+                <div style={{ marginTop: 16 }}>
+                    <div className="wa-qr-block">
+                        <div style={{ flex: 1 }}>
+                            <div className="wa-qr-title" style={{ wordBreak: 'break-all' }}>
+                                {isTunnelRunning ? <Globe size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} /> : <Wifi size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />}
+                                {targetUrl || 'Detecting connection URL...'}
                             </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span className={`settings-pill ${isTunnelRunning ? 'ok' : tunnel?.status === 'starting' ? 'warn' : 'fail'}`}>
-                                {isTunnelRunning ? 'Live & Secure' : tunnel?.status === 'starting' ? 'Starting...' : 'Stopped'}
-                            </span>
-                        </div>
-                    </div>
+                            <div className="wa-qr-note">
+                                <strong>Scan with any phone camera</strong> to open the control interface instantly.
+                            </div>
 
-                    <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {!isTunnelRunning ? (
-                            <button
-                                className="settings-btn primary"
-                                onClick={startGlobalTunnel}
-                                disabled={tunnelBusy || busy}
-                                style={{ height: 34, padding: '0 16px' }}
-                            >
-                                <Power size={14} /> Enable Global Access
-                            </button>
-                        ) : (
-                            <>
-                                <button
-                                    className="settings-btn"
-                                    onClick={stopGlobalTunnel}
-                                    disabled={tunnelBusy || busy}
-                                    style={{ height: 34 }}
-                                >
-                                    <Power size={14} /> Stop Global Access
+                            <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <button className="settings-btn" onClick={() => copyToClipboard(targetUrl)} disabled={!targetUrl}>
+                                    {copiedUrl ? <Check size={14} color="#4ade80" /> : <Copy size={14} />}
+                                    {copiedUrl ? 'Copied URL!' : 'Copy Connection Link'}
                                 </button>
-                                <button
-                                    className="settings-btn danger"
-                                    onClick={revokeAllSessions}
-                                    disabled={busy}
-                                    title="Immediately disconnects all external phones and browsers"
-                                    style={{ height: 34 }}
-                                >
-                                    <Users size={14} /> Revoke All Sessions ({tunnel?.activeSessions || 0})
-                                </button>
-                            </>
-                        )}
-                    </div>
+                                {isTunnelRunning && (
+                                    <button
+                                        className="settings-btn danger"
+                                        onClick={revokeAllSessions}
+                                        disabled={busy}
+                                        title="Immediately disconnects all external phones and browsers"
+                                    >
+                                        <Users size={14} /> Revoke Sessions ({tunnel?.activeSessions || 0})
+                                    </button>
+                                )}
+                            </div>
 
-                    {!info?.pinSet && !isTunnelRunning && (
-                        <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: 6, fontSize: 12, color: '#fde047' }}>
-                            <ShieldAlert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                            A security PIN must be set below before opening worldwide access.
-                        </div>
-                    )}
-
-                    {isTunnelRunning && tunnel?.url && (
-                        <div style={{ marginTop: 16 }}>
-                            <div className="wa-qr-block">
-                                <div style={{ flex: 1 }}>
-                                    <div className="wa-qr-title">
-                                        <Globe size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                                        {tunnel.url}
-                                    </div>
-                                    <div className="wa-qr-note">
-                                        Scan with any mobile phone camera, or open this link from anywhere in the world.
-                                    </div>
-
-                                    <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-                                        <button className="settings-btn" onClick={() => copyToClipboard(tunnel.url!)}>
-                                            {copiedUrl ? <Check size={14} color="#4ade80" /> : <Copy size={14} />}
-                                            {copiedUrl ? 'Copied URL!' : 'Copy Link'}
+                            {/* Global Tunnel Controls */}
+                            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                    {!isTunnelRunning ? (
+                                        <button
+                                            className="settings-btn primary"
+                                            onClick={startGlobalTunnel}
+                                            disabled={tunnelBusy || busy}
+                                            style={{ height: 34, padding: '0 16px' }}
+                                        >
+                                            <Power size={14} /> Enable Worldwide Internet Access
                                         </button>
-                                    </div>
-
-                                    {tunnel.tunnelPassword && (
-                                        <div style={{ marginTop: 16, padding: '10px 12px', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8 }}>
-                                            <div style={{ fontSize: 12, fontWeight: 600, color: '#93c5fd' }}>
-                                                Endpoint IP / Password:
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                                                <code style={{ fontSize: 13, background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, color: '#fff' }}>
-                                                    {tunnel.tunnelPassword}
-                                                </code>
-                                                <button className="settings-btn" onClick={() => copyToClipboard(tunnel.tunnelPassword!, true)} style={{ height: 26, fontSize: 11 }}>
-                                                    {copiedPw ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
-                                                    {copiedPw ? 'Copied' : 'Copy'}
-                                                </button>
-                                            </div>
-                                            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                                                If your phone browser displays a "Friendly Reminder" submit screen on first connection, enter this IP.
-                                            </div>
+                                    ) : (
+                                        <button
+                                            className="settings-btn"
+                                            onClick={stopGlobalTunnel}
+                                            disabled={tunnelBusy || busy}
+                                            style={{ height: 34 }}
+                                        >
+                                            <Power size={14} /> Switch to Local Wi-Fi Only
+                                        </button>
+                                    )}
+                                    {!isTunnelRunning && (
+                                        <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', width: '100%' }}>
+                                            ℹ️ <em>Direct Wi-Fi connects when phone & PC share private shop Wi-Fi. For 5G/cellular data or university/campus Wi-Fi, click <strong>Enable Worldwide Internet Access</strong> above.</em>
                                         </div>
                                     )}
                                 </div>
-                                {qrDataUrl && <img src={qrDataUrl} alt="Global Remote QR" className="wa-qr-img" />}
                             </div>
-                        </div>
-                    )}
-                </div>
-            )}
 
-            {/* ─── LOCAL NETWORK (WI-FI) MODE ─── */}
-            {mode === 'local' && (
-                <div className="wa-block">
-                    <div className="wa-block-title">Local Wi-Fi Network Access</div>
-                    <div className="wa-block-sub">
-                        Direct connection within your local workshop router (offline-capable).
-                    </div>
-
-                    {!info || info.ips.length === 0 ? (
-                        <div className="wa-empty">No LAN address detected yet. Make sure this PC is connected to Wi-Fi or Ethernet.</div>
-                    ) : (
-                        <>
-                            {info.ips.length > 1 && (
-                                <div className="wa-cfg-row" style={{ marginTop: 12 }}>
-                                    <label className="wa-label">
-                                        Network interface
-                                        <select
-                                            className="wa-input"
-                                            value={selectedIp ?? ''}
-                                            onChange={(e) => setSelectedIp(e.target.value)}
-                                        >
-                                            {info.ips.map((ip) => <option key={ip} value={ip}>{ip}</option>)}
-                                        </select>
-                                    </label>
+                            {!info?.pinSet && !isTunnelRunning && (
+                                <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: 6, fontSize: 12, color: '#fde047' }}>
+                                    <ShieldAlert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+                                    A security PIN must be set below before opening worldwide access.
                                 </div>
                             )}
 
-                            {selectedIp && (
-                                <div className="wa-qr-block" style={{ marginTop: 14 }}>
-                                    <div>
-                                        <div className="wa-qr-title">
-                                            <QrCode size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                                            http://{selectedIp}:{info.port}
-                                        </div>
-                                        <div className="wa-qr-note">
-                                            Scan with a phone on the same Wi-Fi network.
-                                        </div>
-                                        <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 6, fontSize: 11, color: '#94a3b8' }}>
-                                            💡 <strong>Connection blocked by Windows?</strong><br />
-                                            Run <code>scripts\enable-local-access.bat</code> on this computer to allow incoming port 4000 in Windows Firewall.
-                                        </div>
+                            {isTunnelRunning && tunnel?.tunnelPassword && (
+                                <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: '#93c5fd' }}>
+                                        Endpoint IP / Password:
                                     </div>
-                                    {qrDataUrl && <img src={qrDataUrl} alt="Local access QR" className="wa-qr-img" />}
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                                        <code style={{ fontSize: 13, background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, color: '#fff' }}>
+                                            {tunnel.tunnelPassword}
+                                        </code>
+                                        <button className="settings-btn" onClick={() => copyToClipboard(tunnel.tunnelPassword!, true)} style={{ height: 26, fontSize: 11 }}>
+                                            {copiedPw ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
+                                            {copiedPw ? 'Copied' : 'Copy'}
+                                        </button>
+                                    </div>
+                                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                                        If your phone browser displays a "Friendly Reminder" submit screen on first connection, enter this IP.
+                                    </div>
                                 </div>
                             )}
-                        </>
-                    )}
+                        </div>
+
+                        {/* Single QR Image Display */}
+                        {qrDataUrl && (
+                            <div style={{ textAlign: 'center' }}>
+                                <img src={qrDataUrl} alt="Unified Remote Connection QR" className="wa-qr-img" />
+                                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+                                    Single QR for Phone / Tablet
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
-            )}
+            </div>
 
             {/* ─── PIN & SECURITY CONFIGURATION ─── */}
             <div className="wa-block">

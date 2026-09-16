@@ -165,6 +165,15 @@ function parseEvFault(payload) {
     };
 }
 
+// axis u8 count u16 max_ms u16 (fw 0.1.1-almfilter+)
+function parseEvAlmGlitch(payload) {
+    return {
+        axis: payload.readUInt8(0),
+        count: payload.readUInt16LE(1),
+        maxMs: payload.readUInt16LE(3),
+    };
+}
+
 // result u8 (0=contact,1=no_contact) axis u8 dist_mm f32 x f32 y f32 z f32 --
 // 18 bytes, on RSP_ST_OK only (ESTOP/FAULT aborts come back as a normal
 // error status instead, see rsp_handle_probe() in easycnc_protocol.c).
@@ -184,6 +193,6 @@ module.exports = {
     buildJog, buildHome, buildZero, buildJobStart, buildJobLine, buildJobEnd,
     buildJobAbort, buildFeedOverride, buildMove, parseMove, buildProbe,
     parseJog, parseHomeZero, parseJobStart, parseJobLine, parseJobEnd,
-    parseFeedOverride, parseEvExecuted, parseEvJobDone, parseEvFault,
+    parseFeedOverride, parseEvExecuted, parseEvJobDone, parseEvFault, parseEvAlmGlitch,
     parseProbeResult,
 };

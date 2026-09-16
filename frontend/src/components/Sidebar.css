@@ -2090,3 +2090,37 @@
     color: var(--primary-accent, #f59e0b);
     border-bottom-color: var(--primary-accent, #f59e0b);
 }
+
+/* ─── VERTICAL DESKTOP & PORTRAIT OPTIMIZATIONS ─── */
+@media (max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px) {
+    .sidebar-scroll {
+        padding: 8px 12px;
+    }
+    .jog-controls-row {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 28px;
+    }
+    .jog-z-column {
+        margin-top: 0;
+    }
+    .step-row {
+        justify-content: center;
+    }
+    .dro-table {
+        max-width: 540px;
+        margin: 0 auto;
+    }
+    .pos-action-row {
+        max-width: 540px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .probe-type-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 8px;
+    }
+}
+

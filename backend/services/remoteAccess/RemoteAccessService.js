@@ -34,6 +34,26 @@ function isLoopbackAddress(addr) {
     return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
 }
 
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+
+/**
+ * Is this request really from the PC at the machine?
+ *
+ * The socket address alone is NOT proof: the tunnel client runs on this same
+ * PC and pipes every internet request into 127.0.0.1, so a loopback-only check
+ * treated the whole public URL as the trusted local operator and skipped the
+ * PIN entirely (plan item SEC-1). A request that came through a tunnel or a
+ * proxy carries the tunnel's own Host / forwarding headers -- those make it
+ * remote no matter which address it arrives from.
+ */
+function isLocalRequest(addr, headers = {}) {
+    if (!isLoopbackAddress(addr)) return false;
+    if (headers['x-forwarded-for'] || headers['x-forwarded-host'] || headers['x-forwarded-proto'] || headers.forwarded) return false;
+    const host = String(headers.host || '').toLowerCase().replace(/:\d+$/, '');
+    if (!host) return false;
+    return LOCAL_HOSTS.has(host);
+}
+
 class RemoteAccessService {
     constructor({ configStore, port }) {
         this.config = configStore;
@@ -64,11 +84,21 @@ class RemoteAccessService {
 
     getInfo() {
         this.cleanupExpiredTokens();
+        const lanIps = this.getLanIps();
+        const primaryLanIp = lanIps[0] || 'localhost';
+        const lanUrl = `http://${primaryLanIp}:${this.port}`;
+        const isTunnelRunning = this.tunnelStatus === 'running' && !!this.tunnelUrl;
+        const unifiedUrl = isTunnelRunning ? this.tunnelUrl : lanUrl;
+        const connectionMode = isTunnelRunning ? 'global' : 'local';
+
         return {
-            ips: this.getLanIps(),
+            ips: lanIps,
             port: this.port,
             pinSet: this.hasPin(),
             tunnel: this.getTunnelStatus(),
+            unifiedUrl,
+            connectionMode,
+            lanUrl,
         };
     }
 
@@ -218,6 +248,32 @@ class RemoteAccessService {
 
     // ─── Global Tunnel Management ────────────────────────────────────
 
+    async fetchPublicIp() {
+        const urls = [
+            'https://api.ipify.org',
+            'https://icanhazip.com',
+            'https://ifconfig.me/ip',
+        ];
+        const https = require('https');
+        for (const u of urls) {
+            try {
+                const ip = await new Promise((resolve, reject) => {
+                    const req = https.get(u, { timeout: 3000 }, (res) => {
+                        let d = '';
+                        res.on('data', c => d += c);
+                        res.on('end', () => resolve(d.trim()));
+                    });
+                    req.on('error', reject);
+                    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+                });
+                if (ip && /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+                    return ip;
+                }
+            } catch (_) {}
+        }
+        return null;
+    }
+
     async startTunnel() {
         if (!this.hasPin()) {
             throw new Error('A security PIN must be set before enabling Global Remote Access.');
@@ -233,24 +289,26 @@ class RemoteAccessService {
         this.tunnelError = null;
 
         try {
+            // Resolve public IP in parallel with tunnel creation
+            const ipPromise = this.fetchPublicIp().catch(() => null);
+
             const tunnel = await localtunnel({ port: this.port });
             this.tunnelInstance = tunnel;
             this.tunnelUrl = tunnel.url;
             this.tunnelStatus = 'running';
 
-            // Query public IP for localtunnel prompt reminder
-            try {
-                const https = require('https');
-                https.get('https://loca.lt/mytunnelpassword', (res) => {
-                    let d = '';
-                    res.on('data', (c) => d += c);
-                    res.on('end', () => {
-                        if (d.trim()) this.tunnelPassword = d.trim();
-                    });
-                }).on('error', () => {});
-            } catch (_) {}
+            const ip = await ipPromise;
+            if (ip) this.tunnelPassword = ip;
 
             tunnel.on('close', () => {
+                if (this.tunnelStatus === 'running') {
+                    // Auto-reconnect after 3 seconds if not intentionally stopped
+                    setTimeout(() => {
+                        if (this.tunnelStatus !== 'stopped') {
+                            this.startTunnel().catch(() => {});
+                        }
+                    }, 3000);
+                }
                 this.tunnelStatus = 'stopped';
                 this.tunnelUrl = null;
                 this.tunnelInstance = null;
@@ -270,13 +328,13 @@ class RemoteAccessService {
     }
 
     async stopTunnel() {
+        this.tunnelStatus = 'stopped';
         if (this.tunnelInstance) {
             try {
                 this.tunnelInstance.close();
             } catch (_) {}
         }
         this.tunnelInstance = null;
-        this.tunnelStatus = 'stopped';
         this.tunnelUrl = null;
         this.tunnelError = null;
         return { ok: true };
@@ -296,8 +354,54 @@ class RemoteAccessService {
 
     // ─── Gates ───────────────────────────────────────────────────────
 
+    /**
+     * Which web origins may talk to this server (plan SEC-1).
+     *
+     * It used to reflect every origin ("cors: {origin: true}"), so ANY page the
+     * operator happened to visit could open a socket to http://localhost:4000
+     * and drive the machine -- the request comes from the operator's own
+     * browser, so it arrives on loopback and passed every check we had. A
+     * browser sets Origin honestly and a page cannot forge it, so refusing
+     * unknown origins closes that door while leaving the real UI (served from
+     * this machine, over localhost, the LAN address or the tunnel) working.
+     *
+     * No Origin header at all means a non-browser client (curl, a native app);
+     * those are still subject to the PIN gate when they are not local.
+     */
+    isAllowedOrigin(origin) {
+        // No Origin header at all = not a browser (curl, a native app).
+        // Literal "null" IS a browser: a sandboxed iframe or a file:// page.
+        // A hostile page can sandbox an iframe to get exactly that, so it is
+        // refused rather than treated as "no origin".
+        if (!origin) return true;
+        if (origin === 'null') return false;
+        let host;
+        try {
+            host = new URL(origin).hostname.toLowerCase();
+        } catch (_) {
+            return false;
+        }
+        if (LOCAL_HOSTS.has(host)) return true;
+        if (this.getLanIps().includes(host)) return true;
+        if (this.tunnelUrl) {
+            try {
+                if (new URL(this.tunnelUrl).hostname.toLowerCase() === host) return true;
+            } catch (_) { /* malformed tunnel url */ }
+        }
+        return false;
+    }
+
+    /** cors() origin callback for both Express and Socket.IO. */
+    corsOrigin() {
+        return (origin, cb) => {
+            if (this.isAllowedOrigin(origin)) return cb(null, true);
+            cb(new Error(`origin not allowed: ${origin}`));
+        };
+    }
+
     isLoopback(req) {
-        return isLoopbackAddress(req.ip) || isLoopbackAddress(req.connection && req.connection.remoteAddress);
+        return isLocalRequest(req.ip, req.headers) ||
+            isLocalRequest(req.connection && req.connection.remoteAddress, req.headers);
     }
 
     httpGate() {
@@ -308,8 +412,13 @@ class RemoteAccessService {
 
             if (!req.path.startsWith('/api/')) return next();
             if (this.isLoopback(req)) return next();
-            if (!this.hasPin()) return next();
             if (allow.has(req.path)) return next();
+            // No PIN set: remote access is OFF, not open. This used to fall
+            // through to next() -- anyone on the LAN (or with the tunnel URL)
+            // could drive the machine until someone happened to set a PIN.
+            if (!this.hasPin()) {
+                return res.status(401).json({ error: 'Remote access is off. Set a remote PIN on the machine to allow it.', needsPin: true });
+            }
             const token = req.headers['x-remote-token'];
             if (this.verifyToken(token)) return next();
             return res.status(401).json({ error: 'Remote PIN required' });
@@ -318,10 +427,10 @@ class RemoteAccessService {
 
     socketGate() {
         return (socket, next) => {
-            const addr = socket.handshake.address || '';
-            if (isLoopbackAddress(addr) || addr.endsWith('127.0.0.1')) return next();
-            if (!this.hasPin()) return next();
-            const token = socket.handshake.auth && socket.handshake.auth.token;
+            const h = socket.handshake || {};
+            if (isLocalRequest(h.address, h.headers || {})) return next();
+            if (!this.hasPin()) return next(new Error('Remote access is off. Set a remote PIN on the machine to allow it.'));
+            const token = h.auth && h.auth.token;
             if (this.verifyToken(token)) return next();
             next(new Error('Remote PIN required'));
         };

@@ -1,0 +1,29 @@
+[Unit]
+Description=Onefinity Sender kiosk screen (cage + Chromium on tty1)
+After=systemd-user-sessions.service plymouth-quit-wait.service onefinity-backend.service
+Wants=onefinity-backend.service
+Conflicts=getty@tty1.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=cnc
+# A real logind session on tty1 gives cage the display, GPU and input devices.
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+EnvironmentFile=-/etc/onefinity-kiosk.conf
+ExecStart=/usr/local/bin/onefinity-kiosk
+# Closing the browser (Alt+F4, crash) brings the sender straight back.
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=graphical.target

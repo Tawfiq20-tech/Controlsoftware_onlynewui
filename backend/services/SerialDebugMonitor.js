@@ -179,6 +179,14 @@ class SerialDebugMonitor extends EventEmitter {
             const filepath = path.join(this.logDir, filename);
 
             this._fileStream = fs.createWriteStream(filepath, { flags: 'a' });
+            // Without this, a failed write (disk full, drive removed) throws an
+            // uncaught exception and would take the sender down mid-carve
+            // (plan BE-28a). Drop the file and keep running.
+            this._fileStream.on('error', (err) => {
+                // eslint-disable-next-line no-console
+                console.error(`[SerialDebugMonitor] debug log disabled: ${err && err.message ? err.message : err}`);
+                this._fileStream = null;
+            });
             this._fileSize = 0;
         } catch (err) {
             this._fileStream = null;

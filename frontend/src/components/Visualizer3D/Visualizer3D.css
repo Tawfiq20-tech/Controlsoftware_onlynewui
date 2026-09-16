@@ -2,6 +2,8 @@
     position: relative;
     width: 100%;
     height: 100%;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
     background: var(--scene-bg, #16191e);
     color: var(--text-main, #e2e8f0);
@@ -262,66 +264,161 @@
 }
 .v3d-color-by select:focus { outline: none; }
 
-/* ── Prepare-tab Simulate launcher (bottom bar, matches Carve position) ── */
-.v3d-simulate-launcher {
+/* ── Prepare-tab Simulate Card (mirrors exact reference UI) ── */
+.v3d-simulate-card {
     position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: 48px;
+    left: 24px;
+    right: 24px;
+    max-width: 640px;
+    bottom: 24px;
+    margin: 0 auto;
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 10px 14px;
-    background: rgba(20, 24, 36, 0.95);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    z-index: 6;
+    gap: 12px;
+    padding: 8px 14px;
+    background: rgba(248, 250, 252, 0.96);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(203, 213, 225, 0.9);
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.12), 0 1px 3px rgba(0, 0, 0, 0.05);
+    z-index: 10;
 }
-/* Flat, professional pill — no glow. Tawfiq msg 7262: glow read as "AI-generated". */
-.v3d-sim-cta {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    height: 40px;
-    padding: 0 22px;
-    background: var(--accent, #f59e0b);
-    color: var(--accent-text, #1a1410);
-    border: 1px solid var(--accent-strong, #d97706);
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    cursor: pointer;
-    box-shadow: none;
-    transition: background 120ms, filter 120ms;
-}
-.v3d-sim-cta:hover {
-    filter: brightness(1.06);
-}
-.v3d-sim-cta:active { filter: brightness(0.96); }
 
-/* Speed dropdown — used by Simulate launcher + playback bar. */
-.v3d-speed-dd {
-    display: inline-flex;
+.v3d-sim-play-btn {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #cbd5e1;
+    color: #475569;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 120ms ease;
+    flex-shrink: 0;
+}
+
+.v3d-sim-play-btn:hover {
+    background: #94a3b8;
+    color: #1e293b;
+}
+
+.v3d-sim-play-btn.playing {
+    background: #94a3b8;
+    color: #0f172a;
+}
+
+.v3d-sim-scrubber-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    padding: 0 4px;
+}
+
+.v3d-sim-stats-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-weight: 600;
+    color: #64748b;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.v3d-sim-stats-row b {
+    color: #1e293b;
+    font-weight: 700;
+    margin-left: 3px;
+}
+
+.v3d-sim-slider {
+    width: 100%;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #cbd5e1;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    margin: 2px 0;
+}
+
+.v3d-sim-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3b82f6;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    transition: transform 100ms;
+}
+
+.v3d-sim-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.v3d-sim-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3b82f6;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.v3d-sim-actions {
+    display: flex;
     align-items: center;
     gap: 6px;
-    color: var(--text-dim, #94a3b8);
+    flex-shrink: 0;
 }
-.v3d-speed-dd-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    color: var(--text-mute, #64748b);
-}
-.v3d-speed-dd-sel {
+
+.v3d-sim-icon-btn {
+    width: 32px;
     height: 32px;
-    padding: 0 26px 0 10px;
-    background: var(--bg-panel, rgba(255, 255, 255, 0.04));
-    color: var(--text-main, #e2e8f0);
-    border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 120ms ease;
+}
+
+.v3d-sim-icon-btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #1e293b;
+}
+
+.v3d-sim-stop-btn {
+    border-color: #fca5a5;
+    color: #ef4444;
+}
+
+.v3d-sim-stop-btn:hover {
+    background: #fef2f2;
+    border-color: #f87171;
+    color: #dc2626;
+}
+
+.v3d-sim-speed-select {
+    height: 32px;
+    padding: 0 24px 0 10px;
+    background: #f8fafc;
+    color: #334155;
+    border: 1px solid #e2e8f0;
     border-radius: 6px;
     font-size: 12px;
     font-weight: 600;
@@ -329,21 +426,20 @@
     cursor: pointer;
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 8px center;
-    background-size: 10px;
+    background-size: 9px;
 }
-.v3d-speed-dd-sel:hover { border-color: var(--border-strong, rgba(255,255,255,0.20)); }
-.v3d-speed-dd-sel:focus { outline: none; border-color: var(--accent, #f59e0b); }
 
-.v3d-sim-spacer { flex: 1; }
-.v3d-sim-meta {
-    font-size: 12px;
-    color: var(--text-dim, #cbd5e1);
-    font-variant-numeric: tabular-nums;
+.v3d-sim-speed-select:hover {
+    border-color: #cbd5e1;
 }
-.v3d-sim-meta b { color: var(--text-main, #f1f5f9); font-weight: 600; }
+
+.v3d-sim-speed-select:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
 
 /* ── Design info card (top-right HUD) — Tawfiq msg 7262 redesign ── */
 /* ── Design info card (top-right HUD) ── */
@@ -804,4 +900,50 @@
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+}
+
+/* ─── VERTICAL DESKTOP & PORTRAIT 3D VIEWPORT OPTIMIZATIONS ─── */
+@media (max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px) {
+    .v3d-info-card {
+        top: 8px;
+        right: 8px;
+        min-width: 160px;
+        padding: 6px 10px;
+        gap: 6px;
+    }
+    .v3d-info-name {
+        font-size: 11px;
+    }
+    .v3d-info-stats {
+        gap: 4px;
+    }
+    .v3d-info-stat {
+        padding: 4px 6px;
+    }
+    .v3d-info-val {
+        font-size: 11.5px;
+    }
+    .v3d-toolbar-top {
+        top: 8px;
+        left: 8px;
+        padding: 4px 6px;
+    }
+    .v3d-btn {
+        height: 24px;
+        min-width: 24px;
+        padding: 0 6px;
+        font-size: 9.5px;
+    }
+    .v3d-simulate-card {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        padding: 6px 10px;
+        max-width: calc(100% - 16px);
+        gap: 8px;
+    }
+    .v3d-sim-stats-row {
+        gap: 10px;
+        font-size: 10px;
+    }
 }

@@ -28,12 +28,15 @@ import controller from '../utils/controller';
 import './Sidebar.css';
 
 // ── Settings Tabs ─────────────────────────────
-// PROBE sub-tab removed per Tawfiq msg 7381 — probing is launched only
-// from the File-Management Probe button now (single entry point).
 const SETTINGS_TABS = ['Position', 'Jog', 'Controls', 'Macros', 'Console'] as const;
 type SettingsTab = typeof SETTINGS_TABS[number];
 
-export default function Sidebar() {
+interface SidebarProps {
+    activeHeaderTab?: string;
+    layout?: 'auto' | 'horizontal' | 'vertical';
+}
+
+export default function Sidebar({ activeHeaderTab: _activeHeaderTab = 'Prepare', layout: _layout = 'auto' }: SidebarProps) {
     const [settingsTab, setSettingsTab] = useState<SettingsTab>('Position');
     const [consoleExpanded, setConsoleExpanded] = useState(true);
     const [consoleCmd, setConsoleCmd] = useState('');
@@ -58,7 +61,6 @@ export default function Sidebar() {
         position, setPosition,
         jogDistance, setJogDistance,
         jogSpeed, setJogSpeed,
-        coordSystem, setCoordSystem,
         setGcode,
         setParsedToolpath,
         fileInfo, setFileInfo,
@@ -69,8 +71,12 @@ export default function Sidebar() {
         appPreferences, setAppPreferences,
     } = useCNCStore();
 
-    // Lock the Controls tab and File Management while the machine is actively running a job,
-    // so operators can't accidentally toggle hardware or swap files mid-carve.
+    // File management stays locked during a carve so the running program can't
+    // be swapped out. Jogging is locked because the job owns the machine (the
+    // backend refuses it anyway). The Controls tab stays OPEN: that is where
+    // the feed override lives, and changing the speed mid-carve is exactly
+    // what it is for (Tawfiq: "when the carve is started ... enable controls
+    // where there is feed override i can adjust the feed rate").
     const isCarving = machineState === 'running' || machineState === 'paused' || jobActive;
 
     // Jog debounce ref (150ms) to prevent double-firing on initial click/touch
@@ -86,6 +92,12 @@ export default function Sidebar() {
         { label: 'Fast', value: 9000 },
         { label: 'Ultra', value: 10000 },
     ];
+
+    // Don't strand the operator on the Jog tab when a carve starts: move to
+    // Controls, where the feed override is.
+    useEffect(() => {
+        if (isCarving && settingsTab === 'Jog') setSettingsTab('Controls');
+    }, [isCarving, settingsTab]);
 
     // Auto-scroll console
     useEffect(() => {
@@ -164,15 +176,15 @@ export default function Sidebar() {
     // For now, step-mode jog is used via handleJog.
 
     const handleToggleUnits = () => {
-        // LOW#13: every other command handler here checks `connected` first;
-        // this one didn't, so toggling units while disconnected sent G21/G20
-        // into the void and still flipped the UI label as if it took effect.
-        if (!connected) return;
+        // Display only. The sender compiles every job to absolute millimetres
+        // before it reaches the board, so the machine's own unit mode is not
+        // something this button should change -- it used to send G20/G21, which
+        // never arrived on this protocol anyway, and only relabelled the
+        // readout while the numbers stayed in millimetres.
         const currentUnit = appPreferences?.units?.toLowerCase() === 'inches' || appPreferences?.units?.toLowerCase() === 'in' ? 'inches' : 'mm';
         const nextUnits = currentUnit === 'inches' ? 'mm' : 'inches';
         setAppPreferences({ ...appPreferences, units: nextUnits });
-        sendBackendCommand(nextUnits === 'mm' ? 'G21' : 'G20');
-        addConsoleLog('info', `Units switched to ${nextUnits.toUpperCase()} (${nextUnits === 'mm' ? 'G21' : 'G20'})`);
+        addConsoleLog('info', `Position readout switched to ${nextUnits === 'mm' ? 'millimetres' : 'inches'} (display only -- the machine still works in mm)`);
     };
 
     const handleZero = (axis: 'x' | 'y' | 'z') => {
@@ -386,11 +398,9 @@ export default function Sidebar() {
         z: '#0284c7',
     };
 
-    return (
-        <aside className="sidebar">
-            <div className="sidebar-scroll">
-
-                {/* ──── File Management ──── */}
+    const renderSidebarContent = () => (
+        <>
+            {/* ──── File Management ──── */}
                 <div className="sidebar-section">
                     <div className="section-header">
                         <span className="section-label">File Management</span>
@@ -498,17 +508,17 @@ export default function Sidebar() {
 
                 {isCarving && (
                     <div className="sidebar-carve-lock" role="status">
-                        🔒 Carve in progress — Controls tab locked. Pause to change settings.
+                        🔒 Carve in progress — file and jog locked. Feed rate can be changed in Controls.
                     </div>
                 )}
 
                 {/* ──── Settings Tabs ──── */}
                 <div className="settings-tabs" role="tablist">
                     {SETTINGS_TABS.map(tab => {
-                        const locked = isCarving && tab === 'Controls';
+                        const locked = isCarving && tab === 'Jog';
                         const isAfterJog = tab === 'Controls';
                         return (
-                            <>
+                            <span key={tab} style={{ display: 'contents' }}>
                                 {/* Probe launcher sits between JOG and CONTROLS
                                     in the sub-tab bar (Tawfiq msg 7384). It's a
                                     button, not a tab — clicking opens the
@@ -525,7 +535,6 @@ export default function Sidebar() {
                                     </button>
                                 )}
                                 <button
-                                    key={tab}
                                     className={`settings-tab-btn ${settingsTab === tab ? 'active' : ''} ${locked ? 'locked' : ''}`}
                                     onClick={() => { if (!locked) setSettingsTab(tab); }}
                                     role="tab"
@@ -535,7 +544,7 @@ export default function Sidebar() {
                                 >
                                     {tab}
                                 </button>
-                            </>
+                            </span>
                         );
                     })}
                 </div>
@@ -613,11 +622,11 @@ export default function Sidebar() {
                                             {axis.toUpperCase()}
                                         </div>
                                         <span className="dro-value">
-                                            {formatAxisValue(position[axis])}
+                                            {formatAxisValue(position[axis], isInch)}
                                             <span className="dro-unit">{isInch ? 'in' : 'mm'}</span>
                                         </span>
                                         <span className="dro-machine-value">
-                                            {formatAxisValue(machinePos[axis])}
+                                            {formatAxisValue(machinePos[axis], isInch)}
                                         </span>
                                         <div className="dro-btn-group">
                                             <button className="dro-zero-btn" onClick={() => handleZero(axis)} title="Zero this axis">
@@ -824,26 +833,6 @@ export default function Sidebar() {
                                 ))}
                             </div>
                         </div>
-
-                        {/* Coordinate System Selection */}
-                        <div className="coord-system-row flex items-center gap-2 mt-3">
-                            <span className="coord-label text-xs font-bold text-text-dim uppercase tracking-wider whitespace-nowrap flex-shrink-0">Coordinate System</span>
-                            <div className="coord-buttons flex gap-1 flex-1">
-                                {(['Z', 'XYZ', 'XY', 'X', 'Y'] as const).map(system => (
-                                    <button
-                                        key={system}
-                                        className={`coord-btn flex-1 px-2 py-1.5 text-xs font-semibold text-center rounded-sm border transition-all duration-fast uppercase tracking-wider ${
-                                            coordSystem === system 
-                                                ? 'bg-blue-600 text-white border-blue-600 font-bold shadow-lg ring-2 ring-blue-300' 
-                                                : 'bg-bg-input text-text-dim border-border-ui hover:border-border-hover hover:text-text-main hover:bg-bg-hover'
-                                        }`}
-                                        onClick={() => setCoordSystem(system)}
-                                    >
-                                        {system}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
                     </div>
                 )}
 
@@ -1021,10 +1010,17 @@ export default function Sidebar() {
                     </div>
                 )}
 
+            </>
+        );
+
+    return (
+        <aside className="sidebar">
+            <div className="sidebar-scroll">
+                {renderSidebarContent()}
             </div>
 
-            {/* Camera panel — fixed footer, outside the scroll area */}
-            <CameraView />
+            {/* Camera panel — fixed footer at bottom of sidebar (above StatusBar), pops up when clicked */}
+            <CameraView defaultExpanded={false} isPopup={true} />
         </aside>
     );
 }

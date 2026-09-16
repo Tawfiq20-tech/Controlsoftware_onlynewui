@@ -113,7 +113,9 @@ async function runTests() {
     console.log('All FirmwareUpdateService tests passed successfully!');
 }
 
-runTests().catch((err) => {
+runTests().then(() => {
+    console.log("ALL TESTS PASSED SUCCESSFULLY!");
+}).catch((err) => {
     console.error('Test failed:', err);
     process.exit(1);
 });

@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js"
+    "dev": "node index.js",
+    "test": "node tests/run-all.js"
   },
   "dependencies": {
     "@serialport/parser-readline": "^13.0.0",

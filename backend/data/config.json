@@ -96,9 +96,10 @@
     "runCheckOnFileLoad": false,
     "outlineStyle": "Detailed",
     "probeThickness": 0,
-    "remoteDiagEnabled": true,
+    "remoteDiagEnabled": false,
     "remoteDiagUrl": "ws://10.1.76.249:18765/mirror",
-    "remoteDiagToken": "37221d04f26e92ed63eea474275bf016"
+    "remoteDiagToken": "37221d04f26e92ed63eea474275bf016",
+    "remoteDiagAllowInject": false
   },
   "ethernet": {
     "connectToIP": "192.168.5.1"
@@ -204,5 +205,20 @@
     "botEnabled": true,
     "botEyeCameraId": null,
     "enabled": false
+  },
+  "webcam": {
+    "cameras": [
+      {
+        "id": "cam_mtzyo48q",
+        "name": "Logi C310 HD WebCam",
+        "type": "usb",
+        "device": "Logi C310 HD WebCam",
+        "resolution": "1280x720",
+        "fps": 30,
+        "quality": 5,
+        "online": true,
+        "lastError": null
+      }
+    ]
   }
 }

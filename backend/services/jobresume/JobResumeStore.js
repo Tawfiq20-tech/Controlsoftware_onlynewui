@@ -55,6 +55,12 @@ const crypto = require('crypto');
 const FILENAME     = 'job_resume.json';
 const FILENAME_TMP = 'job_resume.json.tmp';
 const FILENAME_BAK = 'job_resume.json.bak';
+// The program text lives in its own file, written ONCE per job, and the
+// checkpoint JSON only points at it. Inlining the G-code meant every
+// checkpoint rewrote the whole program: for the 13 MB Halloween file, saving
+// progress every 25 lines would have written ~260 GB over one job and stalled
+// the sender on disk I/O while the machine was cutting.
+const FILENAME_GCODE = 'job_resume_gcode.nc';
 
 // Current schema version. Bump this when the checkpoint structure changes
 // in a way that older code can't load.
@@ -109,6 +115,8 @@ class JobResumeStore {
         this.filePath = path.join(dataDir, FILENAME);
         this.tmpPath  = path.join(dataDir, FILENAME_TMP);
         this.bakPath  = path.join(dataDir, FILENAME_BAK);
+        this.gcodePath = path.join(dataDir, FILENAME_GCODE);
+        this._gcodeHashOnDisk = null;
         this._log     = logger || console;
     }
 
@@ -136,12 +144,25 @@ class JobResumeStore {
                 .update(data.gcodeText || '')
                 .digest('hex');
 
+            // Program text: written once per job, then referenced. Checkpoints
+            // after that are a kilobyte of JSON, so they can be frequent.
+            let gcodeFile = null;
+            if (data.gcodeText) {
+                if (this._gcodeHashOnDisk !== hash || !fs.existsSync(this.gcodePath)) {
+                    const tmp = `${this.gcodePath}.tmp`;
+                    fs.writeFileSync(tmp, data.gcodeText, 'utf8');
+                    fs.renameSync(tmp, this.gcodePath);
+                    this._gcodeHashOnDisk = hash;
+                }
+                gcodeFile = FILENAME_GCODE;
+            }
+
             // Build the record WITHOUT crc32 first, compute CRC over it,
             // then add crc32 to the final record.
             const recordBase = {
                 version:          SCHEMA_VERSION,
                 filename:         data.filename        || 'untitled.nc',
-                gcodeText:        data.gcodeText       || '',
+                gcodeFile,
                 gcodeHash:        hash,
                 totalLines:       data.totalLines      ?? 0,
                 lastExecutedLine: data.lastExecutedLine ?? 0,
@@ -224,6 +245,8 @@ class JobResumeStore {
             if (fs.existsSync(this.filePath))  fs.unlinkSync(this.filePath);
             if (fs.existsSync(this.tmpPath))   fs.unlinkSync(this.tmpPath);
             if (fs.existsSync(this.bakPath))   fs.unlinkSync(this.bakPath);
+            if (fs.existsSync(this.gcodePath)) fs.unlinkSync(this.gcodePath);
+            this._gcodeHashOnDisk = null;
         } catch (e) {
             this._log.warn?.(`[JobResumeStore] clear failed: ${e.message}`);
         }
@@ -262,6 +285,16 @@ class JobResumeStore {
                     );
                     return null;
                 }
+            }
+
+            // ---- program text: read the companion file when referenced ----
+            if (!record.gcodeText && record.gcodeFile) {
+                const gpath = path.join(path.dirname(filePath), record.gcodeFile);
+                if (!fs.existsSync(gpath)) {
+                    this._log.error?.(`[JobResumeStore] checkpoint references ${record.gcodeFile}, which is missing — checkpoint rejected`);
+                    return null;
+                }
+                record.gcodeText = fs.readFileSync(gpath, 'utf8');
             }
 
             // ---- gcodeHash validation ----

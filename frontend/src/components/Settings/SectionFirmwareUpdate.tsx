@@ -44,6 +44,9 @@ interface FirmwareInfo {
     minSupportedVersion: string;
     isOfficial: boolean;
     sha256?: string | null;
+    isOnline?: boolean;
+    source?: string;
+    downloadUrl?: string;
 }
 
 export default function SectionFirmwareUpdate() {
@@ -68,12 +71,13 @@ export default function SectionFirmwareUpdate() {
     const devFileInputRef = useRef<HTMLInputElement>(null);
     const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Fetch latest firmware info from backend
-    const fetchFirmwareInfo = useCallback(async () => {
+    // Fetch latest firmware info from backend (supports live cloud check)
+    const fetchFirmwareInfo = useCallback(async (checkOnline = false) => {
         setLoadingInfo(true);
         try {
             const ver = firmwareVersion || '';
-            const res = await fetch(`/api/firmware/info?currentVersion=${encodeURIComponent(ver)}`);
+            const query = `currentVersion=${encodeURIComponent(ver)}${checkOnline ? '&checkOnline=true' : ''}`;
+            const res = await fetch(`/api/firmware/info?${query}`);
             if (res.ok) {
                 const data: FirmwareInfo = await res.json();
                 setFirmwareInfo(data);
@@ -241,9 +245,9 @@ export default function SectionFirmwareUpdate() {
                 <div className="settings-section-actions">
                     <button
                         className="settings-btn"
-                        onClick={fetchFirmwareInfo}
+                        onClick={() => fetchFirmwareInfo(true)}
                         disabled={loadingInfo || flashing}
-                        title="Check for updates"
+                        title="Check for updates from internet"
                     >
                         <RefreshCw size={13} className={loadingInfo ? 'spin' : ''} />
                         Check for updates
@@ -307,6 +311,11 @@ export default function SectionFirmwareUpdate() {
                         </div>
                         <div style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
                             <ShieldCheck size={13} style={{ color: '#34d399' }} /> SHA-256 Verified Release
+                            {firmwareInfo?.isOnline && (
+                                <span style={{ color: '#38bdf8', marginLeft: 6, fontWeight: 500 }}>
+                                    • Cloud OTA
+                                </span>
+                            )}
                         </div>
                     </div>
 

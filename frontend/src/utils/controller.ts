@@ -180,7 +180,11 @@ export type ControllerEventName =
     | 'config:change'
     | 'toolchanger:status'
     | 'file:load'
+    | 'file:loadError'
     | 'file:unload'
+    | 'job:resumePoint'
+    | 'job:resumePreview'
+    | 'job:programPause'
     | 'safety:validation'
     | 'safety:wcsHealth'
     | 'safety:zRunaway'
@@ -364,6 +368,10 @@ class Controller {
     resumeJob(): void { this.command('gcode:resume'); }
     stopJob(): void { this.command('gcode:stop'); }
     startFromLine(line: number): void { this.command('gcode:startFromLine', line); }
+    /** Safe start (RSP): lift to safeZ, travel to line's start, plunge, continue. */
+    startFromLineSafe(line: number, opts: { safeZ: number }): void { this.command('gcode:startFromLine', line, opts); }
+    requestResumePoint(): void { this.command('gcode:resumePoint'); }
+    requestResumePreview(line: number, opts: { safeZ: number }): void { this.command('gcode:resumePreview', line, opts); }
 
     home(): void { this.command('homing'); }
     homeAxis(axis: string): void { this.command(`homing:${axis}`); }
@@ -623,6 +631,22 @@ class Controller {
 
         this.socket.on('file:unload', () => {
             this._emit('file:unload');
+        });
+
+        this.socket.on('file:loadError', (data: unknown) => {
+            this._emit('file:loadError', data);
+        });
+
+        // Resume point + Start From Line preview (RSP controller)
+        this.socket.on('job:resumePoint', (data: unknown) => {
+            this._emit('job:resumePoint', data);
+        });
+        this.socket.on('job:resumePreview', (data: unknown) => {
+            this._emit('job:resumePreview', data);
+        });
+        // M0/M1 program pause: set while the machine waits, null when it continues
+        this.socket.on('job:programPause', (data: unknown) => {
+            this._emit('job:programPause', data);
         });
 
         // ECSS — EasyCNC Safety System v1

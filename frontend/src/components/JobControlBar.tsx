@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, Pause, Square, Zap, SkipForward, Maximize2 } from 'lucide-react';
+import { Play, Pause, Square, Zap, SkipForward, Maximize2, AlertTriangle } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import {
     backendJobStart,
@@ -29,6 +29,9 @@ export default function JobControlBar() {
         rawGcodeContent,
         safetyValidation,
         safetyOverrideArmed,
+        fileLoadError,
+        programPause,
+        resumePoint,
         addConsoleLog,
     } = useCNCStore();
 
@@ -42,6 +45,10 @@ export default function JobControlBar() {
 
     const handlePlayPause = () => {
         if (!connected) return;
+        if (!jobActive && fileLoadError) {
+            addConsoleLog('error', `"${fileLoadError.name}" cannot run on this machine -- see the reasons above. Load a corrected file.`);
+            return;
+        }
         if (!jobActive) {
             if (!fileLoadedBackend) {
                 if (rawGcodeContent) {
@@ -85,7 +92,7 @@ export default function JobControlBar() {
         // were GRBL idioms which RTS firmware ignores — that's why your
         // E-Stop wasn't halting the machine.
         backendSoftReset();
-        addConsoleLog('error', 'EMERGENCY STOP — abort sent (0x03)');
+        addConsoleLog('error', 'EMERGENCY STOP — motion stopped, drivers disabled');
     };
 
     // Enable gate (gsender pattern):
@@ -97,33 +104,79 @@ export default function JobControlBar() {
         && !safetyValidation?.cleared
         && !jobActive
         && !safetyOverrideArmed;
+    const loadRefused = !!fileLoadError && !jobActive;
     const isJobDisabled =
         !connected ||
-        gcode.length === 0 ||
+        // starting a job needs the file; pausing or resuming a running one does
+        // not -- a second screen must still be able to hold the machine
+        (!jobActive && gcode.length === 0) ||
         machineState === 'alarm' ||
-        ecssBlocked;
+        ecssBlocked ||
+        loadRefused;
     const canStop = connected && (jobActive || machineState === 'paused');
 
-    // Only render if there's a file loaded
-    if (gcode.length === 0) return null;
+    // Normally the bar needs a file. But a screen that joined after the carve
+    // started (a second tab, a phone, a refresh that lost the local parse) has
+    // no local G-code and was shown NOTHING -- no Stop, no E-STOP, no Resume
+    // for an M0 pause. Whenever the machine is working, the controls are there.
+    if (gcode.length === 0 && !jobActive && !programPause) return null;
+
+    const willResumeFrom = !jobActive && resumePoint && resumePoint.line > 1 ? resumePoint.line : 0;
 
     return (
         <>
+            {!connected && (jobActive || programPause) && (
+                <div className="job-connection-lost" role="alert">
+                    <AlertTriangle size={14} />
+                    <span>
+                        <strong>Connection to the machine lost.</strong> What you see here is the last
+                        known state — Stop and E-STOP cannot reach the machine. Use the machine's own
+                        emergency stop.
+                    </span>
+                </div>
+            )}
+            {programPause && (
+                <div className="job-program-pause" role="status">
+                    <Pause size={14} />
+                    <span className="job-program-pause-text">
+                        <strong>{programPause.kind === 'dwell' ? 'Waiting' : 'Paused'} at line {programPause.line}</strong>
+                        {programPause.message ? ` — ${programPause.message}` : ` (${programPause.optional ? 'M1' : 'M0'} in the program)`}
+                    </span>
+                    <button
+                        className="job-program-pause-btn"
+                        onClick={() => { backendJobResume(); addConsoleLog('info', programPause.kind === 'dwell' ? 'Skipping the wait' : 'Continuing the program'); }}
+                        disabled={!connected}
+                    >
+                        <Play size={13} /> {programPause.kind === 'dwell' ? 'Skip wait' : 'Resume'}
+                    </button>
+                </div>
+            )}
             <div className="job-control-bar">
                 <button
                     className={`job-play-btn ${jobActive && machineState !== 'paused' ? 'running' : ''} ${ecssBlocked ? 'ecss-blocked' : ''}`}
                     onClick={handlePlayPause}
                     disabled={isJobDisabled}
                     title={
-                        ecssBlocked
+                        loadRefused
+                            ? `Cannot run: ${fileLoadError?.errors?.[0] ? `${fileLoadError.errors[0].line ? `line ${fileLoadError.errors[0].line}: ` : ''}${fileLoadError.errors[0].msg}` : 'file refused'}${(fileLoadError?.errorCount || 0) > 1 ? ` (+${(fileLoadError?.errorCount || 0) - 1} more, see console)` : ''}`
+                            : ecssBlocked
                             ? `Blocked by pre-flight check — see banner above (${safetyValidation?.issues?.length || 0} issue${(safetyValidation?.issues?.length || 0) === 1 ? '' : 's'}).`
-                            : jobActive && machineState !== 'paused' ? 'Pause' : 'Start'
+                            : jobActive && machineState !== 'paused' ? 'Pause'
+                            : willResumeFrom
+                            ? `Resume from line ${willResumeFrom}${resumePoint?.reason ? ` (stopped: ${resumePoint.reason})` : ''} — the tool lifts, returns and plunges before cutting`
+                            : 'Start'
                     }
                 >
                     {jobActive && machineState !== 'paused' ? <Pause size={16} /> : <Play size={16} />}
                 </button>
 
                 <div className="job-info">
+                    {willResumeFrom > 0 && (
+                        <div className="job-resume-hint">
+                            ▶ continues from line {willResumeFrom}
+                            {resumePoint?.reason ? ` — ${resumePoint.reason}` : ''}
+                        </div>
+                    )}
                     <div className="job-stats-row">
                         <span>Lines <span className="job-stat-val">{gcode.length}</span></span>
                         <span>Current <span className="job-stat-val">{currentLine}</span></span>

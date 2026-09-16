@@ -1,0 +1,17 @@
+# pi-gen configuration for the Onefinity Sender kiosk image.
+IMG_NAME=OnefinitySender-Raspi-arm64
+PI_GEN_RELEASE="Onefinity Sender kiosk"
+ARCH=arm64
+STAGE_LIST="stage0 stage1 stage2 stage-onefinity"
+DEPLOY_COMPRESSION=xz
+
+LOCALE_DEFAULT=en_US.UTF-8
+KEYBOARD_KEYMAP=us
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT=Etc/UTC
+
+# Service account for maintenance only (SSH is off; the screen never shows a login).
+FIRST_USER_NAME=service
+FIRST_USER_PASS=change-me-before-building
+DISABLE_FIRST_BOOT_USER_RENAME=1
+ENABLE_SSH=0

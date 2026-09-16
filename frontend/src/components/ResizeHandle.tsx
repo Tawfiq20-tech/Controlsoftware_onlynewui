@@ -1,39 +1,31 @@
 /**
- * ResizeHandle — vertical drag handle for resizing a sibling element by width.
+ * ResizeHandle — dual-axis drag handle for resizing sibling panels by width or height.
  *
- * Sits between two flex / grid children. Mousedown captures global mousemove,
- * computes new width, writes it to a CSS variable on the target element and
- * persists to localStorage. Double-click resets to the default.
- *
- * Usage:
- *   <Sidebar style={{ width: 'var(--sb-w, 360px)' }} />
- *   <ResizeHandle targetSelector=".sidebar"
- *                 cssVar="--sb-w" storageKey="cnc.sidebarW"
- *                 defaultPx={360} minPx={180} maxPx={520} />
- *   <ViewportContainer />
- *
- * Pointer events used (works with mouse, touch, pen).
+ * Automatically detects whether layout is horizontal (columns, left-right drag) or
+ * vertical (rows, up-down drag) based on orientation/aspect ratio media query or prop.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './ResizeHandle.css';
 
 interface Props {
-    /** CSS selector for the element being resized (its width is what we drive). */
+    /** CSS selector for the element being resized. */
     targetSelector: string;
-    /** CSS custom property to write the resolved width into (on documentElement). */
+    /** CSS custom property to write the resolved size into (on documentElement). */
     cssVar: string;
-    /** localStorage key for persisting the user's chosen width. */
+    /** localStorage key for persisting the user's chosen size. */
     storageKey: string;
-    /** Default width in px when nothing stored. */
+    /** Default size in px when nothing stored. */
     defaultPx: number;
     /** Lower bound — drag can't go below this. */
     minPx?: number;
     /** Upper bound — drag can't go above this. */
     maxPx?: number;
-    /** Drag direction. 'left' = sibling on left grows when handle moves right;
-     *  'right' = sibling on right grows when handle moves left.  */
-    side?: 'left' | 'right';
-    /** Hide the handle entirely (used at narrow widths where the target is hidden). */
+    /** Drag direction. 'left' / 'top' = sibling grows when handle moves forward;
+     *  'right' / 'bottom' = sibling grows when handle moves backward. */
+    side?: 'left' | 'right' | 'top' | 'bottom';
+    /** Explicit orientation override, or 'auto' to follow screen aspect ratio. */
+    orientation?: 'auto' | 'horizontal' | 'vertical';
+    /** Hide the handle entirely. */
     hidden?: boolean;
 }
 
@@ -45,46 +37,76 @@ export default function ResizeHandle({
     minPx = 100,
     maxPx = 800,
     side = 'left',
+    orientation = 'auto',
     hidden = false,
 }: Props) {
     const [dragging, setDragging] = useState(false);
-    const widthRef = useRef<number>(loadStored(storageKey, defaultPx));
-    const startRef = useRef<{ x: number; w: number } | null>(null);
+    const sizeRef = useRef<number>(loadStored(storageKey, defaultPx));
+    const startRef = useRef<{ x: number; y: number; s: number; isVertical: boolean } | null>(null);
 
-    // Apply initial width on mount + whenever default changes.
-    useEffect(() => {
-        applyWidth(widthRef.current);
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const isPortraitMode = useCallback(() => {
+        if (orientation === 'vertical') return false; // column-resize (X drag)
+        if (orientation === 'horizontal') return true; // row-resize (Y drag)
+        return window.matchMedia('(max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px)').matches;
+    }, [orientation]);
 
-    const applyWidth = useCallback((w: number) => {
-        const clamped = Math.max(minPx, Math.min(maxPx, w));
-        widthRef.current = clamped;
+    const applySize = useCallback((s: number) => {
+        const clamped = Math.max(minPx, Math.min(maxPx, s));
+        sizeRef.current = clamped;
         document.documentElement.style.setProperty(cssVar, `${clamped}px`);
         const el = document.querySelector(targetSelector) as HTMLElement | null;
-        if (el) el.style.width = `${clamped}px`;
-    }, [cssVar, targetSelector, minPx, maxPx]);
+        if (el) {
+            if (isPortraitMode()) {
+                el.style.height = `${clamped}px`;
+            } else {
+                el.style.width = `${clamped}px`;
+            }
+        }
+    }, [cssVar, targetSelector, minPx, maxPx, isPortraitMode]);
+
+    // Apply initial size on mount
+    useEffect(() => {
+        applySize(sizeRef.current);
+    }, [applySize]);
 
     const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
         e.preventDefault();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
-        startRef.current = { x: e.clientX, w: widthRef.current };
+        const isVert = isPortraitMode();
+        startRef.current = {
+            x: e.clientX,
+            y: e.clientY,
+            s: sizeRef.current,
+            isVertical: isVert,
+        };
         setDragging(true);
     };
+
     const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
         if (!startRef.current) return;
-        const dx = e.clientX - startRef.current.x;
-        const next = side === 'left' ? startRef.current.w + dx : startRef.current.w - dx;
-        applyWidth(next);
+        if (startRef.current.isVertical) {
+            // Dragging vertically (Y delta)
+            const dy = e.clientY - startRef.current.y;
+            const next = side === 'top' ? startRef.current.s - dy : startRef.current.s + dy;
+            applySize(next);
+        } else {
+            // Dragging horizontally (X delta)
+            const dx = e.clientX - startRef.current.x;
+            const next = side === 'left' ? startRef.current.s + dx : startRef.current.s - dx;
+            applySize(next);
+        }
     };
+
     const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
         if (!startRef.current) return;
         startRef.current = null;
         setDragging(false);
-        try { window.localStorage.setItem(storageKey, String(widthRef.current)); } catch {}
+        try { window.localStorage.setItem(storageKey, String(sizeRef.current)); } catch {}
         (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     };
+
     const onDoubleClick = () => {
-        applyWidth(defaultPx);
+        applySize(defaultPx);
         try { window.localStorage.removeItem(storageKey); } catch {}
     };
 
@@ -98,7 +120,7 @@ export default function ResizeHandle({
             onPointerCancel={onPointerUp}
             onDoubleClick={onDoubleClick}
             role="separator"
-            aria-orientation="vertical"
+            aria-orientation={isPortraitMode() ? 'horizontal' : 'vertical'}
             title="Drag to resize · double-click to reset"
         />
     );

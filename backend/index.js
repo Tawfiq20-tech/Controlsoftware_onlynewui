@@ -39,12 +39,17 @@ const errserver = require('./middleware/errserver');
 
 const PORT = Number(process.env.PORT) || 4000;
 const app = express();
-app.use(cors({ origin: true }));
+// Only pages served by this machine (localhost, its LAN address, or the
+// tunnel) may call the API. Reflecting every origin let any website the
+// operator visited drive the machine from their own browser -- see
+// RemoteAccessService.isAllowedOrigin(). Lazy arrow: remoteAccessService is
+// constructed a few lines below, long before any request arrives.
+app.use(cors({ origin: (origin, cb) => remoteAccessService.corsOrigin()(origin, cb) }));
 app.use(express.json());
 
 // Remote-access gate — own ConfigStore file so it doesn't depend on
-// CNCEngine's init order. No-op (open LAN, same as gSender) until a PIN is
-// set from Settings on the control PC itself; see RemoteAccessService.js.
+// CNCEngine's init order. Remote (non-local) access requires a PIN set from
+// Settings on the control PC itself; see RemoteAccessService.js.
 const remoteAccessConfigStore = new ConfigStore(path.join(__dirname, 'data', 'remote-access.json'));
 const remoteAccessService = new RemoteAccessService({ configStore: remoteAccessConfigStore, port: PORT });
 app.use(remoteAccessService.httpGate());
@@ -73,12 +78,16 @@ app.post('/api/log', (req, res) => {
 // Create HTTP + Socket.IO server
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: true },
+    cors: { origin: (origin, cb) => remoteAccessService.corsOrigin()(origin, cb) },
     path: '/socket.io',
     serveClient: true,
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ['websocket', 'polling'],
+    // G-code files are sent whole over file:load. The 1 MB default silently
+    // dropped the connection for fish_wall (10 MB) and Halloween 3D Finishing
+    // (13 MB), so the largest reference designs could never be loaded (plan BE-10).
+    maxHttpBufferSize: 64 * 1024 * 1024,
 });
 io.use(remoteAccessService.socketGate());
 
@@ -261,9 +270,12 @@ app.get('/api/remote/qr', async (req, res) => {
     const rawUrl = req.query.url;
     let url = rawUrl;
     if (!url) {
-        const ip = req.query.ip || remoteAccessService.getLanIps()[0];
-        if (!ip) return res.status(404).json({ error: 'No LAN IP detected' });
-        url = `http://${ip}:${PORT}`;
+        if (req.query.ip) {
+            url = `http://${req.query.ip}:${PORT}`;
+        } else {
+            const info = remoteAccessService.getInfo();
+            url = info.unifiedUrl;
+        }
     }
     try {
         const dataUrl = await remoteAccessService.getQrDataUrl(url);
@@ -415,22 +427,84 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ─── Firmware Flashing ───────────────────────────────────────────
+// ─── Firmware Flashing & Live OTA ─────────────────────────────────
 
 const FirmwareFlashing = require('./lib/Firmware/Flashing/firmwareflashing');
+const { FirmwareUpdateService } = require('./services/firmware/FirmwareUpdateService');
+const firmwareUpdateService = new FirmwareUpdateService({ io, logger });
+engine.firmwareUpdateService = firmwareUpdateService;
 
+// Get firmware release information (optionally querying cloud repository)
+app.get('/api/firmware/info', async (req, res) => {
+    const currentVersion = req.query.currentVersion || engine.controller?.state?.status?.firmwareVersion || '';
+    const checkOnline = req.query.checkOnline === 'true';
+    try {
+        if (checkOnline) {
+            const info = await firmwareUpdateService.checkOnlineUpdate(currentVersion);
+            return res.json(info);
+        }
+        const info = firmwareUpdateService.getFirmwareInfo(currentVersion);
+        res.json(info);
+    } catch (err) {
+        logger.error(`[FirmwareAPI] ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Explicitly check internet for new OTA firmware releases
+app.post('/api/firmware/check-online', async (req, res) => {
+    const currentVersion = req.body?.currentVersion || engine.controller?.state?.status?.firmwareVersion || '';
+    try {
+        const info = await firmwareUpdateService.checkOnlineUpdate(currentVersion);
+        res.json(info);
+    } catch (err) {
+        logger.error(`[FirmwareAPI] ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Download and stage official OTA release from cloud
+app.post('/api/firmware/ota-download', async (req, res) => {
+    try {
+        const result = await firmwareUpdateService.downloadAndStageOtaRelease();
+        res.json(result);
+    } catch (err) {
+        logger.error(`[FirmwareAPI] ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Flash firmware to controller board (STM32H723 USB DFU)
 app.post('/api/firmware/flash', async (req, res) => {
-    const { port, boardType, hexPath } = req.body;
+    const { port, hexPath, useOfficialRelease } = req.body;
+    let hexData = req.body.hexData;
+    const boardType = req.body.boardType || 'EASYCNC'; // Default to STM32H723 USB DFU
 
-    if (!port || !boardType) {
-        return res.status(400).json({ error: 'Missing port or boardType' });
+    // A job that is merely PAUSED still owns the machine, and flashing reboots
+    // the board: the run would be unrecoverable and the tool left in the cut.
+    // The state string alone is not enough (a paused job can read as Idle).
+    if (jobIsActive()) {
+        return res.status(400).json({ error: 'A job is loaded and running (or paused). Stop it before updating firmware.' });
+    }
+    const currentMachineState = engine.state?.status?.activeState || engine.controller?.state?.status?.activeState || 'idle';
+    const safety = firmwareUpdateService.canFlash(currentMachineState);
+    if (!safety.allowed) {
+        return res.status(400).json({ error: safety.reason });
     }
 
     try {
-        // Get socket for progress events (if available from Socket.IO connection)
         const socket = io.sockets.sockets.values().next().value;
-        await FirmwareFlashing.flash(port, boardType, { hexPath, socket });
-        res.json({ success: true, message: 'Firmware flashed successfully' });
+        if (useOfficialRelease || (!hexData && !hexPath)) {
+            hexData = await firmwareUpdateService.getOfficialHexData();
+        }
+
+        await FirmwareFlashing.flash(port || 'USB_DFU', boardType, {
+            hexPath,
+            hexData,
+            socket,
+            controller: engine.controller,
+        });
+        res.json({ success: true, message: 'Firmware flashed successfully via USB DFU' });
     } catch (err) {
         logger.error(err);
         res.status(500).json({ error: err.message });
@@ -440,12 +514,34 @@ app.post('/api/firmware/flash', async (req, res) => {
 // ─── Webcam REST ─────────────────────────────────────────────────
 
 app.get('/api/webcam/cameras', (req, res) => res.json(webcamService.list()));
+app.get('/api/webcam/devices', async (req, res) => {
+    try {
+        const devices = await webcamService.detectLocalDevices();
+        res.json({ devices });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+app.post('/api/webcam/auto-detect', async (req, res) => {
+    try {
+        const result = await webcamService.autoDetectAndAdd();
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 app.post('/api/webcam/cameras', (req, res) => {
     try { res.json(webcamService.upsert(req.body)); }
     catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.delete('/api/webcam/cameras/:id', (req, res) => {
     webcamService.remove(req.params.id); res.json({ ok: true });
+});
+app.post('/api/webcam/frame/:id', express.raw({ type: ['image/jpeg', 'application/octet-stream'], limit: '10mb' }), (req, res) => {
+    const buf = Buffer.isBuffer(req.body) ? req.body : (req.body?.data ? Buffer.from(req.body.data, 'base64') : null);
+    if (!buf || buf.length === 0) return res.status(400).json({ error: 'No frame buffer provided' });
+    const ok = webcamService.setFrame(req.params.id, buf);
+    res.json({ ok });
 });
 app.get('/api/webcam/stream/:id', (req, res) => {
     webcamService.subscribe(req.params.id, res);
@@ -528,6 +624,21 @@ app.get('/api/jobhistory/:id', (req, res) => {
 });
 app.delete('/api/jobhistory', (req, res) => { jobHistoryService.clear(); res.json({ ok: true }); });
 app.delete('/api/jobhistory/:id', (req, res) => { jobHistoryService.deleteOne(req.params.id); res.json({ ok: true }); });
+
+// Is a carve running right now? RUN.bat asks this before it frees port 4000
+// by killing whatever holds it -- doing that mid-carve killed the sender and
+// the machine E-stopped on its own host watchdog (2026-09-15 19:18 log).
+app.get('/api/job/active', (req, res) => {
+    const ctrl = engine.controller;
+    const job = ctrl && ctrl.job;
+    res.json({
+        active: !!(job && job.active),
+        paused: !!(job && job.active && job.paused),
+        line: job && job.active ? job.nextLineToRun() : 0,
+        total: job && job.active ? job.totalLineCount : 0,
+        file: (engine.loadedFile && engine.loadedFile.name) || null,
+    });
+});
 
 // ─── Job Resume / Checkpoint REST API ───────────────────────────────
 
@@ -672,9 +783,102 @@ server.on('error', (err) => {
     process.exit(1);
 });
 
+// Auto-launch browser in standalone app mode (removes URL bar, tabs, and browser refresh buttons)
+const { exec, spawn } = require('child_process');
+function openBrowserApp(targetUrl) {
+    if (process.env.NO_BROWSER || process.env.NODE_ENV === 'test') return;
+    const candidates = [
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    ];
+
+    const exe = candidates.find(p => {
+        try { return p && fs.existsSync(p); } catch { return false; }
+    });
+
+    if (exe) {
+        try {
+            const child = spawn(exe, [`--app=${targetUrl}`], {
+                detached: true,
+                stdio: 'ignore'
+            });
+            child.unref();
+            return;
+        } catch (e) {
+            logger.warn('Failed to spawn browser in app mode, falling back to default browser', { error: e.message });
+        }
+    }
+
+    if (process.platform === 'win32') {
+        exec(`start "" "${targetUrl}"`);
+    } else if (process.platform === 'darwin') {
+        exec(`open "${targetUrl}"`);
+    } else {
+        exec(`xdg-open "${targetUrl}"`);
+    }
+}
+
+// ─── Staying alive, and stopping the machine before we don't ────────
+//
+// The controller stops the machine by itself if the PC goes quiet for 5 s
+// (host watchdog). So a backend crash, or this window being closed during a
+// carve, does not just end the program -- it stops the machine mid-cut and
+// leaves the spindle in the material. Two guards:
+//   1. an unexpected error never takes the process down while a job is
+//      running; it is logged and reported to the UI instead
+//   2. an intentional shutdown stops the job cleanly first (drivers off,
+//      position and resume point kept) rather than letting the watchdog fire
+
+function jobIsActive() {
+    return !!(engine && engine.controller && engine.controller.job && engine.controller.job.active);
+}
+
+process.on('uncaughtException', (err) => {
+    logger.error(`UNCAUGHT EXCEPTION: ${err && err.stack ? err.stack : err}`);
+    try {
+        io.emit('controller:error', { message: `Internal error: ${err && err.message ? err.message : err}` });
+    } catch (_) { /* never throw from the handler */ }
+    // Deliberately not exiting: dying here would stop a running carve.
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error(`UNHANDLED REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+});
+
+let shuttingDown = false;
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`[shutdown] ${signal} received`);
+    const hadJob = jobIsActive();
+    try {
+        if (hadJob) {
+            logger.warn('[shutdown] a job is running -- stopping the machine and saving the resume point first');
+            engine.controller.command('gcode:stop');
+        }
+    } catch (exc) {
+        logger.error(`[shutdown] could not stop the job: ${exc.message || exc}`);
+    }
+    // Let the stop frame reach the controller before the port closes.
+    setTimeout(() => {
+        try { if (engine && typeof engine._closeConnection === 'function') engine._closeConnection(); } catch (_) {}
+        process.exit(0);
+    }, hadJob ? 1500 : 100);
+}
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+    process.on(sig, () => shutdown(sig));
+}
+
 // Start server
 const HOST = process.env.HOST || '0.0.0.0';
 server.listen(PORT, HOST, () => {
-    logger.info(`CNC backend listening on http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+    const url = `http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`;
+    logger.info(`CNC backend listening on ${url}`);
     logger.info('>>> BACKEND BUILD: vendor-pcap-v3 (msg 7099) — retransmit-on-B until-A + Z-runaway off');
+    openBrowserApp(url);
 });
+

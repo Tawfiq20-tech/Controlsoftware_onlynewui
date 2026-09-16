@@ -336,3 +336,27 @@
 @media (max-width: 700px) {
     .header-brand-logo { height: 28px; }
 }
+
+/* ─── VERTICAL DESKTOP & PORTRAIT HEADER OPTIMIZATIONS ─── */
+@media (max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px) {
+    .header {
+        padding: 0 10px;
+        gap: 6px;
+    }
+    .header-left {
+        gap: 6px;
+    }
+    .nav-tab {
+        padding: 5px 8px;
+        font-size: 11px;
+        margin: 4px 1px;
+    }
+    .machine-status-pill {
+        padding: 3px 8px;
+        font-size: 10px;
+    }
+    .btn-danger {
+        padding: 5px 12px;
+        font-size: 10.5px;
+    }
+}

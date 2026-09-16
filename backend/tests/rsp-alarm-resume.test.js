@@ -1,122 +1,191 @@
 'use strict';
 
+/**
+ * Alarm / mid-run stop / power-cut recovery, end to end against the fake
+ * firmware (tests/helpers/fakeFirmware.js).
+ *
+ * Covers the paths a user hits after a job is interrupted:
+ *   - driver alarm -> unlock -> START continues from the exact line
+ *   - Stop -> START resumes (no "job already running" refusal)
+ *   - power cut -> JobResumeService checkpoint -> resume from the saved line,
+ *     with the controller's own safe preamble (never a raw prepended one)
+ */
+
+process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'error';
+
+const { mock } = require('node:test');
+mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now: 1_700_000_000_000 });
+
 const assert = require('assert');
-const { EventEmitter } = require('events');
-const defs = require('../services/rsp/defs');
-const codec = require('../services/rsp/codec');
-const { FT_RSP, buildFrame } = require('../services/rsp/frame');
-const { ReliableStream } = require('../services/rsp/stream');
-const { JobStream } = require('../services/rsp/job');
-const { RSPController } = require('../services/controllers/RSPController');
-const { JobResumeService } = require('../services/jobresume/JobResumeService');
-const { RecoveryOrchestrator } = require('../services/jobresume/RecoveryOrchestrator');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { EventEmitter } = require('events');
+const defs = require('../services/rsp/defs');
+const { RSPController } = require('../services/controllers/RSPController');
+const { JobResumeService } = require('../services/jobresume/JobResumeService');
+const { FakeFirmware, FakeConnection } = require('./helpers/fakeFirmware');
 
-class FakeConnection extends EventEmitter {
-    constructor() {
-        super();
-        this.isOpen = true;
-        this.written = [];
+const flush = () => new Promise((r) => setImmediate(r));
+async function advance(ms, step = 5) {
+    for (let t = 0; t < ms; t += step) { mock.timers.tick(step); await flush(); }
+}
+async function until(pred, maxMs, what, step = 5) {
+    for (let t = 0; t <= maxMs; t += step) {
+        if (pred()) return t;
+        mock.timers.tick(step);
+        await flush();
     }
-    writeRaw(buf) {
-        this.written.push(buf);
-    }
-    emitToSockets(ev, data) {}
+    throw new Error(`timed out waiting for: ${what}`);
 }
 
-async function runTests() {
-    console.log('Testing RSP Alarm & Mid-run Stop/Resume Fixes...');
+function program(nMoves) {
+    const out = ['G21', 'G90', 'G0 Z5', 'G0 X0 Y0', 'G1 Z-1 F600'];
+    for (let i = 0; i < nMoves; i++) out.push(`G1 X${(i * 0.5).toFixed(3)} Y0.000 F1200`);
+    out.push('G0 Z5', 'M5', 'M2');
+    return out.join('\n');
+}
 
-    // 1. Test RSPController alarm handling during job streaming
-    const conn = new FakeConnection();
+function rig(fwOpts) {
+    const fw = new FakeFirmware(fwOpts);
+    const conn = new FakeConnection(fw);
     const ctrl = new RSPController();
+    const log = [];
+    ctrl.on('console', (m) => log.push(m));
+    ctrl.on('error', () => {});
     ctrl.bind(conn);
+    return { fw, conn, ctrl, log, close() { ctrl.unbind(); fw.destroy(); } };
+}
 
-    let consoleMessages = [];
-    ctrl.on('console', (msg) => consoleMessages.push(msg));
+async function testAlarmThenUnlockThenStart() {
+    const r = rig({ legTimeScale: 1 });
+    const text = program(150);
+    r.ctrl.command('gcode:load', 'test.nc', text, 0, {});
+    assert.ok(r.ctrl.lastLoadResult.ok);
+    await advance(50);
+    r.ctrl.command('gcode:start');
+    await until(() => r.fw.executed.length >= 30 && r.fw.leg, 120000, 'mid-move');
+    const interrupted = r.fw.leg.line;
 
-    const gcode = 'G21\nG90\nG0 X10 Y10\nG1 Z-1 F200\nG1 X20 Y20\nG0 Z5';
-    ctrl.command('gcode:load', 'test.nc', gcode);
-    ctrl.command('gcode:start');
+    r.fw.injectAlarm(0);
+    await advance(400);
+    assert.strictEqual(r.ctrl.job.paused, true, 'job holds when the driver alarms');
+    assert.strictEqual(r.ctrl._resumeLine, interrupted, 'resume line captured from what really ran');
+    assert.strictEqual(r.ctrl._resumeGcode, r.ctrl._loadedGcode, 'resume G-code is the loaded (compiled) program');
+    assert.ok(r.ctrl._loadedGcode.includes('G21 G90 G1 X'), 'loaded G-code is the compiled wire program');
 
-    assert.strictEqual(ctrl.job.active, true, 'Job should be active after start');
+    r.ctrl.command('unlock');
+    await advance(500);
+    assert.ok(r.log.some((m) => m.includes('Alarm cleared / unlocked')), 'emits alarm cleared message');
+    assert.ok(r.log.some((m) => m.includes(`Press START to resume from line ${interrupted}`)), 'prompts to resume');
 
-    // Simulate telemetry reporting state 9 (ST_ESTOP / Alarm) at line 3
-    ctrl.stream.emit('status', {
-        state: defs.ST_ESTOP,
-        state_name: 'EStop',
-        estop_active: true,
-        x: 10, y: 10, z: -1,
-        last_executed_line: 3,
-        feed: 200,
-        spindle_speed: 0,
-        buffer_fill_pct: 0,
-        planner_depth: 0,
-        link_ok: true,
-        error_code: 0,
-    });
+    const before = r.log.length;
+    r.ctrl.command('gcode:start');
+    await advance(500);
+    assert.ok(!r.log.slice(before).some((m) => /already running/.test(m)), 'START after unlock is not refused');
+    assert.strictEqual(r.ctrl.job.active, true, 'job runs again');
+    await until(() => !r.ctrl.job.active && r.fw.state === defs.ST_IDLE, 300000, 'job end');
+    assert.strictEqual(r.ctrl.getResumePoint().line, 0, 'finished job clears the resume point');
+    r.close();
+    console.log(`  ok  alarm at line ${interrupted} -> unlock -> START continues and finishes`);
+}
 
-    assert.strictEqual(ctrl.job.paused, true, 'Job should be paused when alarm/estop is triggered');
-    assert.strictEqual(ctrl._resumeLine, 4, 'Resume line should be captured as 4');
-    assert.strictEqual(ctrl._resumeGcode, gcode, 'Resume G-code should match loaded G-code');
+async function testStopThenStartResumes() {
+    const r = rig({ legTimeScale: 0.5 });
+    r.ctrl.command('gcode:load', 'test.nc', program(200), 0, {});
+    await advance(50);
+    r.ctrl.command('gcode:start');
+    await until(() => r.fw.executed.length >= 40, 120000, '40 moves');
+    r.ctrl.command('gcode:stop');
+    await advance(400);
+    const point = r.ctrl.getResumePoint().line;
+    assert.ok(point > 1, 'stop saves a resume point');
+    // The console line names the point at the moment of the stop; a move that
+    // finished while the abort was in flight can push the saved point one further.
+    const stopMsg = r.log.find((m) => /Stopped at line (\d+)/.test(m));
+    assert.ok(stopMsg, 'stop is reported with its line');
+    assert.ok(point - Number(/Stopped at line (\d+)/.exec(stopMsg)[1]) <= 1);
+    r.ctrl.command('gcode:start');
+    await until(() => !r.ctrl.job.active && r.fw.state === defs.ST_IDLE, 300000, 'job end');
+    assert.strictEqual(r.fw.jobStarts, 2, 'resume is a second firmware job');
+    assert.ok(r.fw.executed.some((e) => e.to.z >= 5), 'resume lifted Z to safe height');
+    r.close();
+    console.log(`  ok  Stop at line ${point} -> START resumes there and finishes`);
+}
 
-    // 2. Test Unlock and Resume
-    // FW-3: Clear Alarm now waits for a real device ack (FT_RSP) before
-    // reporting success, instead of the old _fireAndForget optimistic
-    // messaging -- simulate the device's reply here.
-    ctrl.command('unlock');
-    const unlockSeq = [...ctrl.stream._sent.keys()].pop();
-    conn.emit('rawData', buildFrame(FT_RSP, 0, unlockSeq, Buffer.alloc(0)));
-    await new Promise((resolve) => setImmediate(resolve));
-    const hasUnlockMsg = consoleMessages.some(m => m.includes('Alarm cleared / unlocked'));
-    const hasResumePrompt = consoleMessages.some(m => m.includes('Press START to resume from line 4'));
-    assert(hasUnlockMsg, 'Should emit alarm cleared message');
-    assert(hasResumePrompt, 'Should emit resume prompt on unlock');
-
-    // 3. Test starting after unlock without "already running" error
-    consoleMessages = [];
-    ctrl.command('gcode:start');
-    const hasAlreadyRunningError = consoleMessages.some(m => m.includes('already running'));
-    assert(!hasAlreadyRunningError, 'Should NOT block gcode:start with "already running"');
-    assert.strictEqual(ctrl.job.active, true, 'Job should be active again');
-    assert.strictEqual(ctrl.job.nextLineToRun(), 4, 'Job should resume from line 4');
-
-    // 4. Test JobResumeService preamble injection + slicing
+async function testCheckpointResumeUsesControllerPreamble() {
+    const r = rig({ legTimeScale: 0.5 });
+    const text = program(200);
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-test-'));
+    const io = new EventEmitter();
+    io.emit = () => {};
     const resumeService = new JobResumeService({
         dataDir: tmpDir,
-        io: new EventEmitter(),
+        io,
         logger: { info: () => {}, warn: () => {}, error: () => {} },
-        getController: () => ctrl,
+        getController: () => r.ctrl,
+        getConfig: () => ({ get: (k, d) => (k === 'preferences.safeHeight' ? 8 : d) }),
     });
 
-    resumeService.onLoad({ filename: 'test.nc', gcodeText: gcode, modalState: { units: 'G21', spindleRpm: 12000, spindleState: 'M3' } });
-    resumeService.onStart({ totalLines: 6 });
-
-    // Save checkpoint at line 3
+    r.ctrl.command('gcode:load', 'test.nc', text, 0, {});
+    await advance(50);
+    resumeService.onLoad({ filename: 'test.nc', gcodeText: text, modalState: { units: 'G21', spindleRpm: 12000, spindleState: 'M3' } });
+    r.ctrl.command('gcode:start');
+    await until(() => r.fw.executed.length >= 50, 120000, '50 moves');
+    const cutSoFar = r.fw.executed.length;
+    const lastLine = r.ctrl.job.nextLineToRun() - 1;
     resumeService.store.save({
         filename: 'test.nc',
-        gcodeText: gcode,
+        gcodeText: text,
         gcodeHash: 'testhash',
-        totalLines: 6,
-        lastExecutedLine: 3,
-        lastConfirmedPos: { x: 10, y: 10, z: -1 },
-        modalState: { units: 'G21', spindleRpm: 12000, spindleState: 'M3', feedRate: 200 },
+        totalLines: r.ctrl._loadedLines.length,
+        lastExecutedLine: lastLine,
+        lastConfirmedPos: r.ctrl.job.lastConfirmedPos,
+        modalState: { units: 'G21', spindleRpm: 12000, spindleState: 'M3', feedRate: 1200 },
         timestamp: Date.now(),
     });
 
-    const resumeRes = resumeService.resumeFromCheckpoint();
-    assert.strictEqual(resumeRes.ok, true, 'resumeFromCheckpoint should succeed');
-    assert(ctrl._loadedGcode.includes('M3 S12000'), 'Loaded G-code must contain preamble spindle command');
-    assert(ctrl._loadedGcode.includes('G1 X20 Y20'), 'Loaded G-code must contain remaining cut line');
+    // power cut: the job dies with the machine
+    r.ctrl.command('gcode:stop');
+    await advance(400);
 
-    ctrl.unbind();
-    console.log('ALL TESTS PASSED SUCCESSFULLY!');
+    // The checkpoint really is on disk, and a progress checkpoint is small:
+    // the program is written once to its own file, not inlined into every
+    // save (that would have rewritten 13 MB every 25 lines on the big files).
+    const cpPath = path.join(tmpDir, 'job_resume.json');
+    const gcodePath = path.join(tmpDir, 'job_resume_gcode.nc');
+    assert.ok(fs.existsSync(cpPath), 'checkpoint written to disk');
+    assert.ok(fs.existsSync(gcodePath), 'program stored once, alongside it');
+    const cpSize = fs.statSync(cpPath).size;
+    assert.ok(cpSize < 4096, `progress checkpoint is ${cpSize} bytes -- it should not carry the program`);
+    assert.ok(fs.statSync(gcodePath).size > 1000, 'the program file holds the program');
+    assert.ok(!JSON.parse(fs.readFileSync(cpPath, 'utf8')).gcodeText, 'no inline copy of the program');
+
+    const res = resumeService.resumeFromCheckpoint();
+    assert.strictEqual(res.ok, true, res.error);
+    assert.strictEqual(res.fromLine, lastLine + 1);
+    assert.deepStrictEqual(res.preamble, [], 'the controller builds the resume moves, not the service');
+    await until(() => !r.ctrl.job.active && r.fw.state === defs.ST_IDLE, 300000, 'resumed job end');
+    const resumed = r.fw.executed.slice(cutSoFar);
+    assert.ok(resumed.length > 0);
+    assert.ok(resumed[0].to.z >= 8, 'resume lifts to the configured safe height first');
+    assert.ok(resumed.some((e) => Math.abs(e.to.z + 1) < 0.01), 'and plunges back to the cutting depth');
+    // the machine finished the file: last executed target is the final move
+    const lastMove = resumed[resumed.length - 1];
+    assert.ok(lastMove.to.z >= 5, 'program ends with the retract');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    r.close();
+    console.log(`  ok  power-cut checkpoint resumes at line ${res.fromLine} through the controller's safe preamble`);
 }
 
-runTests().catch((err) => {
+(async () => {
+    console.log('Testing RSP alarm / stop / power-cut resume...');
+    await testAlarmThenUnlockThenStart();
+    await testStopThenStartResumes();
+    await testCheckpointResumeUsesControllerPreamble();
+    console.log('ALL TESTS PASSED SUCCESSFULLY!');
+    process.exit(0);
+})().catch((err) => {
     console.error('Test failed:', err);
     process.exit(1);
 });

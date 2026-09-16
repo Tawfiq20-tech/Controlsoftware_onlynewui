@@ -257,14 +257,14 @@ export default function DevicePanel() {
 
             const { x, y, z, feedRate } = jogCmd;
             
-            if (Math.abs(x) > 0.01 || Math.abs(y) > 0.01 || Math.abs(z) > 0.01) {
+            if (Math.abs(x) > 0.001 || Math.abs(y) > 0.001 || Math.abs(z) > 0.001) {
                 const scaleFactor = feedRate / 2000;
                 const distance = 0.5 * scaleFactor;
                 
                 backendJog(
-                    Math.abs(x) > 0.01 ? x * distance : undefined,
-                    Math.abs(y) > 0.01 ? y * distance : undefined,
-                    Math.abs(z) > 0.01 ? z * distance : undefined,
+                    Math.abs(x) > 0.001 ? x * distance : undefined,
+                    Math.abs(y) > 0.001 ? y * distance : undefined,
+                    Math.abs(z) > 0.001 ? z * distance : undefined,
                     feedRate
                 );
             }

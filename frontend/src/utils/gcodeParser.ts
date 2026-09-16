@@ -19,6 +19,7 @@ export interface GCodeFile {
         maxZ: number;
     };
     segments: ToolpathSegment[];
+    parsedToolpath?: ParsedToolpath;
     stats: {
         rapidCount: number;
         cutCount: number;
@@ -56,24 +57,17 @@ function getOrCreateWorker(): Worker | null {
                 { type: 'module' }
             );
             workerInstance.onmessage = (e: MessageEvent<{ type: string; id?: number; result?: GCodeParseResult; error?: string }>) => {
-                const { id, type, result, error } = e.data;
+                const { id, result, error } = e.data;
                 if (id === undefined) return;
                 const req = pendingRequests.get(id);
                 if (!req) return;
                 pendingRequests.delete(id);
-
-                if (type === 'SUCCESS' && result) {
-                    req.resolve(result);
-                } else {
-                    req.reject(new Error(error || 'Worker parsing failed'));
-                }
+                if (error) req.reject(new Error(error));
+                else if (result) req.resolve(result);
             };
             workerInstance.onerror = (err) => {
                 console.warn('[GCodeParserWorker] Worker error, falling back to main thread:', err);
-                for (const [, req] of pendingRequests) {
-                    req.reject(new Error('Worker encountered an error'));
-                }
-                pendingRequests.clear();
+                workerInstance?.terminate();
                 workerInstance = null;
             };
         } catch (e) {
@@ -93,15 +87,14 @@ export async function parseGcodeAsync(content: string): Promise<GCodeParseResult
     if (!worker) {
         return parseGcodeFile(content);
     }
-
-    const currentId = ++reqId;
     return new Promise<GCodeParseResult>((resolve, reject) => {
-        pendingRequests.set(currentId, { resolve, reject });
+        const id = ++reqId;
+        pendingRequests.set(id, { resolve, reject });
         try {
-            worker.postMessage({ type: 'PARSE', id: currentId, content });
+            worker.postMessage({ type: 'PARSE', id, content });
         } catch (postErr) {
-            pendingRequests.delete(currentId);
             console.warn('[GCodeParserWorker] postMessage failed, falling back to sync parse:', postErr);
+            pendingRequests.delete(id);
             try {
                 resolve(parseGcodeFile(content));
             } catch (syncErr) {
@@ -123,6 +116,7 @@ export class GCodeParser {
             totalLines: res.totalLines,
             bounds: res.bounds,
             segments: res.segments,
+            parsedToolpath: res.parsedToolpath,
             stats: res.stats,
         };
     }

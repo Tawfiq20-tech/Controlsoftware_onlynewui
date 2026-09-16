@@ -46,6 +46,8 @@ const { RecoveryOrchestrator } = require('./RecoveryOrchestrator');
 // Save a checkpoint every this many executed lines (in addition to
 // save-on-stop/error/pause). Lower = more disk writes but finer granularity.
 const CHECKPOINT_EVERY_N = 25;
+// ...and never more often than this, however fast the lines go by.
+const CHECKPOINT_MIN_INTERVAL_MS = 1000;
 
 class JobResumeService extends EventEmitter {
     /**
@@ -183,14 +185,8 @@ class JobResumeService extends EventEmitter {
 
         this._log.info?.(`[JobResume] Resuming "${cp.filename}" from line ${fromLine} / ${cp.totalLines}`);
 
-        // Build the preamble to restore modal state.
-        let preamble = [];
-        if (!opts.skipPreamble) {
-            const config = this.getConfig?.();
-            const safeZ = config?.get?.('preferences.safeHeight') ?? 10;
-            const currentPos = ctl.state?.status?.mpos || { x: 0, y: 0, z: 0 };
-            preamble = RecoveryOrchestrator.buildResumePreamble(cp, currentPos, safeZ);
-        }
+        const config = this.getConfig?.();
+        const safeZ = config?.get?.('preferences.safeHeight') ?? 10;
 
         // Restore pending state so onStart() gets the right data when
         // gcode:startFromLine internally fires gcode:load equivalent.
@@ -200,19 +196,34 @@ class JobResumeService extends EventEmitter {
             modalState: cp.modalState || {},
         };
 
-        // If there's a preamble, prepend it to the remaining G-code lines from fromLine.
-        // The preamble lines run before the resume point, ensuring modal
-        // state (Safe Z, XY position, Spindle M3, Dwell, Z lower) is correct.
-        let gcodeToLoad = cp.gcodeText;
-        if (preamble.length > 0) {
-            const origLines = String(cp.gcodeText || '').split(/\r?\n/);
-            const remainingLines = origLines.slice(Math.max(0, fromLine - 1));
-            gcodeToLoad = preamble.concat(remainingLines).join('\n');
-            ctl.command('gcode:load', cp.filename, gcodeToLoad);
-            ctl.command('gcode:startFromLine', 1);
+        // Controllers that build their own safe resume (RSP: lib/wireCompiler +
+        // lib/resumeFromLine) get the file unchanged and the line to resume at.
+        // Prepending a preamble here would be wrong for them twice over: the
+        // file's own units line sits BEFORE the resume point, so an inch file
+        // continued after a plain "G21" preamble would read every remaining
+        // coordinate as millimetres, and the controller would then add its own
+        // retract/travel/plunge on top.
+        const controllerBuildsPreamble = typeof ctl.getResumePoint === 'function';
+        let preamble = [];
+        if (controllerBuildsPreamble) {
+            ctl.command('gcode:load', cp.filename, cp.gcodeText);
+            ctl.command('gcode:startFromLine', fromLine, { safeZ });
         } else {
-            ctl.command('gcode:load', cp.filename, gcodeToLoad);
-            ctl.command('gcode:startFromLine', fromLine);
+            if (!opts.skipPreamble) {
+                const currentPos = ctl.state?.status?.mpos || { x: 0, y: 0, z: 0 };
+                preamble = RecoveryOrchestrator.buildResumePreamble(cp, currentPos, safeZ);
+            }
+            let gcodeToLoad = cp.gcodeText;
+            if (preamble.length > 0) {
+                const origLines = String(cp.gcodeText || '').split(/\r?\n/);
+                const remainingLines = origLines.slice(Math.max(0, fromLine - 1));
+                gcodeToLoad = preamble.concat(remainingLines).join('\n');
+                ctl.command('gcode:load', cp.filename, gcodeToLoad);
+                ctl.command('gcode:startFromLine', 1);
+            } else {
+                ctl.command('gcode:load', cp.filename, gcodeToLoad);
+                ctl.command('gcode:startFromLine', fromLine);
+            }
         }
 
         this.io.emit('job:resume:start', {
@@ -286,7 +297,14 @@ class JobResumeService extends EventEmitter {
             this._active.lastExecutedLine = lineNo ?? executed;
             if (this._active.totalLines === 0 && total) this._active.totalLines = total;
             this._progressCount++;
-            if (this._progressCount % CHECKPOINT_EVERY_N === 0) {
+            // Every N lines AND at most once a second: a 3D finishing file
+            // finishes hundreds of lines a second, and each checkpoint is a
+            // write + fsync + backup copy. Losing at most a second of progress
+            // to a power cut is a far better trade than fsyncing while the
+            // machine is cutting.
+            const now = Date.now();
+            if (this._progressCount % CHECKPOINT_EVERY_N === 0 && (now - (this._lastCheckpointAt || 0)) >= CHECKPOINT_MIN_INTERVAL_MS) {
+                this._lastCheckpointAt = now;
                 this._saveActive();
             }
         };

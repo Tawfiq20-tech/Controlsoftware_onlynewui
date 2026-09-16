@@ -13,13 +13,27 @@ function createSessionLogger(sessionsDir, portPath) {
     );
     const stream = fs.createWriteStream(filename, { flags: 'a' });
     let lastPositionTime = 0;
+    let broken = false;
     const POSITION_THROTTLE_MS = 1000;
 
+    // A write stream with no 'error' listener throws an UNCAUGHT exception when
+    // the write fails -- disk full, permission denied, or the drive the app
+    // runs from being pulled out. Logging must never be able to take the sender
+    // down in the middle of a carve (plan BE-28a): give up on the log file and
+    // let the job carry on.
+    stream.on('error', (err) => {
+        if (broken) return;
+        broken = true;
+        // eslint-disable-next-line no-console
+        console.error(`[SessionLogger] session log disabled: ${err && err.message ? err.message : err}`);
+    });
+
     function write(record) {
+        if (broken) return;
         try {
             stream.write(JSON.stringify(record) + '\n');
         } catch (err) {
-            // ignore write errors
+            broken = true;
         }
     }
 
@@ -51,6 +65,7 @@ function createSessionLogger(sessionsDir, portPath) {
         },
         close() {
             try {
+                broken = true; // no further writes; errors after end() are not ours to report
                 stream.end();
             } catch (_) {}
         },

@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import './App.css';
+// Touchscreen overrides -- every rule is scoped to `.app.is-vertical`,
+// so the horizontal layout is untouched.
+import './styles/vertical-touch.css';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
-import Visualizer3D from './components/Visualizer3D/Visualizer3D';
+import Visualizer3D, { GcodePanel } from './components/Visualizer3D/Visualizer3D';
 import DevicePanel from './components/DevicePanel';
 import ProjectPanel from './components/ProjectPanel';
 import Settings from './components/Settings/Settings';
 import Library from './components/Library/Library';
 import ErrorBoundary from './components/ErrorBoundary';
 import StatusBar from './components/StatusBar';
-import { QuickHelpButton } from './components/KeyboardShortcuts';
 import HomingOverlay from './components/HomingOverlay';
 import { SafetyBanner } from './components/SafetyBanner';
 import ResizeHandle from './components/ResizeHandle';
@@ -18,19 +20,66 @@ import ChatBot from './components/ChatBot/ChatBot';
 import RemotePinGate from './components/RemotePinGate';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
+import { useJobWakeLock } from './hooks/useJobWakeLock';
 import { useCNCStore } from './stores/cncStore';
 import controller from './utils/controller';
 import { GCodeParser } from './utils/gcodeParser';
+
+function getInitialLayout(): 'auto' | 'horizontal' | 'vertical' {
+    try {
+        const bodyForced = document.body.getAttribute('data-forced-layout');
+        if (bodyForced === 'horizontal' || bodyForced === 'vertical') return bodyForced;
+        const params = new URLSearchParams(window.location.search);
+        const layout = params.get('layout') || params.get('mode');
+        if (layout === 'horizontal' || layout === 'vertical') return layout;
+        if (window.location.port === '3000' || window.location.pathname.includes('horizontal')) return 'horizontal';
+        if (window.location.port === '3001' || window.location.pathname.includes('vertical')) return 'vertical';
+    } catch (_) {}
+    return 'auto';
+}
+
+function useIsVertical(layout: 'auto' | 'horizontal' | 'vertical'): boolean {
+    const [isVert, setIsVert] = useState(() => {
+        if (layout === 'vertical') return true;
+        if (layout === 'horizontal') return false;
+        if (typeof window === 'undefined') return false;
+        return window.matchMedia('(max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px)').matches;
+    });
+
+    useEffect(() => {
+        if (layout === 'vertical') {
+            setIsVert(true);
+            return;
+        }
+        if (layout === 'horizontal') {
+            setIsVert(false);
+            return;
+        }
+        const mq = window.matchMedia('(max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px)');
+        const handler = (e: MediaQueryListEvent) => setIsVert(e.matches);
+        setIsVert(mq.matches);
+        mq.addEventListener('change', handler);
+        return () => mq.removeEventListener('change', handler);
+    }, [layout]);
+
+    return isVert;
+}
 
 function AppInner() {
     const [activeHeaderTab, setActiveHeaderTab] = useState('Prepare');
     const [probingOpen, setProbingOpen] = useState(false);
     const [probingType, setProbingType] = useState<'z' | 'xyz' | null>(null);
+    const [layout, setLayout] = useState<'auto' | 'horizontal' | 'vertical'>(getInitialLayout);
+    const isVertical = useIsVertical(layout);
 
     // Backend socket bootstrap + auto-connect poll -- must run regardless
     // of which header tab is active (Tawfiq msg11358 item 3). See
     // hooks/useAutoConnect.ts for why this can't live inside DevicePanel.
     useAutoConnect();
+
+    // Don't let the PC fall asleep mid-carve: the controller stops the machine
+    // by itself when the USB port suspends with it.
+    useJobWakeLock();
 
     // Push the parsed G-code to the backend feeder as soon as it's available and
     // the backend has a live controller instance. This is the single source of
@@ -50,8 +99,10 @@ function AppInner() {
         fileLoadedBackend,
         fileInfo,
         gcode,
+        currentLine,
         setGcode,
         setToolpathSegments,
+        setParsedToolpath,
         addConsoleLog,
     } = useCNCStore();
     useEffect(() => {
@@ -78,6 +129,9 @@ function AppInner() {
             if (result.lines && result.lines.length > 0) {
                 setGcode(result.lines);
                 setToolpathSegments(result.segments);
+                if (result.parsedToolpath) {
+                    setParsedToolpath(result.parsedToolpath);
+                }
                 addConsoleLog('info', `Restored ${result.lines.length} G-code lines from last session`);
             }
         } catch (error) {
@@ -99,8 +153,65 @@ function AppInner() {
             if (target.closest('input, textarea, [contenteditable="true"]')) return;
             e.preventDefault();
         };
+
+        // Desktop App Mode: Block browser refresh keystrokes (F5, Ctrl+R, Ctrl+Shift+R, Ctrl+F5)
+        // so the software interface never reloads accidentally on keypresses.
+        const blockRefreshKeys = (e: KeyboardEvent) => {
+            const isRefreshKey = 
+                e.key === 'F5' || 
+                (e.key === 'r' && (e.ctrlKey || e.metaKey)) ||
+                (e.key === 'R' && (e.ctrlKey || e.metaKey));
+
+            if (isRefreshKey) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        };
+
+        // Prevent accidental browser reload / tab close when connected or working
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            const state = useCNCStore.getState();
+            if (state.connected || state.machineState === 'running') {
+                e.preventDefault();
+                e.returnValue = 'A CNC session is active. Are you sure you want to exit?';
+                return e.returnValue;
+            }
+        };
+
+        // Non-copyable UI: Block copy, cut, and selection globally on non-editable elements
+        const blockCopy = (e: ClipboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('input, textarea, [contenteditable="true"]')) return;
+            e.preventDefault();
+        };
+
+        const blockCut = (e: ClipboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('input, textarea, [contenteditable="true"]')) return;
+            e.preventDefault();
+        };
+
+        const blockSelectStart = (e: Event) => {
+            const target = e.target as HTMLElement;
+            if (target.closest('input, textarea, [contenteditable="true"]')) return;
+            e.preventDefault();
+        };
+
         document.addEventListener('contextmenu', blockContextMenu);
-        return () => document.removeEventListener('contextmenu', blockContextMenu);
+        document.addEventListener('copy', blockCopy);
+        document.addEventListener('cut', blockCut);
+        document.addEventListener('selectstart', blockSelectStart);
+        window.addEventListener('keydown', blockRefreshKeys, true);
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        return () => {
+            document.removeEventListener('contextmenu', blockContextMenu);
+            document.removeEventListener('copy', blockCopy);
+            document.removeEventListener('cut', blockCut);
+            document.removeEventListener('selectstart', blockSelectStart);
+            window.removeEventListener('keydown', blockRefreshKeys, true);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+        };
     }, []);
 
     // Activate global keyboard shortcuts — Ctrl+O triggers file open via sidebar
@@ -123,69 +234,102 @@ function AppInner() {
     }, []);
 
     return (
-        <div className="app">
+        <div className={`app ${layout === 'horizontal' ? 'force-horizontal' : layout === 'vertical' ? 'force-vertical' : ''} ${isVertical ? 'is-vertical' : ''}`}>
             <HomingOverlay />
             <SafetyBanner />
-            <Header activeTab={activeHeaderTab} setActiveTab={setActiveHeaderTab} />
+            <Header
+                activeTab={activeHeaderTab}
+                setActiveTab={setActiveHeaderTab}
+                layout={layout}
+                onLayoutChange={setLayout}
+            />
 
-            <main className="app-main">
-                {(activeHeaderTab === 'Prepare' || activeHeaderTab === 'Carve') && (
-                    <>
-                        <ErrorBoundary fallbackMessage="Sidebar error">
-                            <Sidebar />
-                        </ErrorBoundary>
-                        <ResizeHandle
-                            targetSelector=".sidebar"
-                            cssVar="--sb-w"
-                            storageKey="cnc.sidebarW"
-                            defaultPx={360}
-                            minPx={200}
-                            maxPx={520}
-                            side="left"
-                        />
-                    </>
+            <div className="app-body-wrap">
+                {isVertical && (activeHeaderTab === 'Prepare' || activeHeaderTab === 'Carve') ? (
+                    <div className="app-vertical-grid-2x2">
+                        {/* Left Column: Full-height Sidebar with Popup Camera placed down at bottom */}
+                        <div className="vgrid-left-col">
+                            <ErrorBoundary fallbackMessage="Sidebar error">
+                                <Sidebar activeHeaderTab={activeHeaderTab} layout={layout} />
+                            </ErrorBoundary>
+                        </div>
+
+                        {/* Right Column: 3D Visualizer (Full height in Prepare, split with G-Code in Carve) */}
+                        <div className={`vgrid-right-col ${activeHeaderTab === 'Carve' ? 'has-gcode' : ''}`}>
+                            <div className="vgrid-top-right">
+                                <ErrorBoundary fallbackMessage="3D viewport error">
+                                    <Visualizer3D mode={activeHeaderTab === 'Carve' ? 'carve' : 'prepare'} hideGcodePanel={true} />
+                                </ErrorBoundary>
+                            </div>
+                            {activeHeaderTab === 'Carve' && (
+                                <div className="vgrid-bottom-right">
+                                    <ErrorBoundary fallbackMessage="G-code panel error">
+                                        <GcodePanel gcode={gcode} currentLine={currentLine} fileName={fileInfo?.name} />
+                                    </ErrorBoundary>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                ) : (
+                    <main className="app-main">
+                        {(activeHeaderTab === 'Prepare' || activeHeaderTab === 'Carve') && (
+                            <>
+                                <ErrorBoundary fallbackMessage="Sidebar error">
+                                    <Sidebar activeHeaderTab={activeHeaderTab} layout={layout} />
+                                </ErrorBoundary>
+                                <ResizeHandle
+                                    targetSelector=".sidebar"
+                                    cssVar="--sb-w"
+                                    storageKey="cnc.sidebarW"
+                                    defaultPx={360}
+                                    minPx={200}
+                                    maxPx={520}
+                                    side="left"
+                                />
+                            </>
+                        )}
+                        {activeHeaderTab === 'Settings' && null /* Settings provides its own sidebar */}
+
+                        <div className="viewport-container">
+                            {activeHeaderTab === 'Device' && (
+                                <ErrorBoundary fallbackMessage="Device panel error">
+                                    <DevicePanel />
+                                </ErrorBoundary>
+                            )}
+                            {activeHeaderTab === 'Project' && (
+                                <ErrorBoundary fallbackMessage="Project panel error">
+                                    <ProjectPanel />
+                                </ErrorBoundary>
+                            )}
+                            {activeHeaderTab === 'Prepare' && (
+                                <ErrorBoundary fallbackMessage="3D viewport error">
+                                    <Visualizer3D mode="prepare" />
+                                </ErrorBoundary>
+                            )}
+                            {activeHeaderTab === 'Carve' && (
+                                <ErrorBoundary fallbackMessage="3D viewport error">
+                                    <Visualizer3D mode="carve" />
+                                </ErrorBoundary>
+                            )}
+                            {activeHeaderTab === 'Settings' && (
+                                <ErrorBoundary fallbackMessage="Settings error">
+                                    <Settings />
+                                </ErrorBoundary>
+                            )}
+                            {activeHeaderTab === 'Library' && (
+                                <ErrorBoundary fallbackMessage="Library error">
+                                    <Library />
+                                </ErrorBoundary>
+                            )}
+                        </div>
+                    </main>
                 )}
-                {activeHeaderTab === 'Settings' && null /* Settings provides its own sidebar */}
-
-                <div className="viewport-container">
-                    {activeHeaderTab === 'Device' && (
-                        <ErrorBoundary fallbackMessage="Device panel error">
-                            <DevicePanel />
-                        </ErrorBoundary>
-                    )}
-                    {activeHeaderTab === 'Project' && (
-                        <ErrorBoundary fallbackMessage="Project panel error">
-                            <ProjectPanel />
-                        </ErrorBoundary>
-                    )}
-                    {activeHeaderTab === 'Prepare' && (
-                        <ErrorBoundary fallbackMessage="3D viewport error">
-                            <Visualizer3D mode="prepare" />
-                        </ErrorBoundary>
-                    )}
-                    {activeHeaderTab === 'Carve' && (
-                        <ErrorBoundary fallbackMessage="3D viewport error">
-                            <Visualizer3D mode="carve" />
-                        </ErrorBoundary>
-                    )}
-                    {activeHeaderTab === 'Settings' && (
-                        <ErrorBoundary fallbackMessage="Settings error">
-                            <Settings />
-                        </ErrorBoundary>
-                    )}
-                    {activeHeaderTab === 'Library' && (
-                        <ErrorBoundary fallbackMessage="Library error">
-                            <Library />
-                        </ErrorBoundary>
-                    )}
-                </div>
-            </main>
+            </div>
 
             {/* Bottom status bar — always visible */}
             <StatusBar />
 
-            {/* Floating quick-help button */}
-            <QuickHelpButton />
+
 
             {/* Probing wizard modal — opened from Sidebar PROBE tab tiles.
                 Type is preselected there, modal goes straight to JOG+BIT. */}

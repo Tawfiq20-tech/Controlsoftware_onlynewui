@@ -105,6 +105,17 @@ const EV_FAULT = 0x03;           // payload: axis u8 code u8
 const EV_ESTOP = 0x04;           // payload: none
 const EV_COMM_LOST = 0x05;       // payload: none (device entered safe-stop state)
 const EV_STATUS = 0x06;          // payload: telemetry block (see Telemetry)
+const EV_ALM_GLITCH = 0x07;      // payload: axis u8 count u16 max_ms u16 -- driver ALM
+                                 // blips the firmware filtered out (motion continued).
+                                 // Sent by fw 0.1.1-almfilter+, ignored by older hosts.
+
+// EV_FAULT code byte (fw 0.1.1-almfilter+; older firmware always sends 0)
+const FAULT_CODE_UNSPEC = 0x00;
+const FAULT_CODE_ALM_MOTION = 0x01; // ALM held >= 50 ms while moving
+const FAULT_CODE_ALM_ENABLE = 0x02; // ALM active when the drivers were armed
+
+// EV_FAULT axis byte indexes the firmware's 4-driver table (main.c axes[])
+const FAULT_AXIS_NAMES = ['X', 'Y1', 'Y2', 'Z'];
 
 // ---------------------------------------------------------------------------
 // Machine states (same ordinals as firmware sys_state_t -- MUST match)
@@ -236,6 +247,15 @@ class Telemetry {
         return !!(this.flags & 0x10);
     }
 
+    /**
+     * Firmware capability (fw 0.1.1-almfilter+): an aborted move commits the
+     * steps it actually took, so x/y/z stay exact after a fault/stop/E-stop.
+     * Older firmware left x/y/z at the START of the interrupted move.
+     */
+    posExact() {
+        return !!(this.flags & 0x20);
+    }
+
     stateName() {
         return STATE_NAMES[this.state] || `State${this.state}`;
     }
@@ -261,6 +281,7 @@ class Telemetry {
             comm_lost: this.commLost(),
             job_active: this.jobActive(),
             feed_hold: this.feedHold(),
+            pos_exact: this.posExact(),
             dbg_jog_active: this.jogActive,
             dbg_jog_done_evt: this.jogDoneEvt,
             dbg_tim2_isr_count: this.tim2IsrCount,
@@ -280,6 +301,8 @@ module.exports = {
     ST_ERR_FAULT, ST_ERR_NAMES,
     PROBE_RESULT_CONTACT, PROBE_RESULT_NO_CONTACT,
     EV_EXECUTED, EV_JOB_DONE, EV_FAULT, EV_ESTOP, EV_COMM_LOST, EV_STATUS,
+    EV_ALM_GLITCH, FAULT_CODE_UNSPEC, FAULT_CODE_ALM_MOTION, FAULT_CODE_ALM_ENABLE,
+    FAULT_AXIS_NAMES,
     ST_BOOT, ST_IDLE, ST_HOMING, ST_JOGGING, ST_STREAMING, ST_RUNNING,
     ST_HOLD, ST_STOPPING, ST_ALARM, ST_ESTOP, ST_FAULT, STATE_NAMES,
     TEL_LEN,

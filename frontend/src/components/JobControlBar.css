@@ -217,3 +217,100 @@
         font-size: 10px;
     }
 }
+/* Program pause (M0/M1) — the machine is holding until the operator continues.
+   Sits directly above the control bar so the Resume button is where the eye
+   already is. */
+.job-program-pause {
+    position: absolute;
+    bottom: 84px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: var(--radius-lg, 10px);
+    background: var(--bg-overlay, rgba(22, 25, 30, 0.95));
+    border: 1px solid #b7791f;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    color: #f6d38a;
+    font-size: 12px;
+    z-index: 16;
+}
+
+.job-program-pause-text {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.35;
+}
+
+.job-program-pause-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid #b7791f;
+    background: #b7791f;
+    color: #1a1d23;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.job-program-pause-btn:hover:not(:disabled) {
+    background: #d69e2e;
+    border-color: #d69e2e;
+}
+
+.job-program-pause-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+    .job-program-pause {
+        bottom: 78px;
+        flex-wrap: wrap;
+        font-size: 11px;
+    }
+}
+
+/* Connection lost while the machine is working: what is on screen is the last
+   known state, and the buttons cannot reach the machine. Say so loudly. */
+.job-connection-lost {
+    position: absolute;
+    bottom: 148px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: var(--radius-lg, 10px);
+    background: #43201f;
+    border: 1px solid #c0392b;
+    color: #ffd9d4;
+    font-size: 12px;
+    line-height: 1.35;
+    z-index: 17;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* Small note under the progress bar: pressing ▶ will resume, not restart. */
+.job-resume-hint {
+    font-size: 10px;
+    color: #f6d38a;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@media (max-width: 720px) {
+    .job-connection-lost {
+        bottom: 140px;
+        font-size: 11px;
+    }
+}

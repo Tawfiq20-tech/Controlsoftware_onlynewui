@@ -1,0 +1,57 @@
+# Builds the Raspberry Pi kiosk image (.img.xz for Raspberry Pi Imager).
+# Download it from the run's "Artifacts" section when it finishes.
+name: Raspberry Pi image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'pi-kiosk/**'
+      - '.github/workflows/pi-image.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # pi-gen needs ~15 GB; the runner starts with ~14 GB free.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      # Lets the x86 runner execute the arm64 image's programs.
+      # pi-gen's build-docker.sh looks for qemu-aarch64 on the host.
+      - name: Install arm64 emulation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user qemu-user-binfmt
+          which qemu-aarch64
+
+      - name: Pack the bundle
+        run: bash pi-kiosk/build-bundle.sh
+
+      - name: Build the image
+        env:
+          PI_SERVICE_PASSWORD: ${{ secrets.PI_SERVICE_PASSWORD }}
+        run: |
+          # The "service" account is for maintenance only (no SSH, no screen login).
+          # Without the PI_SERVICE_PASSWORD secret it gets a random, unknown password.
+          PASS="${PI_SERVICE_PASSWORD:-$(openssl rand -base64 24)}"
+          echo "::add-mask::$PASS"
+          sed -i "s|^FIRST_USER_PASS=.*|FIRST_USER_PASS='$PASS'|" pi-kiosk/image/config
+          bash pi-kiosk/image/build-image.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OnefinitySender-Raspi-arm64-image
+          path: dist-pi/*.img.xz
+          compression-level: 0
+          retention-days: 14
