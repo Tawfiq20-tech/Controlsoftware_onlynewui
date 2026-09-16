@@ -28,12 +28,19 @@ jobs:
           df -h /
 
       # Lets the x86 runner execute the arm64 image's programs.
-      # pi-gen's build-docker.sh looks for qemu-aarch64 on the host.
+      # arm64 programs must run inside pi-gen's container, so the handler has
+      # to be registered with the F (fix-binary) flag -- Ubuntu's
+      # qemu-user-binfmt registers a host-only path and arch-test fails.
+      # tonistiigi/binfmt registers /usr/bin/qemu-aarch64 with F; qemu-user
+      # (without its binfmt package) gives build-docker.sh the qemu-aarch64
+      # it looks for, and its interpreter check then matches.
       - name: Install arm64 emulation
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user qemu-user-binfmt
+          sudo apt-get install -y --no-install-recommends qemu-user
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
           which qemu-aarch64
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
 
       - name: Pack the bundle
         run: bash pi-kiosk/build-bundle.sh
