@@ -144,6 +144,8 @@ export type ControllerEventName =
     | 'serialport:close'
     | 'serialport:error'
     | 'connection:lost'
+    | 'controller:restarted'
+    | 'controller:restartCleared'
     | 'serialport:read'
     | 'controller:type'
     | 'controller:state'
@@ -546,6 +548,14 @@ class Controller {
 
         this.socket.on('connection:lost', (data: { port: string; resumeLine: number }) => {
             this._emit('connection:lost', data);
+        });
+
+        this.socket.on('controller:restarted', (data: unknown) => {
+            this._emit('controller:restarted', data);
+        });
+
+        this.socket.on('controller:restartCleared', (data: unknown) => {
+            this._emit('controller:restartCleared', data);
         });
 
         this.socket.on('serialport:error', (data: { error: string }) => {

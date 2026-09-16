@@ -21,7 +21,12 @@ const { createSessionLogger } = require('./SessionLogger');
 const { ConfigStore } = require('./ConfigStore');
 const { isRotaryFile } = require('../lib/rotary');
 const remoteDiagMirror = require('./RemoteDiagMirror');
+const { ControllerRestartMonitor } = require('./ControllerRestartMonitor');
 const logger = require('../logger');
+
+// Commands that start the machine on the loaded program: they wait for a file
+// load still being prepared, or they would run the previous file.
+const JOB_START_COMMANDS = new Set(['gcode:start', 'gcode:startFromLine', 'gcode:resume', 'cyclestart']);
 
 class CNCEngine extends EventEmitter {
     /**
@@ -57,6 +62,15 @@ class CNCEngine extends EventEmitter {
 
         // Track whether a job is in a paused state for file-upload conflict detection.
         this._jobPaused = false;
+
+        // File loads still being prepared (worker thread), and a counter that
+        // cancels job starts waiting on them -- see _handleCommand.
+        this._loadsInFlight = new Set();
+        this._startGeneration = 0;
+
+        // Detects a controller board that rebooted between connections (its
+        // position is gone) -- see services/ControllerRestartMonitor.js.
+        this._restartMonitor = new ControllerRestartMonitor();
 
         // Serializes _handleOpen() attempts. Without this, two overlapping
         // serialport:open requests can both pass the "no connection yet"
@@ -146,7 +160,15 @@ class CNCEngine extends EventEmitter {
             });
 
             // ─── File Management ─────────────────────────────────
-            socket.on('file:load', (data) => this._handleFileLoad(socket, data));
+            socket.on('file:load', (data) => {
+                const load = this._handleFileLoad(socket, data).catch((err) => {
+                    logger.error(`[Engine] file:load failed: ${err && err.stack ? err.stack : err}`);
+                    socket.emit('file:loadError', { name: (data && data.name) || '', errorCount: 1, errors: [{ line: null, msg: `Loading failed: ${err && err.message ? err.message : err}` }] });
+                });
+                // Start commands wait for this (see _handleCommand).
+                this._loadsInFlight.add(load);
+                load.finally(() => this._loadsInFlight.delete(load));
+            });
             socket.on('file:unload', () => this._handleFileUnload(socket));
 
             // ECSS-E remote diag toggle is handled in _handleCommand (frontend
@@ -558,6 +580,7 @@ class CNCEngine extends EventEmitter {
 
         // Bind controller to connection
         this.controller.bind(this.connection);
+        this._restartMonitor.onBind();
 
         // Wire controller events to Socket.IO
         this._wireControllerEvents();
@@ -601,6 +624,10 @@ class CNCEngine extends EventEmitter {
 
         // Status updates
         this.controller.on('status', (status) => {
+            const restart = this._restartMonitor.onStatus(status);
+            if (restart && typeof this.controller.notifyControllerRestarted === 'function') {
+                this.controller.notifyControllerRestarted(restart);
+            }
             this.io.emit('controller:state', this.controller.type, {
                 status,
                 parserstate: this.controller.state.parserstate,
@@ -711,6 +738,13 @@ class CNCEngine extends EventEmitter {
 
         // Resume point (RSP): where a stopped/alarmed job can continue, and
         // the Start From Line dialog's preview of what a resume will do.
+        this.controller.on('controller:restarted', (info) => {
+            this.io.emit('controller:restarted', info);
+            if (this.sessionLogger) this.sessionLogger.logJob({ event: 'controllerRestarted', ...info });
+        });
+        this.controller.on('controller:restartCleared', (info) => {
+            this.io.emit('controller:restartCleared', info);
+        });
         this.controller.on('job:resumePoint', (point) => {
             this.io.emit('job:resumePoint', point);
             if (this.sessionLogger && point && point.line) {
@@ -966,6 +1000,9 @@ class CNCEngine extends EventEmitter {
                     resumeLine: lostJob.resumeLine,
                 });
             }
+            this._restartMonitor.onConnectionLost(lostJob && lostJob.jobWasActive
+                ? { name: (this.loadedFile && this.loadedFile.name) || '', line: lostJob.resumeLine, at: Date.now() }
+                : null);
             this.controller.unbind();
             this.controller.removeAllListeners();
             this.controller = null;
@@ -1027,6 +1064,28 @@ class CNCEngine extends EventEmitter {
         if (cmd === 'gcode:stop' || cmd === 'file:unload') {
             this._jobPaused = false;
             this._pendingUpload = null;
+            this._startGeneration += 1; // a Start still waiting for a file load is cancelled
+        }
+
+        // A file load is prepared on a worker thread now, so it can still be
+        // in progress when a Start arrives -- the Play button sends the file
+        // and Start 250 ms apart, the Space shortcut back to back. Starting
+        // then would run the PREVIOUSLY loaded program. Hold job starts until
+        // every load in progress has been applied; a Stop meanwhile cancels.
+        if (JOB_START_COMMANDS.has(cmd) && this._loadsInFlight.size > 0) {
+            const gen = this._startGeneration;
+            logger.info(`[Engine] command: ${cmd} waiting for the file load in progress`);
+            const waitForLoads = async () => {
+                while (this._loadsInFlight.size > 0) await Promise.all([...this._loadsInFlight]);
+            };
+            waitForLoads().then(() => {
+                if (gen !== this._startGeneration) {
+                    logger.info(`[Engine] command: ${cmd} cancelled (stop/unload while the file was loading)`);
+                    return;
+                }
+                this._dispatchToController(socket, cmd, args);
+            });
+            return;
         }
 
         // Save the durable checkpoint at the moments worth saving it.
@@ -1039,6 +1098,14 @@ class CNCEngine extends EventEmitter {
             }
         }
 
+        this._dispatchToController(socket, cmd, args);
+    }
+
+    _dispatchToController(socket, cmd, args) {
+        if (!this.controller) {
+            socket.emit('serialport:error', { error: 'No active controller' });
+            return;
+        }
         try {
             this.controller.command(cmd, ...args);
         } catch (err) {
@@ -1059,7 +1126,7 @@ class CNCEngine extends EventEmitter {
 
     // ─── File Management ─────────────────────────────────────────────
 
-    _handleFileLoad(socket, data) {
+    async _handleFileLoad(socket, data) {
         if (!this.controller) {
             logger.warn('[Engine] file:load rejected: no active controller');
             socket.emit('serialport:error', { error: 'No active controller' });
@@ -1126,12 +1193,27 @@ class CNCEngine extends EventEmitter {
             // M0/M1 program pauses stop the job until Resume. Off by default:
             // the operator starts the spindle before pressing Start.
             honorProgramPauses: this.config.get('preferences.honorProgramPauses', false) === true,
+            // Slow the short, zig-zag moves of fine 3D detail so the machine can
+            // follow the firmware's per-line start/stop (lib/firmwareMotionLimit.js).
+            // machine.motionLimit: { enabled, maxAccel: {x,y,z} mm/s^2, maxJump: {x,y,z} mm/s }
+            motionLimit: { enabled: true, ...(this.config.get('machine.motionLimit', {}) || {}) },
         };
-        this.controller.command('gcode:load', fileName, gcodeContent, spindleDelay, compileOptions);
+        // RSP compiles on a worker thread (lib/prepareProgram.js): compiling a
+        // large 3D file on this thread stalled the event loop for ~3.7 s, long
+        // enough for the RSP link to be declared lost (2026-09-16 19:32:42).
+        const controller = this.controller;
+        let loadResult;
+        if (typeof controller.loadGcode === 'function') {
+            loadResult = await controller.loadGcode(fileName, gcodeContent, spindleDelay, compileOptions);
+            // A newer load, an unload or a disconnect happened meanwhile: that one counts.
+            if (!loadResult || loadResult.superseded || this.controller !== controller) return;
+        } else {
+            controller.command('gcode:load', fileName, gcodeContent, spindleDelay, compileOptions);
+            loadResult = controller.lastLoadResult;
+        }
 
         // A file the controller refused (cannot run correctly on this machine)
         // is never announced as loaded -- clients keep Start disabled and show why.
-        const loadResult = this.controller.lastLoadResult;
         if (loadResult && loadResult.ok === false) {
             this.loadedFile = null;
             this._loadedGcodeContent = null;
@@ -1168,6 +1250,7 @@ class CNCEngine extends EventEmitter {
     }
 
     _handleFileUnload(socket) {
+        this._startGeneration += 1; // a Start still waiting for a file load is cancelled
         if (this.controller) {
             this.controller.command('gcode:unload');
         }

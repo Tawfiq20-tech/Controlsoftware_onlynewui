@@ -12,3 +12,4 @@ frontend/node_modules/
 
 # Raspberry Pi bundle / image builds
 dist-pi/
+backend/data/controller_last_seen.json

@@ -64,6 +64,11 @@ interface CNCStore {
     resumePoint: ResumePointInfo | null;
     setResumePoint: (p: ResumePointInfo | null) => void;
 
+    // Set while the controller board has rebooted and its position has not
+    // been re-established (zero X/Y/Z or home). SafetyBanner shows it.
+    controllerRestart: ControllerRestartInfo | null;
+    setControllerRestart: (r: ControllerRestartInfo | null) => void;
+
     // Whether the backend has a live controller instance for the current serial
     // connection. False the instant 'serialport:open' fires (port is open but
     // firmware detection hasn't finished), true once 'controller:type' arrives
@@ -304,6 +309,14 @@ export interface ResumePointInfo {
     positionWarning: string;
     originChanged?: boolean;
 }
+export interface ControllerRestartInfo {
+    message: string;
+    /** File that was running when the board restarted, if one was. */
+    jobName: string;
+    /** Line the job was cut off at (0 when no job was running). */
+    line: number;
+    at: number;
+}
 export interface ProgramPause {
     line: number;
     message: string;
@@ -362,6 +375,9 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
 
     resumePoint: null,
     setResumePoint: (resumePoint) => set({ resumePoint }),
+
+    controllerRestart: null,
+    setControllerRestart: (controllerRestart) => set({ controllerRestart }),
 
     // Backend controller-instance-ready flag
     controllerReady: false,

@@ -37,9 +37,9 @@ const codec = require('../rsp/codec');
 const { ReliableStream, LinkLost, RspTimeoutError } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
-const injectSpindleDelay = require('../../lib/injectSpindleDelay');
 const { cleanGcodeLines, buildResumeProgram, scanModalState } = require('../../lib/resumeFromLine');
 const { compileWire } = require('../../lib/wireCompiler');
+const { prepareProgram, prepareProgramAsync } = require('../../lib/prepareProgram');
 
 // Power-cut survival: durable checkpoint persistence is now handled
 // entirely by JobResumeService (services/jobresume/), which owns the
@@ -184,6 +184,8 @@ class RSPController extends EventEmitter {
         this._loadedGcode = '';
         this._loadedLines = [];     // compiled wire lines (lib/wireCompiler.js), cached once per load
         this._loadedMeta = null;    // compile report: pauses, tools, extents, warnings
+        this._loadedFeedLimited = null; // Uint8Array: lines the motion limit slowed
+        this._loadGeneration = 0;       // bumped by every load/unload; a stale worker result is dropped
         this.lastLoadResult = null; // { ok, name, meta } -- read by CNCEngine to broadcast or refuse
         this._loadedName = '';
         // Resume-after-stop bookkeeping (Tawfiq msg11237: "if started job and
@@ -1078,17 +1080,21 @@ class RSPController extends EventEmitter {
                 if (p.z !== undefined) mask |= AXIS_BIT_Z;
                 if (!mask) mask = AXIS_MASK_ALL;
                 if (mask === AXIS_MASK_ALL) this._clearPositionUncertain('re-zeroed X/Y/Z');
+                else this._noteAxesZeroed(mask);
                 this._noteOriginChanged('set a new work zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(mask));
                 break;
             }
             case 'zero:x':
+                this._noteAxesZeroed(AXIS_BIT_X);
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_X));
                 break;
             case 'zero:y':
+                this._noteAxesZeroed(AXIS_BIT_Y);
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Y));
                 break;
             case 'zero:z':
+                this._noteAxesZeroed(AXIS_BIT_Z);
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Z));
                 break;
             case 'wcs:zeroAll':
@@ -1100,99 +1106,26 @@ class RSPController extends EventEmitter {
 
             case 'gcode:load': {
                 const [name, gcode, spindleDelaySeconds, compileOptions] = args;
-                const incoming = gcode || '';
-                // Never replace the program under a running job (CNCEngine
-                // re-announces the same file itself; this guards every other
-                // caller). A job the firmware already dropped (alarm) is fine
-                // to replace: its resume point survives a same-file reload.
-                if (this.job && this.job.active && !this.job.firmwareLost) {
-                    logger.warn(`[RSP] gcode:load "${name || ''}" refused: a job is running`);
-                    this.emit('console', '⛔ A job is running. Stop it before loading another file.');
-                    this.lastLoadResult = { ok: false, busy: true, name: name || '', meta: { errorCount: 1, errors: [{ line: null, msg: 'A job is running. Stop it before loading another file.' }], warnings: [] } };
-                    break;
-                }
-                if (this.job && this.job.active) this.job.abort();
-                // MED#10: an aborted job object's .progress getter still
-                // reports its old executed/total counts (abort() doesn't
-                // clear _executed), and _currentLine was never reset here
-                // either -- so until the new job's first EV_EXECUTED came
-                // in, getSenderStatus() kept reporting the PREVIOUS file's
-                // line count/percentage overlaid on the newly loaded file
-                // (Tawfiq's "old-job-bleed" report).
-                if (this.job) this.job.resetProgress();
-                this._currentLine = 0;
-                this._loadedName = name || '';
-
-                // Firmware (easycnc_protocol.c, GcodeMove struct) has no
-                // arc-center field and rejects G2/G3 outright. Linearize
-                // here so ANY file the user loads just runs -- this only
-                // rewrites the in-memory copy sent to firmware, never the
-                // user's original file on disk.
+                // Supersedes any worker-thread load still in progress (loadGcode()).
+                this._loadGeneration += 1;
+                if (!this._loadAllowed(name)) break;
+                let prepared = null;
+                let prepError = null;
                 try {
-                    const { text: linearized, arcCount, segmentCount } = linearizeArcs(incoming);
-                    // Same host-side rewrite pattern as arc linearization:
-                    // insert a spin-up dwell after every M3/M4 so the tool
-                    // isn't plunging before the spindle is at speed. Without
-                    // this, preferences.spindleDelay was stored but never
-                    // read anywhere (FIXFILE.html FIX-16).
-                    const { text, insertedCount } = injectSpindleDelay(linearized, spindleDelaySeconds);
-                    // BE-1: compile to the exact wire lines the firmware reads
-                    // correctly (absolute G21 on the step grid, explicit feed,
-                    // no hex-float pattern) or refuse the file with line numbers.
-                    const compiled = compileWire(text, compileOptions || {});
-                    const meta = compiled.meta;
-                    if (meta.errorCount > 0) {
-                        const shown = meta.errors.slice(0, 5)
-                            .map((e) => (e.line ? `line ${e.line}: ${e.msg}` : e.msg)).join(' | ');
-                        const more = meta.errorCount > 5 ? ` (+${meta.errorCount - 5} more)` : '';
-                        logger.warn(`[RSP] gcode:load refused "${this._loadedName}": ${meta.errorCount} problem(s): ${shown}${more}`);
-                        this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${shown}${more}`);
-                        this._setLoadRejected(name, meta);
-                        break;
-                    }
-                    this._loadedGcode = compiled.text;
-                    this._loadedLines = compiled.lines;
-                    this._loadedMeta = meta;
-                    this._lastCompileOptions = compileOptions || {};
-                    this.lastLoadResult = { ok: true, name: this._loadedName, meta };
-                    if (arcCount > 0) {
-                        logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
-                        this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
-                    }
-                    if (insertedCount > 0) {
-                        logger.info(`[RSP] gcode:load inserted ${insertedCount} spindle spin-up dwell(s) (G4 P${spindleDelaySeconds}) after M3/M4`);
-                        this.emit('console', `ℹ️ Added a ${spindleDelaySeconds}s spindle spin-up dwell after each M3/M4 (your file is unchanged).`);
-                    }
-                    for (const w of meta.warnings.slice(0, 8)) {
-                        this.emit('console', `ℹ️ ${w.line ? `Line ${w.line}: ` : ''}${w.msg}`);
-                    }
-                    logger.info(`[RSP] gcode:load compiled ${meta.lineCount} lines (${meta.motionCount} moves, ${meta.clampedCount} feed-clamped, ${meta.pauses.length} program pause(s), ${meta.warnings.length} warning(s))`);
+                    prepared = prepareProgram(gcode || '', spindleDelaySeconds, compileOptions);
                 } catch (err) {
-                    logger.warn(`[RSP] gcode:load failed: ${err.message}`);
-                    this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${err.message}`);
-                    this._setLoadRejected(name, { errorCount: 1, errors: [{ line: null, msg: err.message }], warnings: [] });
-                    break;
+                    prepError = err;
                 }
-                // Power-cut recovery is now handled by JobResumeService,
-                // which intercepts at a higher level. A load of a DIFFERENT
-                // file drops the in-session resume point; re-sending the SAME
-                // file keeps it -- the frontend re-uploads the open file on
-                // reconnect/refresh, and on 2026-09-15 that silently wiped the
-                // line-3237 resume point and forced a restart from scratch.
-                if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
-                    logger.info(`[RSP] gcode:load same file re-sent -- keeping resume point at line ${this._resumeLine}`);
-                    this._emitResumePoint();
-                } else {
-                    this._clearResumePoint();
-                }
-                logger.info(`[RSP] gcode:load "${this._loadedName}" (${this._loadedGcode.length} bytes)`);
+                this._applyPreparedLoad(name, spindleDelaySeconds, compileOptions, prepared, prepError);
                 break;
             }
 
             case 'gcode:unload':
+                this._loadGeneration += 1; // a load still being prepared must not come back
                 if (this.job && this.job.active) this.job.abort();
                 this._loadedGcode = '';
                 this._loadedLines = [];
+                this._loadedFeedLimited = null;
                 this._loadedMeta = null;
                 this.lastLoadResult = null;
                 this._loadedName = '';
@@ -1205,6 +1138,10 @@ class RSPController extends EventEmitter {
                 if (this.job && this.job.active && !this.job.firmwareLost) {
                     if (this.job.paused) return this._dispatch('gcode:resume', []);
                     this.emit('console', 'ℹ️ The job is already running.');
+                    return undefined;
+                }
+                if (this._positionUncertain && this._positionUncertain.restart) {
+                    this.emit('console', `⛔ Start blocked: ${this._positionUncertain.message} Raise Z, set the work zero again (Zero X, Y and Z, or Home), then press Start.`);
                     return undefined;
                 }
                 const totalLines = this._loadedLines.length;
@@ -1685,9 +1622,118 @@ class RSPController extends EventEmitter {
      *   run) and start sending from resumeLine instead of line 1.
      */
     /** A file that cannot run correctly is never left loaded (nothing to Start). */
+    /**
+     * Load a file with the heavy preparation (arcs, dwells, wire compile,
+     * motion limit) on a worker thread, so the RSP link keeps being serviced
+     * while a large file compiles -- see lib/prepareProgram.js. Same outcome
+     * as command('gcode:load'). Resolves to lastLoadResult, or
+     * { superseded: true } when another load or unload happened meanwhile
+     * (its result is then the one that counts).
+     */
+    async loadGcode(name, gcode, spindleDelaySeconds, compileOptions) {
+        const gen = ++this._loadGeneration;
+        if (!this._loadAllowed(name)) return this.lastLoadResult;
+        let prepared = null;
+        let prepError = null;
+        try {
+            prepared = await prepareProgramAsync(gcode || '', spindleDelaySeconds, compileOptions);
+        } catch (err) {
+            prepError = err;
+        }
+        if (gen !== this._loadGeneration) {
+            logger.info(`[RSP] gcode:load "${name || ''}" superseded while it was being prepared -- result dropped`);
+            return { superseded: true };
+        }
+        // A job may have been started on the previous file while this one compiled.
+        if (!this._loadAllowed(name)) return this.lastLoadResult;
+        this._applyPreparedLoad(name, spindleDelaySeconds, compileOptions, prepared, prepError);
+        return this.lastLoadResult;
+    }
+
+    /** Never replace the program under a running job; sets lastLoadResult when refused. */
+    _loadAllowed(name) {
+        // CNCEngine re-announces the same file itself; this guards every other
+        // caller. A job the firmware already dropped (alarm) is fine to
+        // replace: its resume point survives a same-file reload.
+        if (this.job && this.job.active && !this.job.firmwareLost) {
+            logger.warn(`[RSP] gcode:load "${name || ''}" refused: a job is running`);
+            this.emit('console', '⛔ A job is running. Stop it before loading another file.');
+            this.lastLoadResult = { ok: false, busy: true, name: name || '', meta: { errorCount: 1, errors: [{ line: null, msg: 'A job is running. Stop it before loading another file.' }], warnings: [] } };
+            return false;
+        }
+        return true;
+    }
+
+    /** Commit a prepared program (lib/prepareProgram.js result) as the loaded file, or reject it. */
+    _applyPreparedLoad(name, spindleDelaySeconds, compileOptions, prepared, prepError) {
+        if (this.job && this.job.active) this.job.abort();
+        // MED#10: an aborted job object's .progress getter still reports its
+        // old executed/total counts, and _currentLine was never reset either --
+        // so until the new job's first EV_EXECUTED came in, getSenderStatus()
+        // kept reporting the PREVIOUS file's line count/percentage overlaid on
+        // the newly loaded file (Tawfiq's "old-job-bleed" report).
+        if (this.job) this.job.resetProgress();
+        this._currentLine = 0;
+        this._loadedName = name || '';
+
+        if (prepError) {
+            logger.warn(`[RSP] gcode:load failed: ${prepError.message}`);
+            this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${prepError.message}`);
+            this._setLoadRejected(name, { errorCount: 1, errors: [{ line: null, msg: prepError.message }], warnings: [] });
+            return;
+        }
+        const { arcCount, segmentCount, insertedCount, compiled } = prepared;
+        const meta = compiled.meta;
+        if (meta.errorCount > 0) {
+            const shown = meta.errors.slice(0, 5)
+                .map((e) => (e.line ? `line ${e.line}: ${e.msg}` : e.msg)).join(' | ');
+            const more = meta.errorCount > 5 ? ` (+${meta.errorCount - 5} more)` : '';
+            logger.warn(`[RSP] gcode:load refused "${this._loadedName}": ${meta.errorCount} problem(s): ${shown}${more}`);
+            this.emit('console', `⛔ "${this._loadedName}" cannot run on this machine: ${shown}${more}`);
+            this._setLoadRejected(name, meta);
+            return;
+        }
+        this._loadedGcode = compiled.text;
+        this._loadedLines = compiled.lines;
+        this._loadedFeedLimited = compiled.feedLimitedLines;
+        this._loadedMeta = meta;
+        this._lastCompileOptions = compileOptions || {};
+        this.lastLoadResult = { ok: true, name: this._loadedName, meta };
+        if (arcCount > 0) {
+            logger.info(`[RSP] gcode:load linearized ${arcCount} arc(s) into ${segmentCount} G1 segments`);
+            this.emit('console', `ℹ️ Converted ${arcCount} arc(s) into ${segmentCount} line segments for this machine (your file is unchanged).`);
+        }
+        if (insertedCount > 0) {
+            logger.info(`[RSP] gcode:load inserted ${insertedCount} spindle spin-up dwell(s) (G4 P${spindleDelaySeconds}) after M3/M4`);
+            this.emit('console', `ℹ️ Added a ${spindleDelaySeconds}s spindle spin-up dwell after each M3/M4 (your file is unchanged).`);
+        }
+        if (meta.motionLimitedCount > 0) {
+            const pct = Math.round((100 * meta.motionLimitedCount) / Math.max(1, meta.motionCount));
+            logger.info(`[RSP] gcode:load motion limit slowed ${meta.motionLimitedCount} of ${meta.motionCount} moves`);
+            this.emit('console', `ℹ️ Fine detail: slowed ${meta.motionLimitedCount} short moves (${pct}%) so the machine can follow them. Long moves keep their feed; feed override above 100% does not speed these up.`);
+        }
+        for (const w of meta.warnings.slice(0, 8)) {
+            this.emit('console', `ℹ️ ${w.line ? `Line ${w.line}: ` : ''}${w.msg}`);
+        }
+        logger.info(`[RSP] gcode:load compiled ${meta.lineCount} lines (${meta.motionCount} moves, ${meta.clampedCount} feed-clamped, ${meta.pauses.length} program pause(s), ${meta.warnings.length} warning(s))`);
+
+        // A load of a DIFFERENT file drops the in-session resume point;
+        // re-sending the SAME file keeps it -- the frontend re-uploads the
+        // open file on reconnect/refresh, and on 2026-09-15 that silently
+        // wiped the line-3237 resume point and forced a restart from scratch.
+        if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
+            logger.info(`[RSP] gcode:load same file re-sent -- keeping resume point at line ${this._resumeLine}`);
+            this._emitResumePoint();
+        } else {
+            this._clearResumePoint();
+        }
+        logger.info(`[RSP] gcode:load "${this._loadedName}" (${this._loadedGcode.length} bytes)`);
+    }
+
     _setLoadRejected(name, meta) {
         this._loadedGcode = '';
         this._loadedLines = [];
+        this._loadedFeedLimited = null;
         this._loadedMeta = null;
         this._loadedName = '';
         this._clearResumePoint();
@@ -1700,9 +1746,42 @@ class RSPController extends EventEmitter {
         });
     }
 
+    /**
+     * CNCEngine saw this board's step-timer count go backwards since the last
+     * connection (services/ControllerRestartMonitor.js): the board rebooted,
+     * so its X/Y/Z were reset to 0 wherever the tool was. Nothing may start
+     * from that accidental zero; the operator zeros X, Y and Z (or homes) first.
+     */
+    notifyControllerRestarted({ lostJob } = {}) {
+        const cut = lostJob && lostJob.line > 1;
+        const what = cut
+            ? `The controller restarted in the middle of the job ("${lostJob.name}", stopped at line ${lostJob.line}) -- it lost power or was reset. Its X/Y/Z were reset to 0 where the tool was, and the tool may have moved.`
+            : 'The controller restarted since it was last connected (power off/on or reset), so its X/Y/Z were reset to 0 where the tool is.';
+        this._positionUncertain = { at: Date.now(), message: what, restart: true };
+        this._restartZeroedMask = 0;
+        logger.warn(`[RSP] controller restart detected${cut ? ` -- job cut off at line ${lostJob.line}` : ''}`);
+        this.emit('console', `⚠️ ${what} Raise Z, then set the work zero again (Zero X, Y and Z at the job's origin, or Home)${cut ? `, then use Start From Line ${lostJob.line}` : ' before running a job'}.`);
+        this.emit('controller:restarted', {
+            message: what,
+            jobName: cut ? lostJob.name : '',
+            line: cut ? lostJob.line : 0,
+            at: Date.now(),
+        });
+        this._emitResumePoint();
+    }
+
+    /** Zeroing axes one by one after a restart: all of X, Y and Z clears it. */
+    _noteAxesZeroed(mask) {
+        if (!this._positionUncertain || !this._positionUncertain.restart) return;
+        this._restartZeroedMask = (this._restartZeroedMask || 0) | mask;
+        if ((this._restartZeroedMask & AXIS_MASK_ALL) === AXIS_MASK_ALL) this._clearPositionUncertain('re-zeroed X, Y and Z');
+    }
+
     _clearPositionUncertain(how) {
         if (!this._positionUncertain) return;
+        const wasRestart = !!this._positionUncertain.restart;
         this._positionUncertain = null;
+        if (wasRestart) this.emit('controller:restartCleared', { how, at: Date.now() });
         logger.info(`[RSP] position-uncertain flag cleared (${how})`);
         this.emit('console', `✅ Position warning cleared (${how}). Resume is allowed again -- make sure the zero is at the job's original origin.`);
         this._emitResumePoint();
@@ -1821,6 +1900,24 @@ class RSPController extends EventEmitter {
         return this._startFromLineSafe(line, opts, { resume: true });
     }
 
+    /**
+     * Job lines whose feed the motion limit lowered (the feed override must
+     * not raise them past 100%), in job line numbers: the loaded file's own
+     * numbering, or shifted by lineOffset for a Start From Line program.
+     */
+    _noBoostLinesForJob(jobLineCount, mapping) {
+        const limited = this._loadedFeedLimited;
+        if (!limited || (mapping && mapping.macro)) return null;
+        const offset = mapping ? mapping.lineOffset : 0;
+        const firstFileLine = mapping ? mapping.lineOffsetMin : 1;
+        const out = new Uint8Array(jobLineCount);
+        for (let jobLine = 1; jobLine <= jobLineCount; jobLine++) {
+            const fileLine = jobLine + offset;
+            if (fileLine >= firstFileLine && fileLine <= limited.length && limited[fileLine - 1]) out[jobLine - 1] = 1;
+        }
+        return out;
+    }
+
     /** Program pauses (M0/M1) and dwells (G4) of the loaded file at or after `fromLine`, as job lines. */
     _holdsForFile(fromLine, lineOffset = 0) {
         return this._holdsFromMeta(this._loadedMeta, fromLine, lineOffset);
@@ -1935,6 +2032,7 @@ class RSPController extends EventEmitter {
                 feedOverridePct: this._feedOverridePct,
                 feedLimits: { maxRate: o.maxRate || { x: 5000, y: 5000, z: 3000 }, maxFeed: o.maxFeed || 10000 },
                 fixedFeedLines: (mapping && mapping.fixedFeedLines) || [],
+                noBoostLines: this._noBoostLinesForJob(lines.length, mapping),
             });
         } catch (uploadErr) {
             logger.error(`[RSP] Failed to upload job: ${uploadErr.message || uploadErr}`);

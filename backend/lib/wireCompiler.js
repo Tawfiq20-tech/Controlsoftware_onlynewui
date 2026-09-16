@@ -37,6 +37,7 @@
  */
 
 const { cleanGcodeLines, splitComment } = require('./resumeFromLine');
+const { limitFeeds } = require('./firmwareMotionLimit');
 
 const STEPS_PER_MM = 200;
 const GRID_MM = 1 / STEPS_PER_MM;
@@ -447,7 +448,19 @@ function compileWire(text, options = {}) {
         warnings.push({ line: null, msg: `${pass.g53Count} G53 machine-coordinate Z move(s) will retract to Z ${retractZ.toFixed(2)} mm above work zero` });
     }
 
-    const out = pass.out;
+    // Firmware motion limit (lib/firmwareMotionLimit.js): lower F only where
+    // the firmware's per-line start/stop would jerk the machine past its
+    // limits -- fine 3D detail was rounded off otherwise. Off unless asked.
+    let out = pass.out;
+    let feedLimitedLines = null;
+    let motionLimitedCount = 0;
+    const ml = opts.motionLimit;
+    if (ml && ml.enabled !== false) {
+        const r = limitFeeds(out, ml);
+        out = r.lines;
+        feedLimitedLines = r.limited;
+        motionLimitedCount = r.limitedCount;
+    }
     for (let i = 0; i < out.length; i++) {
         const l = out[i];
         if (l.length > MAX_WIRE_LEN) errors.push({ line: i + 1, msg: `compiled line is ${l.length} bytes, over the ${MAX_WIRE_LEN}-byte firmware limit: ${l}` });
@@ -466,11 +479,15 @@ function compileWire(text, options = {}) {
     return {
         lines: out,
         text: out.join('\n'),
+        // [i] = 1 when line i+1's feed was lowered by the motion limit; the
+        // feed override must not raise those lines again (job.js)
+        feedLimitedLines,
         meta: {
             lineCount: out.length,
             motionCount: pass.motionCount,
             rapidCount: pass.rapidCount,
             clampedCount: pass.clampedCount,
+            motionLimitedCount,
             errorCount,
             errors: errors.slice(0, opts.maxErrors),
             warnings,
@@ -483,7 +500,7 @@ function compileWire(text, options = {}) {
                 max: { x: fin(ext.max.x), y: fin(ext.max.y), z: fin(ext.max.z) },
             } : null,
             retractZ: pass.g53Count > 0 ? retractZ : null,
-            options: { rapidFeed, maxFeed: opts.maxFeed, maxRate: opts.maxRate, safeHeight, zHeadroom: headroom },
+            options: { rapidFeed, maxFeed: opts.maxFeed, maxRate: opts.maxRate, safeHeight, zHeadroom: headroom, motionLimit: ml || null },
         },
     };
 }

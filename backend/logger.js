@@ -40,7 +40,9 @@ const logger = winston.createLogger({
                 winston.format.simple()
             ),
         }),
-        new winston.transports.File({ filename: path.join(logsDir, 'app.log') }),
+        // Capped: app.log had grown to 100 MB, on a PC whose C: drive ran
+        // out of space (2026-09-16). Newest 20 MB x 5 files are kept.
+        new winston.transports.File({ filename: path.join(logsDir, 'app.log'), maxsize: 20 * 1024 * 1024, maxFiles: 5, tailable: true }),
         new RemoteDiagTransport(),
     ],
 });

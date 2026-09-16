@@ -134,6 +134,7 @@ class JobStream extends EventEmitter {
         this._progressDirty = false;
         this._feedScale = 1;               // feed override, applied to lines not yet sent
         this._fixedFeedLines = new Set();  // lines the override must not scale (resume plunge)
+        this._noBoostLines = null;         // Uint8Array [line-1]: override may slow but not speed up
         this._feedLimits = null;           // {maxRate:{x,y,z}, maxFeed} for re-clamping
         this._sendPos = { x: null, y: null, z: null }; // position as sent (for the clamp)
         this._overrideClamped = 0;
@@ -237,6 +238,9 @@ class JobStream extends EventEmitter {
         // plunge back into the cut is a deliberate safety feed, not part of the
         // program's cutting speed. At 200% it would have gone in twice as fast.
         this._fixedFeedLines = new Set((opts.fixedFeedLines || []).map((n) => Math.floor(n)));
+        // Lines the firmware motion limit already slowed (lib/firmwareMotionLimit.js):
+        // an override above 100% would put back the jerk that rounded off fine detail.
+        this._noBoostLines = opts.noBoostLines || null;
         this._holds = (opts.holds || [])
             .filter((h) => h && h.line >= 1 && h.line <= n)
             .map((h) => ({
@@ -469,6 +473,7 @@ class JobStream extends EventEmitter {
     _wireText(n) {
         const text = this._lines[n - 1];
         if (this._feedScale === 1 || !this._isMotion[n] || this._fixedFeedLines.has(n)) return text;
+        if (this._feedScale > 1 && this._noBoostLines && this._noBoostLines[n - 1]) return text;
         const m = CUT_LINE_RE.exec(text);
         if (!m) return text; // rapid or a line shape the compiler did not produce
         const axes = m[1];

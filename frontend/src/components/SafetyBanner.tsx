@@ -21,6 +21,7 @@ export function SafetyBanner() {
     const wcsHealth = useCNCStore((s) => s.safetyWcsHealth);
     const zRunaway = useCNCStore((s) => s.safetyZRunaway);
     const setSafetyZRunaway = useCNCStore((s) => s.setSafetyZRunaway);
+    const controllerRestart = useCNCStore((s) => s.controllerRestart);
     const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
     // Auto-dismiss Z runaway notice after 60 seconds so the banner doesn't
@@ -32,6 +33,29 @@ export function SafetyBanner() {
     }, [zRunaway, setSafetyZRunaway]);
 
     const banners: JSX.Element[] = [];
+
+    // Not dismissible: it clears itself once X, Y and Z are zeroed or the
+    // machine is homed (the backend refuses Start until then).
+    if (controllerRestart) {
+        banners.push(
+            <div key="restart" className="ecss-banner ecss-banner--critical">
+                <div className="ecss-banner__icon">🛑</div>
+                <div className="ecss-banner__body">
+                    <strong>
+                        {controllerRestart.line > 0
+                            ? `Controller restarted during the job — stopped at line ${controllerRestart.line}. Position lost.`
+                            : 'Controller restarted — position lost.'}
+                    </strong>
+                    <div className="ecss-banner__detail">
+                        {controllerRestart.message} Check the tool, raise Z clear of the work, then set the work
+                        zero again (<b>Zero X, Y and Z</b> at the job's origin, or <b>Home</b>).
+                        {controllerRestart.line > 0 && <> Then use <b>Start From Line {controllerRestart.line}</b>.</>}
+                        {' '}Start stays blocked until then.
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (zRunaway) {
         banners.push(

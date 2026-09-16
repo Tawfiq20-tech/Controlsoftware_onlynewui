@@ -8,6 +8,7 @@ import controller from './controller';
 import type { ControllerState, SenderStatus, PortInfo, AlarmInfo, ErrorInfo } from './controller';
 import type { MachineState } from '../types/cnc';
 import { useCNCStore } from '../stores/cncStore';
+import type { ControllerRestartInfo } from '../stores/cncStore';
 import { log } from './logger';
 import { getRemoteToken } from './remoteAuth';
 
@@ -171,6 +172,23 @@ function _wireControllerToStore(): void {
             : '';
         s.addConsoleLog('error', `Job interrupted — USB/serial connection dropped.${resumeMsg}`);
         log('error', `Job interrupted by connection loss at line ${data.resumeLine}`);
+    });
+
+    // The controller board rebooted (power loss / reset): its position is gone.
+    // The backend blocks Start until X, Y and Z are zeroed again or the
+    // machine is homed; the banner says so until then.
+    controller.on('controller:restarted', (data: unknown) => {
+        const d = data as ControllerRestartInfo;
+        const s = getStore();
+        s.setControllerRestart(d);
+        s.addConsoleLog('error', d.message);
+        log('error', `Controller restarted${d.line ? ` during job at line ${d.line}` : ''}`);
+    });
+
+    controller.on('controller:restartCleared', () => {
+        const s = getStore();
+        if (s.controllerRestart) s.addConsoleLog('success', 'Work zero set again after the controller restart — Start is allowed.');
+        s.setControllerRestart(null);
     });
 
     controller.on('serialport:close', () => {
