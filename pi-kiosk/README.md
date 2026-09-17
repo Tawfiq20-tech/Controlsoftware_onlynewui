@@ -57,8 +57,12 @@ straight into the sender.
 | USB sticks | Mounted automatically at `/media/usb-sdX1` so you can pick G-code files from them |
 | Serial / DFU | udev rules for ttyACM/ttyUSB and the STM32 DFU bootloader (0483:df11) |
 
-Settings are in `/etc/onefinity-kiosk.conf`: the page URL, and screen rotation
-for a portrait touch monitor (`KIOSK_ROTATE=90`).
+Settings are in `/etc/onefinity-kiosk.conf`: the page URL, and screen rotation.
+The image ships portrait (`KIOSK_ROTATE=90`) for the pendant monitor; use `270`
+if the picture is upside down, or `normal` for a landscape screen. The UI picks
+its tall touch layout by itself on a portrait screen. Change the setting and
+`sudo systemctl restart onefinity-kiosk`; an existing `/etc/onefinity-kiosk.conf`
+is never overwritten by a re-install.
 
 ## Servicing a locked Pi
 
