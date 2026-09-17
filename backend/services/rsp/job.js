@@ -6,8 +6,8 @@
  * each one a way a long job ended early, resumed at the wrong line, or hung:
  *
  *  - Chunking (BE-6). Files over 60,000 lines were split into separate
- *    firmware jobs. OP_JOB_END makes the firmware drop to IDLE and switch the
- *    drivers off before the next OP_JOB_START -- mid-carve. Now a file is one
+ *    firmware jobs. OP_JOB_END makes the firmware drop to IDLE (and, up to
+ *    0.2.0, switch the drivers off) before the next OP_JOB_START -- mid-carve. Now a file is one
  *    job; wire line numbers are the file line modulo 65536 (the firmware only
  *    echoes them back) and are resolved here against what has been sent.
  *
@@ -40,11 +40,14 @@
 'use strict';
 
 const EventEmitter = require('events');
+const { performance } = require('perf_hooks');
 const codec = require('./codec');
 const defs = require('./defs');
 const { FT_EVT } = require('./frame');
 const { LinkLost } = require('./stream');
-const { cleanGcodeLines } = require('../../lib/resumeFromLine');
+// Called through the module (not destructured): the preparer checks that its
+// fast path still agrees with whatever cleanGcodeLines() does today.
+const resumeFromLine = require('../../lib/resumeFromLine');
 
 // Sender tick: batch sends, watermark, holds, stall/link checks.
 const TICK_MS = 10;
@@ -62,9 +65,140 @@ const MOTION_RE = /[XYZ]\s*[-+]?(?:\d|\.\d|inf|nan)/i;
 // Compiled cutting move: "G21 G90 G1 [X..] [Y..] [Z..] F.."
 const CUT_LINE_RE = /^G21 G90 G1((?: [XYZ]-?\d+\.\d+)+) F(\d+(?:\.\d)?)(.*)$/;
 const AXIS_RE = /([XYZ])(-?\d+\.\d+)/g;
+const Z_WORD_RE = /Z\s*([-+]?(?:\d+\.?\d*|\.\d+))/i;
+// Below the 0.005 mm step grid every compiled Z sits on.
+const Z_DESCENT_EPS_MM = 0.001;
+
+// Preparing a program's lines for streaming costs ~1.7 s per million lines on
+// the shop PC when done in one go, and START/Resume did it on the main thread
+// -- longer than the 3 s heartbeat window on a slower host (D6-8, 2026-09-17).
+// Up to this many lines are prepared inside upload() as before; bigger
+// programs in slices of at most PREPARE_SLICE_MS, yielding between slices.
+const SYNC_PREPARE_LINES = 20000;
+const PREPARE_SLICE_MS = 10;
+
+// A line cleanGcodeLines() returns unchanged: no comment or parenthesis, no
+// surrounding whitespace, no line break, not a '%' line. Every compiled line
+// is one; only the others go through the (slow) comment splitter.
+const CLEAN_LINE_RE = /^[^\s%();](?:[^();\r\n]*[^\s();])?$/;
+// That is an assumption about lib/resumeFromLine.js, which another part of the
+// code owns and has changed before (lone CR, 2026-09-17). If cleaning ever
+// changed such a line, JobStream's line numbers would drift from Start From
+// Line's and a resume would start at the wrong line. So the first lines and
+// then one in every FAST_CHECK_EVERY are also run through the real cleaner; a
+// difference drops the fast path for the whole program.
+const FAST_CHECK_HEAD = 256;
+const FAST_CHECK_EVERY = 4096;
 
 function isMotionLine(text) {
     return MOTION_RE.test(text);
+}
+
+function isUnchangedByCleaning(clean, line) {
+    const out = clean(line);
+    return out.length === 1 && out[0] === line;
+}
+
+/**
+ * Turns program lines into what JobStream streams: cleaned lines (exactly
+ * cleanGcodeLines(lines.join('\n'))), per-line motion flags, the motion
+ * prefix count and the descending-Z flags, a slice at a time.
+ */
+class LinePreparer {
+    constructor(lines) {
+        this._src = lines;
+        this._i = 0;
+        this._fast = true; // CLEAN_LINE_RE lines are taken as they are (see FAST_CHECK_HEAD)
+        this._alloc(lines.length);
+    }
+
+    _alloc(cap) {
+        // While every line so far came out of cleaning unchanged (every
+        // compiled line does) the source array is the result: no second
+        // array of a million references, whose remembered-set entries made
+        // one minor GC take 76 ms right after the program was split.
+        this._out = null;
+        this._n = 0;
+        this.isMotion = new Uint8Array(cap + 2);
+        this.prefix = new Uint32Array(cap + 1);
+        this.descend = new Uint8Array(cap);
+        this._z = null;
+    }
+
+    get done() { return this._i >= this._src.length; }
+
+    /** Cleaned lines (the source array itself when nothing needed cleaning). */
+    get clean() {
+        if (this._out) return this._out;
+        return this._n === this._src.length ? this._src : this._src.slice(0, this._n);
+    }
+
+    /** Work until done or `budgetMs` has passed. Throws on a line the machine cannot take. */
+    step(budgetMs = Infinity) {
+        const t0 = performance.now();
+        const src = this._src;
+        const clean = resumeFromLine.cleanGcodeLines;
+        while (this._i < src.length) {
+            const raw = src[this._i];
+            if (this._fast && typeof raw === 'string' && CLEAN_LINE_RE.test(raw)) {
+                if ((this._i < FAST_CHECK_HEAD || this._i % FAST_CHECK_EVERY === 0) && !isUnchangedByCleaning(clean, raw)) {
+                    this._fast = false;
+                    this._i = 0;
+                    this._alloc(src.length);
+                    continue;
+                }
+                this._add(raw);
+            } else {
+                if (!this._out) this._out = src.slice(0, this._n);
+                // Cleaning is per line, so one element cleaned on its own gives
+                // the lines the joined text would -- a line break inside the
+                // element included (it used to send the whole program through
+                // the one-shot path, ~1.7 s per million lines). null/undefined
+                // are empty, as lines.join('\n') made them.
+                for (const c of clean(raw == null ? '' : String(raw))) this._add(c);
+            }
+            this._i++;
+            if ((this._i & 1023) === 0 && performance.now() - t0 >= budgetMs) break;
+        }
+        return this.done;
+    }
+
+    /** An element with a line break inside gives more lines than elements. */
+    _grow(n) {
+        const cap = Math.max(n, Math.ceil(this.descend.length * 1.5) + 16);
+        const copy = (a, len) => {
+            const b = new a.constructor(len);
+            b.set(a);
+            return b;
+        };
+        this.isMotion = copy(this.isMotion, cap + 2);
+        this.prefix = copy(this.prefix, cap + 1);
+        this.descend = copy(this.descend, cap);
+    }
+
+    _add(text) {
+        const n = this._n + 1;
+        if (n > this.descend.length) this._grow(n);
+        // Firmware text buffer is char[64]; see MAX_LINE_BYTES.
+        if (text.length > MAX_LINE_BYTES || (text.length * 3 > MAX_LINE_BYTES && Buffer.byteLength(text, 'utf8') > MAX_LINE_BYTES)) {
+            throw new Error(`line ${n} is longer than the machine's ${MAX_LINE_BYTES}-byte limit: ${text.slice(0, 80)}`);
+        }
+        if (this._out) this._out.push(text);
+        this._n = n;
+        const m = MOTION_RE.test(text) ? 1 : 0;
+        this.isMotion[n] = m;
+        this.prefix[n] = this.prefix[n - 1] + m;
+        if (!m) return;
+        // Descending: the move ends LOWER in Z than the move before it (G0 and
+        // G1 both count as "before"), or its starting Z is not known. A resume
+        // program is uploaded whole, so its first file line starts at the
+        // preamble's plunge depth.
+        const zw = Z_WORD_RE.exec(text);
+        if (!zw) return;
+        const to = parseFloat(zw[1]);
+        if (this._z === null || to < this._z - Z_DESCENT_EPS_MM) this.descend[n - 1] = 1;
+        this._z = to;
+    }
 }
 
 function now() {
@@ -93,14 +227,21 @@ class JobStream extends EventEmitter {
         this._generation = 0;
         this._lastJobId = 0;
         this._tickHandle = null;
+        // Does the firmware report a no-motion line only after the moves
+        // received before it (0.2.1, F5)? null = not known: treat as 0.2.0.
+        this._noMotionInOrder = null;
         this._resetState();
 
         this._onStreamEvent = this._onStreamEvent.bind(this);
         this._onStreamReject = this._onStreamReject.bind(this);
         this._onStreamGaveUp = this._onStreamGaveUp.bind(this);
+        this._onStreamStatus = this._onStreamStatus.bind(this);
+        this._onStreamLink = this._onStreamLink.bind(this);
         this.stream.on('event', this._onStreamEvent);
         this.stream.on('reject', this._onStreamReject);
         this.stream.on('gaveUp', this._onStreamGaveUp);
+        this.stream.on('status', this._onStreamStatus);
+        this.stream.on('link', this._onStreamLink);
     }
 
     _resetState() {
@@ -135,9 +276,14 @@ class JobStream extends EventEmitter {
         this._feedScale = 1;               // feed override, applied to lines not yet sent
         this._fixedFeedLines = new Set();  // lines the override must not scale (resume plunge)
         this._noBoostLines = null;         // Uint8Array [line-1]: override may slow but not speed up
+        this._descendLines = null;         // Uint8Array [line-1]: move goes down in Z (never boosted)
         this._feedLimits = null;           // {maxRate:{x,y,z}, maxFeed} for re-clamping
         this._sendPos = { x: null, y: null, z: null }; // position as sent (for the clamp)
         this._overrideClamped = 0;
+        this._preparing = null;            // Promise<boolean> while a big program is prepared in slices
+        this._holdsIn = [];                // opts.holds, applied once the line count is known
+        this._runStateWanted = false;      // ask the device what it finished when the link returns
+        this._lateStatus = null;           // last telemetry for this job after it ended here
     }
 
     // ------------------------------------------------------------------
@@ -191,7 +337,8 @@ class JobStream extends EventEmitter {
 
     // ------------------------------------------------------------------
     /**
-     * Prepare a job. Returns its job id.
+     * Prepare a job. Returns its job id. The job keeps `lines` (no copy when
+     * every line is already clean): do not modify the array afterwards.
      * @param {string[]} lines program lines (compiled wire text)
      * @param {number|null} jobId
      * @param {{holds?: Array<{line:number, kind:'pause'|'dwell', seconds?:number, message?:string, optional?:boolean}>}} [opts]
@@ -202,28 +349,17 @@ class JobStream extends EventEmitter {
         }
         // Same cleaning as lib/resumeFromLine.js, so line numbers reported to
         // the UI index the same list Start From Line slices.
-        const clean = cleanGcodeLines(lines.join('\n'));
-        for (let i = 0; i < clean.length; i++) {
-            if (Buffer.byteLength(clean[i], 'utf8') > MAX_LINE_BYTES) {
-                throw new Error(`line ${i + 1} is longer than the machine's ${MAX_LINE_BYTES}-byte limit: ${clean[i].slice(0, 80)}`);
-            }
-        }
+        const preparer = new LinePreparer(lines);
+        const big = lines.length > SYNC_PREPARE_LINES;
+        if (!big) preparer.step(); // throws (nothing changed yet) on a line the machine cannot take
         // A tick of the previous job that is mid-flight must not touch this one.
         this._generation += 1;
         this._stopTick();
         const lastJobId = this._lastJobId;
         this._resetState();
-
-        const n = clean.length;
-        this._lines = clean;
-        this._total = n;
-        this._isMotion = new Uint8Array(n + 2);
-        this._motionPrefix = new Uint32Array(n + 1);
-        for (let i = 1; i <= n; i++) {
-            const m = isMotionLine(clean[i - 1]) ? 1 : 0;
-            this._isMotion[i] = m;
-            this._motionPrefix[i] = this._motionPrefix[i - 1] + m;
-        }
+        // Until a big program is prepared, the raw count stands in (cleaning
+        // only ever drops lines).
+        this._total = lines.length;
 
         // Never reuse the previous id: telemetry and late EV_EXECUTED of the
         // job just stopped would be credited to this one. 0 is never used.
@@ -241,16 +377,7 @@ class JobStream extends EventEmitter {
         // Lines the firmware motion limit already slowed (lib/firmwareMotionLimit.js):
         // an override above 100% would put back the jerk that rounded off fine detail.
         this._noBoostLines = opts.noBoostLines || null;
-        this._holds = (opts.holds || [])
-            .filter((h) => h && h.line >= 1 && h.line <= n)
-            .map((h) => ({
-                line: Math.floor(h.line),
-                kind: h.kind === 'dwell' ? 'dwell' : 'pause',
-                seconds: Math.max(0, Number(h.seconds) || 0),
-                message: h.message || '',
-                optional: !!h.optional,
-            }))
-            .sort((a, b) => a.line - b.line);
+        this._holdsIn = opts.holds || [];
 
         this._active = true;
         this._lastProgressAt = now();
@@ -261,7 +388,75 @@ class JobStream extends EventEmitter {
         try {
             this.stream.setHeartbeatPaused(true);
         } catch (_) { /* non-fatal */ }
+        if (big) {
+            this._preparing = this._prepareInSlices(this._generation, preparer);
+        } else {
+            this._applyPrepared(preparer);
+        }
         return this._jobId;
+    }
+
+    /**
+     * Big programs: prepare between event-loop turns so the link keeps being
+     * served. start() waits for it before OP_JOB_START. A line the machine
+     * cannot take fails the job before anything is sent to it.
+     * @returns {Promise<boolean>} true once prepared for this job
+     */
+    async _prepareInSlices(gen, preparer) {
+        try {
+            for (;;) {
+                // Yield first: upload() returns at once, and a failure never
+                // lands in the middle of the caller's own start sequence.
+                await new Promise((r) => setImmediate(r));
+                if (gen !== this._generation || !this._active) return false;
+                if (preparer.step(PREPARE_SLICE_MS)) break;
+            }
+        } catch (exc) {
+            if (gen === this._generation && this._active) this._fail(String(exc.message || exc), { sendAbort: false });
+            return false;
+        }
+        if (gen !== this._generation || !this._active) return false;
+        this._applyPrepared(preparer);
+        this._preparing = null;
+        return true;
+    }
+
+    _applyPrepared(preparer) {
+        const n = preparer.clean.length;
+        this._lines = preparer.clean;
+        this._total = n;
+        this._isMotion = preparer.isMotion.subarray(0, n + 2);
+        this._motionPrefix = preparer.prefix.subarray(0, n + 1);
+        // Plunges and downward ramps keep their programmed feed above 100%
+        // (2026-09-17: at 200% every Z plunge of the SHIP roughing file ran at
+        // 1524 instead of 762 mm/min). Slowing them down still applies.
+        this._descendLines = preparer.descend.subarray(0, n);
+        this._holds = this._holdsIn
+            .filter((h) => h && h.line >= 1 && h.line <= n)
+            .map((h) => ({
+                line: Math.floor(h.line),
+                kind: h.kind === 'dwell' ? 'dwell' : 'pause',
+                seconds: Math.max(0, Number(h.seconds) || 0),
+                message: h.message || '',
+                optional: !!h.optional,
+            }))
+            .sort((a, b) => a.line - b.line);
+        // resume(fromLine) may have come before the line count was known
+        if (this._startLine > 1) this._applyStartLine(this._startLine);
+    }
+
+    _applyStartLine(fromLine) {
+        const from = Math.min(Math.max(1, Math.floor(fromLine)), this._total + 1);
+        this._startLine = from;
+        this._sentUpTo = from - 1;
+        this._motionDoneUpTo = from - 1;
+        this._watermark = from - 1;
+        while (this._holdIdx < this._holds.length && this._holds[this._holdIdx].line < from) this._holdIdx++;
+    }
+
+    /** Resolves once upload()'s line preparation is done (true) or abandoned (false). */
+    whenPrepared() {
+        return this._preparing || Promise.resolve(this._active);
     }
 
     /** Begin streaming (after upload). Safe against double invocation. */
@@ -277,14 +472,7 @@ class JobStream extends EventEmitter {
      */
     resume(fromLine = 0) {
         if (!this._active) return;
-        if (fromLine > 0 && !this._started) {
-            const from = Math.min(Math.max(1, Math.floor(fromLine)), this._total + 1);
-            this._startLine = from;
-            this._sentUpTo = from - 1;
-            this._motionDoneUpTo = from - 1;
-            this._watermark = from - 1;
-            while (this._holdIdx < this._holds.length && this._holds[this._holdIdx].line < from) this._holdIdx++;
-        }
+        if (fromLine > 0 && !this._started) this._applyStartLine(fromLine);
         if (this._activeHold) {
             // Resume also skips the rest of a G4 wait: an operator watching a
             // machine sit still needs a way to carry on, especially when a
@@ -342,6 +530,8 @@ class JobStream extends EventEmitter {
         this.stream.removeListener('event', this._onStreamEvent);
         this.stream.removeListener('reject', this._onStreamReject);
         this.stream.removeListener('gaveUp', this._onStreamGaveUp);
+        this.stream.removeListener('status', this._onStreamStatus);
+        this.stream.removeListener('link', this._onStreamLink);
     }
 
     // ------------------------------------------------------------------
@@ -354,6 +544,11 @@ class JobStream extends EventEmitter {
     static get LINK_GRACE_S() { return 15.0; }
 
     async _runSenderLoop(gen) {
+        if (this._preparing) {
+            // _prepareInSlices() never rejects; a bad line has already failed the job
+            const ready = await this._preparing;
+            if (!ready || gen !== this._generation || !this._active) return;
+        }
         try {
             await this._sendJobStart();
         } catch (exc) {
@@ -406,6 +601,13 @@ class JobStream extends EventEmitter {
             }
             const downFor = t - this._linkDownSince;
             if (downFor >= JobStream.LINK_GRACE_S) {
+                // Meanwhile the machine went on with the moves it had queued,
+                // and its own host watchdog has most likely E-stopped it
+                // (drivers off). Treat it as a stop the device made -- the
+                // resume lifts first -- and ask it what it finished once it
+                // answers again (_onStreamLink, _onStreamStatus).
+                this._firmwareLost = this._firmwareLost || 'lost contact with the machine';
+                this._runStateWanted = true;
                 this._fail(`lost contact with the machine for ${downFor.toFixed(0)} s`);
             }
             return;
@@ -453,8 +655,9 @@ class JobStream extends EventEmitter {
      * Every compiled cutting line carries an explicit F, so the host scales
      * that F on the lines it has not sent yet -- it takes effect as soon as
      * the planner works through the few queued moves, with no firmware change.
-     * Rapids (G0) are not scaled, and no move ever goes above the machine's
-     * per-axis maximum rate.
+     * Rapids (G0) are not scaled, no move ever goes above the machine's
+     * per-axis maximum rate, and above 100% a move that goes down in Z keeps
+     * its programmed feed (the tool entering material).
      * @param {number} pct 10..200
      */
     setFeedOverride(pct) {
@@ -473,7 +676,8 @@ class JobStream extends EventEmitter {
     _wireText(n) {
         const text = this._lines[n - 1];
         if (this._feedScale === 1 || !this._isMotion[n] || this._fixedFeedLines.has(n)) return text;
-        if (this._feedScale > 1 && this._noBoostLines && this._noBoostLines[n - 1]) return text;
+        if (this._feedScale > 1 && ((this._noBoostLines && this._noBoostLines[n - 1]) ||
+            (this._descendLines && this._descendLines[n - 1]))) return text;
         const m = CUT_LINE_RE.exec(text);
         if (!m) return text; // rapid or a line shape the compiler did not produce
         const axes = m[1];
@@ -695,11 +899,8 @@ class JobStream extends EventEmitter {
             if (!this._aborted && !this._failReason) return;
             const abs = this._resolveLine(parsed.lineNo);
             if (!abs || !this._isMotion[abs]) return;
-            const before = this._watermark;
-            this._motionDoneUpTo = Math.max(this._motionDoneUpTo, Math.min(abs, this._sentUpTo));
             this._lastConfirmedPos = { x: parsed.x, y: parsed.y, z: parsed.z };
-            this._advanceWatermark();
-            if (this._watermark !== before) this.emit('lateProgress', { nextLine: this._watermark + 1 });
+            this._creditLate(parsed.lineNo, null);
             return;
         }
         const abs = this._resolveLine(parsed.lineNo);
@@ -747,6 +948,80 @@ class JobStream extends EventEmitter {
         this._advanceWatermark(t);
     }
 
+    /**
+     * Evidence of what the device finished, arriving after this job ended
+     * here (Stop, or a failure). Moves the resume point forward only, and
+     * only over what is proven: a move line the device names completed. A
+     * no-motion line proves the moves before it ran only on firmware that
+     * reports it after them (0.2.1, F5), or when the device drained its
+     * queue by running it (RUNNING, empty planner, nothing stepping); firmware
+     * 0.2.0 reports it on receipt, ahead of moves still queued.
+     */
+    _creditLate(wireLine, dict) {
+        const abs = this._resolveLine(wireLine);
+        if (!abs) return;
+        const proven = this._isMotion[abs] || this._noMotionInOrder === true ||
+            (dict && dict.state === defs.ST_RUNNING && dict.planner_depth === 0 && !dict.dbg_jog_active);
+        if (!proven) return;
+        const before = this._watermark;
+        this._motionDoneUpTo = Math.max(this._motionDoneUpTo, Math.min(abs, this._sentUpTo));
+        this._advanceWatermark();
+        if (this._watermark !== before) this.emit('lateProgress', { nextLine: this._watermark + 1 });
+    }
+
+    /**
+     * The firmware's own version string (GET_CONFIG "fw"). Decides whether a
+     * reported no-motion line proves the moves before it ran (see _creditLate).
+     */
+    setFirmwareVersion(fw) {
+        const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(fw || ''));
+        const v = m ? m.slice(1).map(Number) : [0, 0, 0];
+        this._noMotionInOrder = v[0] > 0 || v[1] > 2 || (v[1] === 2 && v[2] >= 1);
+        if (this._lateStatus) this._onStreamStatus(this._lateStatus);
+    }
+
+    /**
+     * Telemetry after the job ended here. After a link silence longer than
+     * LINK_GRACE_S the job was failed at the last line heard of, but the
+     * machine went on cutting its queued moves and their EV_EXECUTED was lost
+     * with the link, so the resume point re-cut up to 8 moves (D6-7). The
+     * device's own last_executed_line tells what it finished. (The controller
+     * forwards telemetry to noteTelemetry() only while a job is active.)
+     */
+    _onStreamStatus(dict) {
+        if (this._active || !dict || !this._fwJobStarted) return;
+        if (!this._aborted && !this._failReason) return;
+        if (dict.job_id !== this._jobId) return;
+        this._lateStatus = dict;
+        this._creditLate(dict.last_executed_line, dict);
+    }
+
+    /**
+     * Link back after a job failed for lost contact: ask the device directly
+     * what it finished (and, if not known yet, which firmware it is).
+     */
+    _onStreamLink(ok) {
+        if (!ok || !this._runStateWanted || this._active) return;
+        if (typeof this.stream.sendCommand !== 'function') return;
+        this._runStateWanted = false;
+        const gen = this._generation;
+        const jobId = this._jobId;
+        const ask = (op) => this.stream.sendCommand(op, Buffer.alloc(0), { timeout: 3.0 });
+        const version = this._noMotionInOrder !== null ? Promise.resolve() : ask(defs.OP_GET_CONFIG).then((rsp) => {
+            const cfg = JSON.parse(rsp.payload.subarray(2).toString('utf8').replace(/\0+$/, ''));
+            if (gen === this._generation) this.setFirmwareVersion(cfg.fw);
+        }).catch(() => { /* not known: stay with the 0.2.0 rule */ });
+        version.then(() => ask(defs.OP_GET_RUN_STATE)).then((rsp) => {
+            if (gen !== this._generation || this._active || !rsp || !rsp.payload) return;
+            const st = codec.parseRunState(rsp.payload.subarray(2));
+            if (!st || st.jobId !== jobId) return;
+            this._creditLate(st.lastExecutedLine, null);
+        }).catch((exc) => {
+            // Telemetry carries the same line; this is only the faster route.
+            this._log.info(`run state not available after the link came back: ${exc.message || exc}`);
+        });
+    }
+
     /** Back-compat for callers that only have the line number. */
     noteProgress(lastLine, telemetryJobId = null) {
         if (telemetryJobId === null || telemetryJobId === undefined) return;
@@ -779,4 +1054,5 @@ module.exports = {
     JobStream,
     isMotionLine,
     MAX_LINE_BYTES,
+    CLEAN_LINE_RE,
 };

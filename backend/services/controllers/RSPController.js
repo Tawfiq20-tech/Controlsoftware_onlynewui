@@ -38,7 +38,7 @@ const { ReliableStream, LinkLost, RspTimeoutError } = require('../rsp/stream');
 const { JobStream } = require('../rsp/job');
 const linearizeArcs = require('../../lib/linearizeArcs');
 const { cleanGcodeLines, buildResumeProgram, scanModalState } = require('../../lib/resumeFromLine');
-const { compileWire } = require('../../lib/wireCompiler');
+const { compileWire, DEFAULTS: WIRE_DEFAULTS } = require('../../lib/wireCompiler');
 const { prepareProgram, prepareProgramAsync } = require('../../lib/prepareProgram');
 
 // Power-cut survival: durable checkpoint persistence is now handled
@@ -70,6 +70,14 @@ const FEED_OVERRIDE_MIN = 10.0;
 const FEED_OVERRIDE_MAX = 200.0;
 const FEED_OVERRIDE_COARSE = 10.0;
 const FEED_OVERRIDE_FINE = 1.0;
+
+// Absolute jog feed cap; each jog is also held to its axes' maxRate (jogFeed()).
+const JOG_FEED_MAX = 10000;
+
+// Firmware ALM filter (fw 0.1.1+ stepper.c ALM_FAULT_CONFIRM_MS): an alarm
+// input must stay active this long to stop motion; anything shorter is
+// counted as an EV_ALM_GLITCH and ignored.
+const ALM_FAULT_CONFIRM_MS = 50;
 
 // FIX-7: on a failed ad-hoc probe (no contact within maxTravelMm, rejected
 // status, or a timed-out/lost reply), the tool is left wherever it stopped --
@@ -199,6 +207,9 @@ class RSPController extends EventEmitter {
         this._resumeGcode = null;
         this._resumeReason = '';
         this._resumeAt = 0;
+        // The firmware dropped the job by itself (E-STOP, driver alarm, lost
+        // host) rather than the operator pressing Stop: see _resumeBuildOptions().
+        this._resumeHardStop = false;
         // Start-from-line runs a rebuilt program (safe-Z preamble + the file
         // from line N, see lib/resumeFromLine.js). Job line L of that program
         // is file line L + _lineOffset; preamble lines map to _lineOffsetMin
@@ -215,6 +226,7 @@ class RSPController extends EventEmitter {
         this._positionUncertain = null;
         this._positionUncertainSig = '';
         this._feedOverridePct = 100.0;
+        this._machineLimitsProvider = null; // set by CNCEngine, see setMachineLimitsProvider()
         this._debugEnabled = false;
         // Bumped at the top of every _startJob() call. _startJob() awaits
         // twice (post-abort settle delay, up-to-3s idle-wait) before it
@@ -336,6 +348,15 @@ class RSPController extends EventEmitter {
         };
     }
 
+    /**
+     * { macro: true } on the sender:* events of a macro job, so the durable
+     * checkpoint (JobResumeService) never takes a macro's start, progress or
+     * end for the loaded file's.
+     */
+    _macroFlag() {
+        return this._jobIsMacro ? { macro: true } : {};
+    }
+
     _bindJobListeners() {
         if (!this.job) return;
         this.job.on('progress', ({ executed, total, lineNo, pos }) => {
@@ -347,7 +368,14 @@ class RSPController extends EventEmitter {
             // controller types. Previously this emitted {executed,total,
             // remaining}, which don't exist on SenderStatus, so the
             // highlight/progress bar silently never updated on RSP boards.
-            const fileLine = this._fileLine(lineNo);
+            // lineNo is the last EXECUTED job line. While a resume's preamble
+            // runs, no file line has executed yet: report line N-1, not N.
+            // _fileLine() maps preamble lines to N (right for "next line to
+            // run"), which told JobResumeService line N was done, so a Stop in
+            // the preamble saved a checkpoint that skipped line N.
+            const fileLine = (this._lineOffsetMin && lineNo && lineNo + this._lineOffset < this._lineOffsetMin)
+                ? this._lineOffsetMin - 1
+                : this._fileLine(lineNo);
             this._currentLine = fileLine;
             // A resume streams a REBUILT program (preamble + the rest of the
             // file), so counting its own lines restarted the bar at 0% and
@@ -362,6 +390,7 @@ class RSPController extends EventEmitter {
                 remaining: Math.max(0, fileTotal - fileDone),
                 lineNo: fileLine,
                 pos: pos || this.state?.status?.mpos || { x: 0, y: 0, z: 0 },
+                ...this._macroFlag(),
             });
         });
         // 'done' is a clean finish only; every failure arrives as 'failed'.
@@ -370,7 +399,7 @@ class RSPController extends EventEmitter {
             // Clean finish -- clear any resume point so a later START on
             // the same file runs from line 1, not "resume from the end".
             if (!this._jobIsMacro) this._clearResumePoint();
-            this.emit('sender:end', { jobId });
+            this.emit('sender:end', { jobId, ...this._macroFlag() });
             // LOW#14: JobHistoryService listens for 'job:end'/'job:error'/
             // 'job:abort', not 'sender:*'.
             this.emit('job:end', {});
@@ -379,7 +408,7 @@ class RSPController extends EventEmitter {
         this.job.on('aborted', () => {
             this._jobEndedAt = Date.now();
             this._feedHoldSent = false;
-            this.emit('sender:end', { aborted: true });
+            this.emit('sender:end', { aborted: true, ...this._macroFlag() });
             this.emit('job:abort');
         });
         this.job.on('failed', (reason) => {
@@ -389,12 +418,12 @@ class RSPController extends EventEmitter {
             // A failed job always keeps its resume point (it used to be wiped
             // when the failure came through the old 'done' path).
             if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
-                this._setResumePoint(stopLine, `job stopped: ${reason}`);
+                this._setResumePoint(stopLine, `job stopped: ${reason}`, { hardStop: !!(this.job && this.job.firmwareLost) });
                 this.emit('console', `⚠️ Job stopped at line ${stopLine}: ${reason}. Press START to continue from line ${stopLine}.`);
             } else {
                 this.emit('console', `⚠️ Job stopped: ${reason}`);
             }
-            this.emit('sender:error', { reason });
+            this.emit('sender:error', { reason, ...this._macroFlag() });
             // Plain object: Error.message does not survive Socket.IO JSON.
             this.emit('error', { message: `Job stopped: ${reason}` });
             this.emit('job:error', { message: reason });
@@ -419,7 +448,7 @@ class RSPController extends EventEmitter {
             const line = this._fileLine(nextLine);
             if (this._resumeLine > 1 && line > this._resumeLine && this._resumeGcode === this._loadedGcode) {
                 const total = this._fileTotalLines();
-                if (!total || line <= total) this._setResumePoint(line, this._resumeReason);
+                if (!total || line <= total) this._setResumePoint(line, this._resumeReason, { hardStop: this._resumeHardStop });
             }
         });
         // G4: the machine sits still for a while. Shown in the same banner as a
@@ -450,7 +479,7 @@ class RSPController extends EventEmitter {
     _onFirmwareJobLost(cause) {
         if (!this.job || !this.job.active || this.job.firmwareLost) return;
         const stopLine = this._fileLine(this.job.nextLineToRun());
-        if (stopLine > 1) this._setResumePoint(stopLine, cause);
+        if (stopLine > 1) this._setResumePoint(stopLine, cause, { hardStop: true });
         this.job.markFirmwareLost(cause);
         this.emit('sender:pause');
         return stopLine;
@@ -523,17 +552,27 @@ class RSPController extends EventEmitter {
     _noteOriginChanged(how) {
         if (!(this._resumeLine > 1)) return;
         this._originChangedSinceStop = true;
-        this.emit('console', `⚠️ You ${how} after the job stopped. Resume from line ${this._resumeLine} only if this is the SAME zero the job started from -- otherwise everything from here will be cut in the wrong place.`);
+        this.emit('console', `⚠️ You ${how} after the job stopped at line ${this._resumeLine}. START will no longer continue from there: the next START clears the resume point, and START after that runs the file from line 1. Use Start From Line ${this._resumeLine} only if this is the SAME stock and zero the job started from.`);
         this._emitResumePoint();
     }
 
-    _setResumePoint(line, reason) {
+    /** hardStop: the firmware stopped the job itself (E-STOP, driver alarm, lost host). */
+    _setResumePoint(line, reason, { hardStop = false } = {}) {
         if (this._jobIsMacro) return;
         this._originChangedSinceStop = false;
         this._resumeLine = line;
         this._resumeGcode = this._loadedGcode;
         this._resumeReason = reason || '';
+        this._resumeHardStop = !!hardStop;
         this._resumeAt = Date.now();
+        this._emitResumePoint();
+    }
+
+    /** A saved (non-hard) resume point becomes a hard stop: the next resume lifts and travels. */
+    _markResumePointHardStop(cause) {
+        if (this._resumeHardStop || !(this.getResumePoint().line > 1)) return;
+        this._resumeHardStop = true;
+        logger.info(`[RSP] ${cause} after the job stopped: resume point line ${this._resumeLine} marked as a hard stop`);
         this._emitResumePoint();
     }
 
@@ -542,6 +581,7 @@ class RSPController extends EventEmitter {
         this._resumeLine = 0;
         this._resumeGcode = null;
         this._resumeReason = '';
+        this._resumeHardStop = false;
         this._resumeAt = 0;
         if (had) this._emitResumePoint();
     }
@@ -585,7 +625,12 @@ class RSPController extends EventEmitter {
         const axisName = this._faultAxisName(axis);
         if (!this._almGlitchLastConsole[axis] || nowMs - this._almGlitchLastConsole[axis] > 10 * 60 * 1000) {
             this._almGlitchLastConsole[axis] = nowMs;
-            this.emit('console', `ℹ️ ${axisName} motor-driver alarm (ALM) wire is noisy: short blips under ${Math.max(1, maxMs)} ms are being ignored and the job keeps running. To remove them, check the ${axisName} ALM wiring (see firmware README).`);
+            // The firmware ignores any ALM signal that is not held for
+            // ALM_FAULT_CONFIRM_MS; maxMs is only the longest blip it saw, and
+            // "blips under 1 ms are being ignored" misstated the filter. The
+            // firmware counts whole ms, so a sub-millisecond blip reports 0.
+            const longest = a.maxMs < 1 ? 'under 1' : String(a.maxMs);
+            this.emit('console', `ℹ️ ${axisName} motor-driver alarm (ALM) wire is noisy: alarm signals shorter than ${ALM_FAULT_CONFIRM_MS} ms are being ignored (longest so far ${longest} ms) and the job keeps running. To remove them, check the ${axisName} ALM wiring (see firmware README).`);
         }
         if (nowMs - this._almNoise.since >= 60 * 1000) this._flushAlmNoise(nowMs);
     }
@@ -707,7 +752,8 @@ class RSPController extends EventEmitter {
             // another client, or the firmware's own). Without this the job
             // would sit forever: no line finishes, and a hold is deliberately
             // not treated as a stall, so nothing would ever say so.
-            if (dict.state === defs.ST_HOLD && !this.job.paused) {
+            // Not while our own OP_RESUME is unanswered: that frame predates it (_sendResumeGuarded).
+            if (dict.state === defs.ST_HOLD && !this.job.paused && !this._resumeInFlight) {
                 this.job.pause();
                 this.emit('sender:pause');
                 this.emit('workflow:state', 'paused');
@@ -776,6 +822,12 @@ class RSPController extends EventEmitter {
         // as a trigger once Tawfiq confirms the ALM lines are actually wired
         // to the drivers and a real fault event has been reproduced cleanly.
         if (dict.state === defs.ST_ALARM || dict.state === defs.ST_ESTOP || dict.state === defs.ST_FAULT || dict.estop_active) {
+            // E-stop / alarm after a Stop (or together with it): the drivers
+            // were cut with a resume point saved as a plain stop, so the next
+            // resume would go straight down in place although Z may have
+            // sagged. Upgrade it to a hard stop: resume lifts and travels
+            // (Phase 1 D6-M1, D6-3).
+            if (!(this.job && this.job.active)) this._markResumePointHardStop(dict.estop_active || dict.state === defs.ST_ESTOP ? 'E-STOP' : 'alarm');
             const alarmType = dict.estop_active ? 'estop'
                 : (dict.state_name ? dict.state_name.toLowerCase() : 'alarm');
             if (!this._lastAlarmEmitted || this._lastAlarmEmitted !== alarmType) {
@@ -935,11 +987,11 @@ class RSPController extends EventEmitter {
         switch (cmd) {
             case 'jog': {
                 const p = args[0] || {};
-                const feed = Math.min(Number(p.feedRate) || 500, 10000);
                 const axes = [
                     ['x', AXIS_X], ['y', AXIS_Y], ['z', AXIS_Z],
                 ];
                 const requested = axes.filter(([key]) => p[key] !== undefined && p[key] !== null && !isNaN(Number(p[key])) && Math.abs(Number(p[key])) > 0.0001);
+                const feed = this._jogFeed(p.feedRate, requested.map(([key]) => key));
                 if (requested.length > 1) {
                     // Diagonal jog (>1 axis nonzero): OP_JOG only moves one axis at
                     // a time, so firing it per-axis in a loop moved X to completion
@@ -1085,16 +1137,21 @@ class RSPController extends EventEmitter {
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(mask));
                 break;
             }
+            // A per-axis zero moves the origin as much as Zero All does, so it
+            // flags the resume point too (Phase 1 D3-M1).
             case 'zero:x':
                 this._noteAxesZeroed(AXIS_BIT_X);
+                this._noteOriginChanged('set a new X zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_X));
                 break;
             case 'zero:y':
                 this._noteAxesZeroed(AXIS_BIT_Y);
+                this._noteOriginChanged('set a new Y zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Y));
                 break;
             case 'zero:z':
                 this._noteAxesZeroed(AXIS_BIT_Z);
+                this._noteOriginChanged('set a new Z zero');
                 this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Z));
                 break;
             case 'wcs:zeroAll':
@@ -1151,6 +1208,23 @@ class RSPController extends EventEmitter {
                         this._clearResumePoint();
                         return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
                     }
+                    // The work zero was changed (Zero, Zero All, a per-axis
+                    // zero, homing) after the resume point was saved. A plain
+                    // START used to resume mid-file at the NEW zero -- the rest
+                    // of the job cut in the wrong place (Phase 1 D1-F3/D5-1).
+                    // Mechanism: this first START does nothing but clear the
+                    // resume point and say so; pressing START again runs the
+                    // file from line 1. Continuing at line N on the same stock
+                    // stays possible, deliberately, with Start From Line N
+                    // (which is also the controller-restart recovery flow).
+                    if (this._originChangedSinceStop) {
+                        const line = this._resumeLine;
+                        logger.info(`[RSP] START after a work-zero change: resume point line ${line} cleared, nothing started`);
+                        this._clearResumePoint();
+                        this._originChangedSinceStop = false;
+                        this.emit('console', `⛔ Nothing was started: the work zero was changed after the job stopped at line ${line}, so START will not continue from there. Use Start From Line ${line} if this is the same stock and you re-found the same zero, or press Start again to run the file from line 1.`);
+                        return undefined;
+                    }
                     return this._resumeFromPoint();
                 }
                 return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
@@ -1198,7 +1272,7 @@ class RSPController extends EventEmitter {
                     // 0.2.0 refuses that firmware-side as well (FW-10).
                     if (this._firmwareIsHolding()) {
                         this._feedHoldSent = false;
-                        this._fireAndForget(defs.OP_RESUME, Buffer.alloc(0));
+                        this._sendResumeGuarded();
                     }
                     this.emit('sender:resume');
                     this.emit('workflow:state', 'running');
@@ -1238,8 +1312,8 @@ class RSPController extends EventEmitter {
                 this.emit('workflow:state', 'idle');
                 if (wasActive && stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
                     // Stopping an already alarm-paused job keeps the alarm as the reason.
-                    const reason = (this._resumeLine === stopLine && this._resumeReason) ? this._resumeReason : 'stopped';
-                    this._setResumePoint(stopLine, reason);
+                    const keep = this._resumeLine === stopLine && !!this._resumeReason;
+                    this._setResumePoint(stopLine, keep ? this._resumeReason : 'stopped', { hardStop: keep && this._resumeHardStop });
                     this.emit('console', `⏹️ Stopped at line ${stopLine}. Press START to resume from here, use Start From Line, or load a new file to restart.`);
                 } else if (wasActive) {
                     this._clearResumePoint();
@@ -1388,6 +1462,32 @@ class RSPController extends EventEmitter {
         }
     }
 
+    /**
+     * OP_RESUME for a held job. A status frame the firmware built BEFORE it
+     * applied OP_RESUME still says HOLD; arriving after the host cleared
+     * job.paused it re-paused the job ("The machine is on feed hold") while
+     * the firmware ran on (Phase 1 D6-1 / D1-F5). Until the firmware's reply
+     * to this OP_RESUME is in, HOLD telemetry is not read as a new hold; frames
+     * after the reply show the post-resume state (the link delivers in order),
+     * so a real hold is still picked up by the next frame.
+     */
+    _sendResumeGuarded() {
+        if (!this.stream) return;
+        const token = {};
+        this._resumeInFlight = token;
+        const done = () => { if (this._resumeInFlight === token) this._resumeInFlight = null; };
+        try {
+            this.stream.sendCommand(defs.OP_RESUME, Buffer.alloc(0), { timeout: 3.0 }).then(done, (exc) => {
+                done();
+                logger.warn(`[RSP] op 0x${defs.OP_RESUME.toString(16)} failed: ${exc && exc.message ? exc.message : exc}`);
+            });
+        } catch (exc) {
+            done();
+            if (!(exc instanceof LinkLost)) throw exc;
+            logger.warn(`[RSP] op 0x${defs.OP_RESUME.toString(16)} not sent -- link down`);
+        }
+    }
+
     /** Fire a command without blocking the caller; logs and swallows LinkLost. */
     _fireAndForget(op, payload) {
         if (!this.stream) return;
@@ -1477,17 +1577,16 @@ class RSPController extends EventEmitter {
      */
     probeAxis(axis, dirNeg, maxTravelMm, feedMmPerMin) {
         if (!this.stream) return Promise.reject(new Error('controller not bound'));
-        // Direction bit: firmware's probe_axis_single() (fw_m3/Src/main.c:681)
-        // writes the DIR pin for whichever axis is selected with ONE
-        // uninverted line (dir_neg ? RESET : SET) -- unlike OP_MOVE's
-        // motion_set_dir_pins() (main.c:382-390), which XORs Z_DIR_INVERT
-        // for Z only (X and Y1 have no invert #define at all). So probe's
-        // wire bit already matches move's physical convention for X/Y with
-        // NO inversion needed, but is backwards for Z specifically.
-        // msg11358's fix inverted ALL axes to fix Z-only-moved-up, which
-        // silently broke X/Y probing from that point on -- msg11499/11514
-        // (X, then X+Y, moving away from the block during actual probing)
-        // is that regression. Invert ONLY for Z.
+        // Direction bit: OP_PROBE's Z bit is inverted ON THE WIRE, on every
+        // firmware version -- keep this flip. Up to 0.2.0 it was needed
+        // because probe_axis_single() wrote Z's DIR pin without Z_DIR_INVERT.
+        // 0.2.1 fixed probe_axis_single() but rsp_handle_probe() converts the
+        // Z bit back, so the wire meaning (Z: 0 = down) stays the same for
+        // both. Removing the flip makes a Z probe on either firmware drive UP
+        // for its whole max travel, and probing does not watch the limit
+        // switches (tests/rsp-firmware-021.test.js pins this).
+        // X/Y are NOT flipped: msg11358 inverted all axes to fix Z and broke
+        // X/Y probing (msg11499/11514, moving away from the block).
         const wireDir = (axis === 2) ? (dirNeg ? 0 : 1) : dirNeg;
         const payload = codec.buildProbe(axis, wireDir, maxTravelMm, feedMmPerMin);
         // Firmware blocks for the full probe move before replying (same
@@ -1599,9 +1698,48 @@ class RSPController extends EventEmitter {
             });
     }
 
+    /**
+     * CNCEngine hands over a getter for the machine limits in the config
+     * (machine.maxRate), so a jog made before any file is loaded still
+     * respects them.
+     * @param {() => ({maxRate?: {x?: number, y?: number, z?: number}})} fn
+     */
+    setMachineLimitsProvider(fn) {
+        this._machineLimitsProvider = typeof fn === 'function' ? fn : null;
+    }
+
+    /** Per-axis max rates (mm/min), merged over the compiler's defaults the way compileWire() does. */
+    _machineMaxRate() {
+        let rate = null;
+        if (this._machineLimitsProvider) {
+            try {
+                const limits = this._machineLimitsProvider();
+                rate = limits && limits.maxRate;
+            } catch (_) { /* fall back below */ }
+        }
+        if (!rate && this._lastCompileOptions) rate = this._lastCompileOptions.maxRate;
+        return { ...WIRE_DEFAULTS.maxRate, ...(rate || {}) };
+    }
+
+    /**
+     * Jog feed: the requested feed, held to the slowest jogged axis's maxRate
+     * and to JOG_FEED_MAX. Only the 10000 cap applied before, so Z jogs went
+     * out at 9000 mm/min on a machine whose programs are held to Z 3000.
+     */
+    _jogFeed(feedRate, axisKeys) {
+        const rate = this._machineMaxRate();
+        let cap = JOG_FEED_MAX;
+        for (const k of axisKeys) {
+            if (Number(rate[k]) > 0) cap = Math.min(cap, Number(rate[k]));
+        }
+        return Math.min(Number(feedRate) || 500, cap);
+    }
+
     _setFeedOverride(pct) {
         const clamped = Math.min(FEED_OVERRIDE_MAX, Math.max(FEED_OVERRIDE_MIN, pct));
         this._feedOverridePct = clamped;
+        // Set with no job running: meant for the next Start, which keeps it (_startJob).
+        this._feedOverrideChosenWhileIdle = !(this.job && this.job.active);
         if (this.state && this.state.status) {
             this.state.status.feedOverridePct = clamped;
         }
@@ -1611,7 +1749,9 @@ class RSPController extends EventEmitter {
         // sending it changed nothing on the machine. Not sent any more, so a
         // future firmware that does apply it cannot scale the feed twice.
         if (this.job) this.job.setFeedOverride(clamped);
-        this.emit('console', `Feed override ${clamped}%${this.job && this.job.active ? ' — takes effect within the next few moves.' : ''}`);
+        // Above 100% moves that go down in Z are not sped up (job.js _descendLines).
+        const plungeNote = clamped > 100 ? ' Plunges and downward moves keep their programmed speed.' : '';
+        this.emit('console', `Feed override ${clamped}%${this.job && this.job.active ? ' — takes effect within the next few moves.' : (plungeNote ? '.' : '')}${plungeNote}`);
         this.emit('status', this.state);
         this.emit('sender:status', { feedOverridePct: clamped });
     }
@@ -1790,8 +1930,19 @@ class RSPController extends EventEmitter {
     /** Resume preamble uses the same rapid / Z rate / headroom the file was compiled with. */
     _resumeBuildOptions(opts = {}) {
         const o = (this._loadedMeta && this._loadedMeta.options) || {};
-        const mpos = (this.state && this.state.status && this.state.status.mpos) || null;
+        const st = (this.state && this.state.status) || {};
+        const mpos = st.mpos || null;
         const ext = this._loadedMeta && this._loadedMeta.extents;
+        // X/Y let the preamble skip the lift and travel when the tool already
+        // stands at the resume point. Only from a still machine (a jog or a
+        // stop still decelerating makes the last frame stale) whose position
+        // is trusted; otherwise the full lift / travel / plunge is built.
+        // Not after the firmware stopped the job itself (E-STOP, driver alarm,
+        // lost host): the E-STOP circuit may have cut the spindle and an ALM
+        // often means the axis lost its place, so the bit comes out of the
+        // material before the operator restarts anything (review 2026-09-17).
+        const hardStop = this._resumeHardStop && this.getResumePoint().line > 1;
+        const trusted = !this._positionUncertain && st.state === defs.ST_IDLE && !!mpos && !hardStop;
         return {
             safeZMm: opts.safeZ,
             plungeFeedMm: opts.plungeFeed,
@@ -1804,6 +1955,8 @@ class RSPController extends EventEmitter {
             fileMaxZMm: ext && ext.max && Number.isFinite(ext.max.z) ? ext.max.z : undefined,
             // so the first move never descends to reach the safe height
             currentZMm: mpos && Number.isFinite(mpos.z) ? mpos.z : undefined,
+            currentXMm: trusted && Number.isFinite(mpos.x) ? mpos.x : undefined,
+            currentYMm: trusted && Number.isFinite(mpos.y) ? mpos.y : undefined,
         };
     }
 
@@ -1827,7 +1980,7 @@ class RSPController extends EventEmitter {
             name: this._loadedName,
             context,
             plan: plan.ok
-                ? { ok: true, preamble: plan.preamble, startMm: plan.startMm, retractMm: plan.retractMm, units: plan.units, warnings: plan.warnings }
+                ? { ok: true, preamble: plan.preamble, startMm: plan.startMm, retractMm: plan.retractMm, inPlace: plan.inPlace, inPlaceZ: plan.inPlaceZ, units: plan.units, warnings: plan.warnings }
                 : { ok: false, error: plan.error },
             resumePoint: this.getResumePoint(),
         };
@@ -1836,7 +1989,9 @@ class RSPController extends EventEmitter {
     /**
      * Start From Line (safe): lift to safe Z in work coordinates, travel to
      * where `line` starts, plunge back to its depth, then run the file from
-     * `line`. Reported line numbers stay those of the loaded file.
+     * `line` -- or, when the tool already stands at that X/Y, no lift or
+     * travel (lib/resumeFromLine.js). Reported line numbers stay those of the
+     * loaded file.
      */
     _startFromLineSafe(line, opts, { resume = false } = {}) {
         const lines = this._loadedLines;
@@ -1849,20 +2004,35 @@ class RSPController extends EventEmitter {
         if (this._blockIfPositionUncertain(what)) return undefined;
         const p = plan.startMm;
         logger.info(`[RSP] ${what}: ${plan.preamble.join(' | ')}`);
-        this.emit('console', `▶️ ${what}: raise Z to ${plan.retractMm.toFixed(2)} mm, move to X${p.x.toFixed(3)} Y${p.y.toFixed(3)}${p.z === null ? '' : `, lower to Z${p.z.toFixed(3)}`} (mm), then continue.`);
+        if (plan.inPlace) {
+            const how = {
+                lower: `no lift or travel, lower to Z${p.z.toFixed(3)}`,
+                raise: `no travel, straight up to Z${p.z.toFixed(3)}`,
+                none: 'no lift, travel or Z move',
+            }[plan.inPlaceZ];
+            this.emit('console', `▶️ ${what}: the tool is already at X${p.x.toFixed(3)} Y${p.y.toFixed(3)} -- ${how} (mm), then continue.`);
+        } else {
+            this.emit('console', `▶️ ${what}: raise Z to ${plan.retractMm.toFixed(2)} mm, move to X${p.x.toFixed(3)} Y${p.y.toFixed(3)}${p.z === null ? '' : `, lower to Z${p.z.toFixed(3)}`} (mm), then continue.`);
+        }
         for (const w of plan.warnings) this.emit('console', `ℹ️ ${w}`);
 
         // Job line L of the program is file line L + lineOffset.
         const holds = this._holdsForFile(line, plan.lineOffset);
         // Spindle was on at this line: the program stops after the travel, at
         // safe height, so the operator confirms the spindle is running before
-        // the tool goes back into the material.
+        // the tool goes back into the material. Resuming in place stops at the
+        // same point of the program (before any plunge).
         const spindleIdx = plan.preamble.findIndex((l) => /^M[34]\b/.test(l));
         if (spindleIdx >= 0 && p.z !== null) {
+            const lowers = !plan.inPlace || plan.inPlaceZ === 'lower';
             holds.push({
                 line: spindleIdx + 1,
                 kind: 'pause',
-                message: `Tool is above line ${line}. Make sure the spindle is running at speed, then press Resume to lower the tool and continue`,
+                // In place at the start depth the bit can still be in the
+                // material: never have the operator start the spindle there.
+                message: lowers
+                    ? `Tool is above line ${line}. Make sure the spindle is running at speed, then press Resume to lower the tool and continue`
+                    : `Tool is at the start of line ${line}, at Z${p.z.toFixed(3)} mm -- the bit may still be in the material. If the spindle is running at speed, press Resume to continue. If it is off, press Stop and raise Z before starting it`,
             });
         }
         return this._startJob(plan.program.join('\n'), 0, {
@@ -1877,7 +2047,8 @@ class RSPController extends EventEmitter {
     /**
      * Continue a stopped / alarmed job from its saved resume point, always
      * through the safe program (retract, travel, plunge) -- the tool may have
-     * been jogged or stopped mid-move since (plan BE-25).
+     * been jogged or stopped mid-move since (plan BE-25). The retract and
+     * travel are left out only when the tool is still exactly at that X/Y.
      */
     _resumeFromPoint() {
         const point = this.getResumePoint();
@@ -1954,7 +2125,10 @@ class RSPController extends EventEmitter {
         if (jobActive) {
             this.job.abort();
             const totalLines = this._fileTotalLines();
-            if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) this._setResumePoint(stopLine, 'E-STOP');
+            if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) this._setResumePoint(stopLine, 'E-STOP', { hardStop: true });
+        } else {
+            // E-STOP pressed after a Stop: drivers are cut, the saved resume point must lift and travel.
+            this._markResumePointHardStop('E-STOP');
         }
         try {
             this.stream.sendNowait(defs.OP_E_STOP, Buffer.alloc(0), true, { force: true });
@@ -1996,6 +2170,24 @@ class RSPController extends EventEmitter {
         if (this.state && this.state.status && (this.state.status.state === defs.ST_ALARM || this.state.status.state === defs.ST_ESTOP)) {
             this.emit('console', '⚠️ Cannot start job: Machine is in ALARM or E-STOP state. Clear alarm ($X) first.');
             return;
+        }
+        // A fresh start of a file from line 1 (mapping null: not a resume,
+        // Start From Line or macro) runs at the programmed feeds. The override
+        // is controller-session state, so a 200% set during the previous job
+        // used to carry into the next one (Phase 1 D1-F1). A resume of the
+        // same stopped job goes through _resumeFromPoint / Start From Line and
+        // keeps the operator's override. An override the operator set while
+        // no job was running is a choice for THIS start and is kept.
+        const chosenForThisStart = !!this._feedOverrideChosenWhileIdle;
+        if (!(mapping && mapping.macro)) this._feedOverrideChosenWhileIdle = false;
+        if (resumeLine === 0 && mapping === null && this._feedOverridePct !== 100 && !chosenForThisStart) {
+            const was = this._feedOverridePct;
+            this._feedOverridePct = 100;
+            if (this.state && this.state.status) this.state.status.feedOverridePct = 100;
+            if (this.job) this.job.setFeedOverride(100);
+            this.emit('console', `Feed override reset to 100% (was ${was}%) because the job starts from line 1.`);
+            this.emit('status', this.state);
+            this.emit('sender:status', { feedOverridePct: 100 });
         }
         // Claim this call's generation. Any earlier, still-in-flight
         // _startJob() call becomes stale the instant a newer one is
@@ -2049,6 +2241,7 @@ class RSPController extends EventEmitter {
             jobId,
             total: mapping ? this._fileTotalLines() : lines.length,
             resumedFrom: firstFileLine > 1 ? firstFileLine : undefined,
+            ...this._macroFlag(),
         });
         // LOW#14: matching job:start for JobHistoryService (see job:end/
         // job:abort/job:error alongside the sender:* emits below).

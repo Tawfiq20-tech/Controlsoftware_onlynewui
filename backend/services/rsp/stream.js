@@ -84,6 +84,33 @@ const TICK_MS = 5;
 // gets a seq-0 session reset instead.
 const GAP_FILLER_WINDOW = 64;
 
+// A command the caller expects to outlast the stall timeout (OP_PROBE /
+// OP_MOVE / OP_HOME: firmware 0.2.0 answers only when the motion ends) gets
+// the caller's own timeout plus this margin before it counts as stalled.
+const SLOW_COMMAND_GRACE_S = 2.0;
+
+// Commands during which firmware that does not ACK them early (0.2.0, and
+// 0.2.1 before the F10 amendment) sends nothing at all: the probe and homing
+// loops never report. Every other command -- OP_MOVE included, which pushes
+// EV_STATUS while it runs -- leaves a silent link meaning a lost link.
+const SILENT_OPS = new Set([defs.OP_PROBE, defs.OP_HOME]);
+
+// Go-back-N after a SEQ_GAP NAK: a frame is resent once it has been on the
+// wire this long without an ACK, so a frame that is merely still in flight is
+// not duplicated. Follows the measured ACK round trip within these bounds.
+const FAST_RTO_MIN_S = 0.015;
+const FAST_RTO_MAX_S = 0.25;
+// A go-back-N resend that is itself lost draws no NAK when nothing follows it
+// (nothing new is sent during recovery), so it is tried once more after this
+// long instead of waiting a whole RTO.
+const FAST_FOLLOWUP_MIN_S = 0.1;
+// An ACK slower than FAST_RTO_MAX_S is the device being busy (0.2.0 settles
+// the drivers for ~500 ms in its main loop at the first move, and frames still
+// in its USB buffer are ACKed after that), not the link: such samples pinned
+// the go-back-N delay at its cap for the next few dozen frames. Only a run
+// this long of slow ACKs -- more than a full window -- counts as a slow link.
+const SLOW_RTT_RUN = 32;
+
 function now() {
     return Date.now() / 1000;
 }
@@ -111,6 +138,9 @@ class Pending {
         this.durable = durable;
         this.bufferBackoffUntil = 0.0; // flow-control pause (BUFFER NAK)
         this.firstSentAt = firstSentAt; // set once at creation; NEVER reset by NAK handling
+        this.budgetS = 0;     // own stall budget (slow command); 0 = the stream's stallTimeoutS
+        this.resent = false;  // put on the wire more than once (no RTT sample from its ACK)
+        this.fast = false;    // 'gap' | 'followup': next resend belongs to a SEQ_GAP recovery, not an RTO expiry
     }
 }
 
@@ -195,7 +225,23 @@ class ReliableStream extends EventEmitter {
         // RSP proves the device can actually complete a durable command
         // again; see _handle()'s FT_ACK/FT_RSP branches below.
         this._linkDownReason = '';
-        this._lastGapNak = 0.0;
+        this._lastFill = null; // {gap, at}: last PING-filler pass (see _onSeqGap)
+        // SEQ_GAP recovery in progress: frames from..to are being resent in
+        // order; `available` is 0 until the device has all of them.
+        this._recover = null;
+        // ACK round trip (Karn/Jacobson), drives the go-back-N resend delay.
+        this._srtt = null;
+        this._rttvar = 0;
+        this._slowRttRun = 0; // consecutive ACK samples above FAST_RTO_MAX_S
+        // seq -> {until}: slow commands (see SLOW_COMMAND_GRACE_S) awaiting their
+        // reply, and the last one that got it ({seq, at}). The device handles
+        // frames strictly in order, so a frame sent after a slow command cannot
+        // be answered before it.
+        this._slowCmds = new Map();
+        this._slowEnd = null;
+        // seq -> {sentAt, until}: an OP_PROBE / OP_HOME awaiting its reply within
+        // its own timeout, and not ACKed early (see SILENT_OPS, linkDownReason).
+        this._silentOps = new Map();
         // Ring buffer of link up/down transitions (reason mirrors the string
         // passed to _setLink: 'heartbeat', 'stall', 'tx_error', etc.) --
         // exposed via getLinkHealth() so /api/link-health can show *why* a
@@ -219,6 +265,18 @@ class ReliableStream extends EventEmitter {
         return this._linkOk;
     }
 
+    /**
+     * Why the link is down ('' while up): 'heartbeat' (nothing heard for
+     * 3 heartbeats), 'silent_during_slow_command' (the same, but it began
+     * while an OP_PROBE or OP_HOME was awaiting its reply within its own
+     * timeout and the device had not ACKed it early -- firmware 0.2.0 sends
+     * nothing at all then; a device that ACKs early keeps reporting, so there
+     * the silence stays 'heartbeat'), 'stall', 'tx_error'.
+     */
+    get linkDownReason() {
+        return this._linkOk ? '' : this._linkDownReason;
+    }
+
     get inFlight() {
         return this._sent.size;
     }
@@ -230,7 +288,22 @@ class ReliableStream extends EventEmitter {
         // the wrap overtake it -- e.g. a BUFFER-NAKed job line at 65535 would
         // be skipped. Drain first; _takeSeq() then puts a PING on seq 0.
         if (this._txSeq === 0 && this._sent.size > 0) return 0;
+        // After a lost frame the device discards everything behind it. New
+        // frames sent before it has the resent ones are discarded too, and
+        // their NAKs restart the recovery -- 2026-09-17 (D6-2): one lost job
+        // line kept a fast raster at a crawl for minutes that way.
+        if (this._recover && this._recovering()) return 0;
         return Math.max(0, this.window - this.inFlight);
+    }
+
+    _recovering() {
+        const { from, to } = this._recover;
+        const span = (to - from) & 0xFFFF;
+        for (const s of this._sent.keys()) {
+            if (((s - from) & 0xFFFF) <= span) return true;
+        }
+        this._recover = null;
+        return false;
     }
 
     /** Suppress/resume the background heartbeat. Pause during an active job. */
@@ -330,7 +403,21 @@ class ReliableStream extends EventEmitter {
         const seq = this._takeSeq();
         const body = Buffer.concat([Buffer.from([op & 0xFF]), payload || Buffer.alloc(0)]);
         const now0 = now();
-        this._sent.set(seq, new Pending(seq, body, now0, this.rtoS, durable, now0));
+        const pending = new Pending(seq, body, now0, this.rtoS, durable, now0);
+        // The caller said how long this may take. A 60 s probe used to be
+        // given up after the generic 20 s stall timeout -- 'RSP link lost'
+        // while the board was busy probing and sending telemetry (D2-M3).
+        const waitS = Number(timeout) || 0;
+        if (waitS > this.stallTimeoutS) {
+            pending.budgetS = waitS + SLOW_COMMAND_GRACE_S;
+            this._slowCmds.set(seq, { sentAt: now0, until: now0 + pending.budgetS });
+        }
+        // Any probe or home that may outlast the heartbeat window, not only
+        // the slow ones: a 10 mm probe at 100 mm/min is silent for 6 s on 0.2.0.
+        if (SILENT_OPS.has(op & 0xFF) && waitS > this.heartbeatS * 3.0) {
+            this._silentOps.set(seq, { sentAt: now0, until: now0 + waitS });
+        }
+        this._sent.set(seq, pending);
 
         return new Promise((resolve, reject) => {
             // NOTE: intentionally NOT unref()'d -- this timer is the only
@@ -339,11 +426,20 @@ class ReliableStream extends EventEmitter {
             // the process before an unanswered command's timeout fired in
             // testing, leaving the caller's await hanging forever with no
             // error surfaced. Found via stream_smoke.js test 5.
-            const timer = setTimeout(() => {
-                this._replyWaiters.delete(seq);
+            const waiter = { resolve, reject, timer: null, op: op & 0xFF };
+            waiter.timer = setTimeout(() => {
+                // A session re-sync may have renumbered this command: remove
+                // the waiter under whatever seq it lives now, not only `seq`.
+                for (const [s, w] of this._replyWaiters) {
+                    if (w === waiter) {
+                        this._replyWaiters.delete(s);
+                        this._silentOps.delete(s);
+                        break;
+                    }
+                }
                 reject(new RspTimeoutError(`no reply for seq ${seq}`));
             }, Math.max(0, timeout) * 1000);
-            this._replyWaiters.set(seq, { resolve, reject, timer });
+            this._replyWaiters.set(seq, waiter);
 
             try {
                 this.transport.send(buildFrame(FT_CMD, F_ACK, seq, body));
@@ -434,6 +530,9 @@ class ReliableStream extends EventEmitter {
             waiter.reject(new LinkLost('stream stopped'));
         }
         this._replyWaiters.clear();
+        this._slowCmds.clear();
+        this._silentOps.clear();
+        this._slowEnd = null;
     }
 
     close() {
@@ -549,8 +648,14 @@ class ReliableStream extends EventEmitter {
         // heartbeat liveness
         const n2 = now();
         if (this._linkOk && (n2 - this._lastRx) > this.heartbeatS * 3.0) {
-            this._log.warn('heartbeat timeout -- link lost');
-            this._setLink(false, 'heartbeat');
+            // Firmware 0.2.0 sends nothing at all while it probes or homes
+            // (those loops never call protocol_status_tick), which looks
+            // exactly like a pulled cable. Detection stays at 3 s; the reason
+            // tells the caller which it probably is.
+            const busy = this._silentForSlowCommand(n2);
+            this._log.warn(busy ? 'heartbeat timeout while a slow command is running -- link lost or the controller is busy'
+                : 'heartbeat timeout -- link lost');
+            this._setLink(false, busy ? 'silent_during_slow_command' : 'heartbeat');
             this._lastRx = n2;
         }
 
@@ -634,7 +739,23 @@ class ReliableStream extends EventEmitter {
         for (const seq of toResend) {
             const p = this._sent.get(seq);
             if (!p) continue;
-            p.retries += 1;
+            // A go-back-N resend answers a NAK -- the device is alive -- so it
+            // is not a failed attempt.
+            const fast = p.fast;
+            if (!fast) p.retries += 1;
+            if (p.retries > this.maxRetries && this._withinSlowBudget(p, n)) {
+                // A slow command, or a frame queued behind one, is not
+                // answered before that command's motion ends. It has been on
+                // the wire 1 + maxRetries times: keep it pending (no give-up
+                // until its budget runs out) but send no more copies. They
+                // only filled the board's 2 KB USB buffer during a blocking
+                // 0.2.0 probe, and after a board reset a copy could start the
+                // probe or move again. Its reply, a SEQ_GAP, or the end of the
+                // slow command (retries reset, see the FT_RSP branch) settles it.
+                p.retries = this.maxRetries;
+                p.sentAt = n;
+                continue;
+            }
             if (p.retries > this.maxRetries) {
                 const op = p.payload[0];
                 const opName = defs.OP_NAMES[op] || `OP_0x${op.toString(16).padStart(2, '0')}`;
@@ -656,7 +777,16 @@ class ReliableStream extends EventEmitter {
                 continue;
             }
             p.sentAt = n;
-            p.rto = Math.min(p.rto * 2.0, 5.0);
+            p.resent = true;
+            if (fast === 'gap') {
+                p.fast = 'followup';
+                p.rto = Math.min(this.rtoS, Math.max(FAST_FOLLOWUP_MIN_S, 4 * this._fastRtoS()));
+            } else if (fast) {
+                p.fast = false;
+                p.rto = this.rtoS;
+            } else {
+                p.rto = Math.min(p.rto * 2.0, 5.0);
+            }
             try {
                 this.transport.send(buildFrame(FT_CMD, F_ACK, seq, p.payload));
                 this._lastTx = n;
@@ -670,14 +800,53 @@ class ReliableStream extends EventEmitter {
                 this._setLink(false, 'tx_error');
                 continue;
             }
-            this._log.info(`resend seq ${seq} (retry ${p.retries})`);
+            if (fast) this._log.debug(`resend seq ${seq} (SEQ_GAP)`);
+            else this._log.info(`resend seq ${seq} (retry ${p.retries})`);
         }
+    }
+
+    /** True while `p` may legitimately still be waiting: see _slowCmds. */
+    _withinSlowBudget(p, n) {
+        if (p.budgetS && n - p.firstSentAt < p.budgetS) return true;
+        return this._behindSlowCommand(p.seq, n);
+    }
+
+    /** A probe or home still within its timeout was sent before the silence began. */
+    _silentForSlowCommand(n) {
+        let silent = false;
+        for (const [s, c] of this._silentOps) {
+            if (n >= c.until) {
+                this._silentOps.delete(s);
+                continue;
+            }
+            if (c.sentAt <= this._lastRx + 0.5) silent = true;
+        }
+        return silent;
+    }
+
+    _behindSlowCommand(seq, n) {
+        if (!this._slowCmds.size) return false;
+        let behind = false;
+        for (const [s, c] of this._slowCmds) {
+            if (n >= c.until) {
+                this._slowCmds.delete(s); // its own frame stalls on the same tick
+                continue;
+            }
+            if (s !== seq && seqBefore(s, seq)) behind = true;
+        }
+        return behind;
     }
 
     _checkStalled(n) {
         const stalled = [];
+        if (this._slowEnd && n - this._slowEnd.at > this.stallTimeoutS) this._slowEnd = null;
         for (const [seq, p] of this._sent) {
-            if (n - p.firstSentAt >= this.stallTimeoutS) {
+            if (this._behindSlowCommand(seq, n)) continue;
+            // Queued behind a slow command that has just finished: its clock
+            // starts now, not when it was sent.
+            const base = (this._slowEnd && seqBefore(this._slowEnd.seq, seq))
+                ? Math.max(p.firstSentAt, this._slowEnd.at) : p.firstSentAt;
+            if (n - base >= (p.budgetS || this.stallTimeoutS)) {
                 stalled.push(seq);
             }
         }
@@ -705,11 +874,19 @@ class ReliableStream extends EventEmitter {
     _handle(f, n) {
         this._lastRx = n;
         if (f.frameType === FT_ACK) {
-            const hadPending = this._sent.has(f.seq);
+            const pending = this._sent.get(f.seq);
+            const hadPending = !!pending;
             this._sent.delete(f.seq);
+            if (pending) {
+                if (!pending.resent) this._sampleRtt(n - pending.firstSentAt);
+                this._deliveredBefore(f.seq);
+            }
             if (this._devAckSeq < 0 || seqBefore(this._devAckSeq, f.seq)) {
                 this._devAckSeq = f.seq;
             }
+            // A device that ACKs a probe or home at once (0.2.1 F10) also
+            // reports while it runs: silence during it is a lost link.
+            this._silentOps.delete(f.seq);
             // A stall-downed link only recovers once a durable command
             // this side is actually waiting on gets a real ACK -- proof
             // the device can complete work again, not just that it's
@@ -725,6 +902,20 @@ class ReliableStream extends EventEmitter {
             const pending = this._sent.get(f.seq);
             const hadPending = !!pending;
             const waiter = this._replyWaiters.get(f.seq);
+            // Every RSP echoes its command's op in payload[0]. After a USB
+            // reconnect a board that was busy in a blocking probe/home (and
+            // 0.2.0 OP_MOVE) sends the OLD session's reply with the old seq;
+            // matched by seq alone it answered whatever the new session was
+            // waiting for (a Zero reported done that never happened). Drop a
+            // reply whose op is not the op sent under that seq: the command's
+            // own reply (or a replay of it) still settles it
+            // (2026-09-17, contracts/firmware-0.2.1.md 2.12).
+            const sentOp = waiter ? waiter.op : (pending && pending.payload.length ? pending.payload[0] : undefined);
+            if (sentOp !== undefined && f.payload && f.payload.length && f.payload[0] !== sentOp) {
+                const name = (o) => defs.OP_NAMES[o] || `OP_0x${o.toString(16).padStart(2, '0')}`;
+                this._log.warn(`reply for ${name(f.payload[0])} arrived under seq ${f.seq}, which is ${name(sentOp)} -- ignored (left over from an earlier session)`);
+                return;
+            }
             const errStatus = (f.payload && f.payload.length >= 2 && f.payload[1] !== defs.ST_OK) ? f.payload[1] : 0;
             if (waiter) {
                 clearTimeout(waiter.timer);
@@ -750,6 +941,21 @@ class ReliableStream extends EventEmitter {
             }
             // also drop from pending (acknowledged by the reply itself)
             this._sent.delete(f.seq);
+            if (pending) {
+                this._deliveredBefore(f.seq);
+                if (this._devAckSeq < 0 || seqBefore(this._devAckSeq, f.seq)) this._devAckSeq = f.seq;
+            }
+            this._silentOps.delete(f.seq);
+            const slow = this._slowCmds.get(f.seq);
+            if (slow) {
+                // The slow command's motion is over: what was queued behind it
+                // gets a fresh stall clock and retry count from now.
+                this._slowCmds.delete(f.seq);
+                this._slowEnd = { seq: f.seq, at: n };
+                for (const p of this._sent.values()) {
+                    if (seqBefore(f.seq, p.seq)) p.retries = 0;
+                }
+            }
             // A queued (sendNowait) frame answered with an error status, e.g. a
             // job line refused with ST_ERR_STATE because the machine went into
             // ALARM. Nobody awaits that reply -- without this the line looked
@@ -809,144 +1015,10 @@ class ReliableStream extends EventEmitter {
                 p.rto = Math.max(this.rtoS, 0.5);
                 p.sentAt = n;
                 p.bufferBackoffUntil = n + 0.45;
+                p.fast = false;
             }
         } else if (reason === defs.ST_ERR_SEQ_GAP) {
-            // device wants us to resend from `f.seq` (the first seq it
-            // needs). Throttle + normal-RTO pacing so we never NAK-flood
-            // the link.
-            if (n - this._lastGapNak < 0.05) return;
-            this._lastGapNak = n;
-            const gap = f.seq;
-            // How far behind the next seq to send is the seq the device wants?
-            // Within the filler window it is one of ours; otherwise the device
-            // is on another session's numbering.
-            const behind = (this._txSeq - gap) & 0xFFFF;
-            if (behind === 0) {
-                // The device already has everything up to the next seq we would
-                // send (a duplicate retransmit crossed its ACK) -- nothing is
-                // missing, just forget frames it has processed.
-                for (const s of Array.from(this._sent.keys())) {
-                    if (seqBefore(s, gap)) this._sent.delete(s);
-                }
-                return;
-            }
-            const recent = behind <= GAP_FILLER_WINDOW;
-            if (!recent && !this._sent.has(gap)) {
-                // Stale session (device kept its counter across a reconnect,
-                // or the seq-0 PING was lost). The old fix jumped _txSeq
-                // forward and deleted every pending frame "before" the gap --
-                // commands the device had never received. Re-sync the device
-                // to our numbering instead: a seq-0 PING resets its expected
-                // seq, and the pending frames follow in order.
-                if (n - this._lastSessionReset >= 1.0) {
-                    this._lastSessionReset = n;
-                    this._log.warn(`SEQ_GAP for seq ${gap} (next to send ${this._txSeq}) -- re-syncing device to this session`);
-                    // Seq 0 makes the device reset its expected seq to 0, so it
-                    // will want 1 next. Sending the PING alone left our own
-                    // counter untouched: the device asked for 1, we kept
-                    // sending 40000-something, and both sides repeated
-                    // themselves forever. Renumber what is still unacknowledged
-                    // and re-send it in order. The device has processed none of
-                    // it -- it has been refusing everything with SEQ_GAP -- so
-                    // nothing can be executed twice.
-                    this._sendRawPing(0);
-                    this._txSeq = 1;
-                    const pending = [...this._sent.values()].sort((a, b) => a.firstSentAt - b.firstSentAt);
-                    this._sent.clear();
-                    for (const p of pending) {
-                        const seq = this._takeSeq();
-                        const waiter = this._replyWaiters.get(p.seq);
-                        if (waiter) {
-                            this._replyWaiters.delete(p.seq);
-                            this._replyWaiters.set(seq, waiter);
-                        }
-                        this._sent.set(seq, new Pending(seq, p.payload, n, this.rtoS, p.durable, p.firstSentAt));
-                        try {
-                            this.transport.send(buildFrame(FT_CMD, F_ACK, seq, p.payload));
-                            this._lastTx = n;
-                        } catch (exc) {
-                            this._setLink(false, 'tx_error');
-                            break;
-                        }
-                    }
-                    if (pending.length) this._log.info(`re-sent ${pending.length} unacknowledged frame(s) under the new numbering`);
-                }
-                return;
-            }
-            let resend = null;
-            // Frames before the gap were processed by the device (their ACK
-            // was lost) -- they are done.
-            for (const s of Array.from(this._sent.keys())) {
-                if (seqBefore(s, gap)) this._sent.delete(s);
-            }
-            this._devAckSeq = (gap - 1) & 0xFFFF;
-            for (const [s, p] of this._sent) {
-                // leave head-of-line frames under BUFFER backoff alone --
-                // resetting their timer would starve them forever
-                if (!seqBefore(s, gap) && n >= (p.bufferBackoffUntil || 0.0)) {
-                    p.retries = 0;
-                    p.rto = this.rtoS;
-                    p.sentAt = n;
-                    if (s === gap) {
-                        resend = [s, p.payload];
-                    }
-                }
-            }
-            if (resend === null) {
-                // The device waits for a frame this host already gave up on
-                // (retries exhausted) or cancelled. Nothing will ever resend
-                // it, so without a filler every later command -- including
-                // Stop and E-stop -- is refused with SEQ_GAP forever (plan
-                // item BE-8, the Stop deadlock). A PING in that slot is
-                // harmless; the job layer already failed any job line lost
-                // this way ('gaveUp').
-                // Fill the whole run of dropped seqs in one go, up to the next
-                // frame that is still pending (that one is resent instead) --
-                // one filler per NAK took an RTO per hole to catch up.
-                let filled = 0;
-                let s = gap;
-                while (s !== this._txSeq && filled < GAP_FILLER_WINDOW) {
-                    const p = this._sent.get(s);
-                    if (p) {
-                        p.retries = 0;
-                        p.rto = this.rtoS;
-                        p.sentAt = n;
-                        try {
-                            this.transport.send(buildFrame(FT_CMD, F_ACK, s, p.payload));
-                            this._lastTx = n;
-                        } catch (exc) {
-                            this._setLink(false, 'tx_error');
-                        }
-                        break;
-                    }
-                    this._sendRawPing(s);
-                    filled += 1;
-                    s = (s + 1) & 0xFFFF;
-                }
-                this._log.warn(`SEQ_GAP for seq ${gap}, no longer pending -- sent ${filled} PING filler(s) to re-align the device`);
-                return;
-            }
-            // Resetting sentAt above only re-arms _retransmitReady()'s RTO
-            // timer for later -- it does NOT itself put a frame on the
-            // wire. If SEQ_GAP NAKs keep arriving faster than that RTO
-            // (which they will: every other in-window frame the device
-            // rejects as out-of-order re-triggers one), the reset keeps
-            // re-arming before the timer ever elapses and the
-            // head-of-line frame is silently never retransmitted again --
-            // a livelock, not a timeout, so neither the retry-exhaustion
-            // nor the stall-timeout safety net ever fires. Actually resend
-            // it here, on the spot, using the exact seq the device told
-            // us it's waiting for.
-            if (resend !== null) {
-                const [seq, payload] = resend;
-                try {
-                    this.transport.send(buildFrame(FT_CMD, F_ACK, seq, payload));
-                    this._lastTx = n;
-                } catch (exc) {
-                    this._log.warn(`tx error resending seq ${seq} after SEQ_GAP: ${exc.message || exc}`);
-                    this._setLink(false, 'tx_error');
-                }
-            }
+            this._onSeqGap(f.seq, n);
         } else {
             // Real rejection (not flow-control/reorder chatter):
             // Throttle console output to prevent UI freezes/event loop lockup when
@@ -957,6 +1029,200 @@ class ReliableStream extends EventEmitter {
             this._sent.delete(f.seq);
             this.emit('reject', { seq: f.seq, op, reason, opName, reasonName, payload: pending ? pending.payload : null });
         }
+    }
+
+    /**
+     * SEQ_GAP(gap): the device has consumed every seq before `gap` and
+     * discards every later frame until `gap` arrives -- it keeps no
+     * out-of-order frames (rsp_dispatch()). So recovery is go-back-N: every
+     * pending frame from `gap` on is resent, in seq order, and nothing new is
+     * sent until the device has them (see `available`). Until 2026-09-17 only
+     * the gap frame was resent; the rest waited a full RTO that every further
+     * NAK re-armed, while new lines kept going out to be discarded. One lost
+     * job line held a fast 3D raster at a crawl for minutes (D6-2).
+     */
+    _onSeqGap(gap, n) {
+        // How far behind the next seq to send is the seq the device wants?
+        // Within the filler window it is one of ours; otherwise the device
+        // is on another session's numbering.
+        const behind = (this._txSeq - gap) & 0xFFFF;
+        if (behind === 0) {
+            // The device already has everything up to the next seq we would
+            // send (a duplicate retransmit crossed its ACK) -- nothing is
+            // missing, just forget frames it has processed.
+            this._consumedBefore(gap);
+            return;
+        }
+        const recent = behind <= GAP_FILLER_WINDOW;
+        if (!recent && !this._sent.has(gap)) {
+            this._resyncSession(gap, n);
+            return;
+        }
+        // Frames before the gap were processed by the device (their ACK
+        // was lost) -- they are done.
+        this._consumedBefore(gap);
+        const head = this._sent.get(gap);
+        if (head) {
+            this._goBackN(gap, head, n);
+            return;
+        }
+        // A NAK the device sent before it got `gap`, arriving after the ACK
+        // of `gap` or of a later frame: nothing is missing any more. Fillers
+        // here would only be duplicates that draw more NAKs.
+        if (this._devAckSeq >= 0 && !seqBefore(this._devAckSeq, gap)) return;
+        // The device waits for a frame this host already gave up on
+        // (retries exhausted) or cancelled. Nothing will ever resend
+        // it, so without a filler every later command -- including
+        // Stop and E-stop -- is refused with SEQ_GAP forever (plan
+        // item BE-8, the Stop deadlock). A PING in that slot is
+        // harmless; the job layer already failed any job line lost
+        // this way ('gaveUp').
+        // Fill the whole run of dropped seqs in one go, up to the next
+        // frame that is still pending (that one and the rest follow the
+        // fillers) -- one filler per NAK took an RTO per hole to catch up.
+        // Every frame the device discarded while waiting NAKs the same gap:
+        // fill once per burst.
+        if (this._lastFill && this._lastFill.gap === gap && n - this._lastFill.at < 0.1) return;
+        this._lastFill = { gap, at: n };
+        let filled = 0;
+        let s = gap;
+        while (s !== this._txSeq && filled < GAP_FILLER_WINDOW) {
+            const p = this._sent.get(s);
+            if (p) {
+                this._goBackN(s, p, n);
+                break;
+            }
+            this._sendRawPing(s);
+            filled += 1;
+            s = (s + 1) & 0xFFFF;
+        }
+        this._log.warn(`SEQ_GAP for seq ${gap}, no longer pending -- sent ${filled} PING filler(s) to re-align the device`);
+    }
+
+    /** The device has consumed every seq before `gap`. */
+    _consumedBefore(gap) {
+        for (const s of Array.from(this._sent.keys())) {
+            if (seqBefore(s, gap)) this._sent.delete(s);
+        }
+        const last = (gap - 1) & 0xFFFF;
+        if (this._devAckSeq < 0 || seqBefore(this._devAckSeq, last)) this._devAckSeq = last;
+    }
+
+    /**
+     * The device answers strictly in seq order, so an ACK/RSP for `seq` means
+     * every earlier frame was consumed too. A lost ACK used to leave its
+     * frame to time out and be resent, and that duplicate made the device NAK
+     * the frames in flight behind it. A frame whose caller awaits a reply
+     * stays: only the reply (or a SEQ_GAP) settles it.
+     */
+    _deliveredBefore(seq) {
+        for (const s of Array.from(this._sent.keys())) {
+            if (seqBefore(s, seq) && !this._replyWaiters.has(s)) this._sent.delete(s);
+        }
+    }
+
+    /**
+     * Schedule every pending frame from `gap` on to be resent in seq order.
+     * Nothing goes out at once: a frame is resent once it has been on the
+     * wire for the fast RTO without an ACK, so a NAK that crossed frames
+     * still in flight (a duplicate's NAK) costs nothing when their ACKs come.
+     * Due times never decrease along the seq order, so frames due in one
+     * tick go out oldest first (_sent iterates in insertion = seq order).
+     */
+    _goBackN(gap, head, n) {
+        const fast = this._fastRtoS();
+        const tail = [];
+        for (const p of this._sent.values()) {
+            if (!seqBefore(p.seq, gap)) tail.push(p);
+        }
+        tail.sort((a, b) => ((a.seq - gap) & 0xFFFF) - ((b.seq - gap) & 0xFFFF));
+        // A head under BUFFER backoff (planner full) goes when that runs out;
+        // the frames behind it follow it, not before.
+        let due = n < (head.bufferBackoffUntil || 0) ? head.sentAt + head.rto : n;
+        for (const p of tail) {
+            due = Math.max(due, p.sentAt + fast);
+            p.retries = 0; // the device is answering: not a dead link
+            p.rto = due - p.sentAt;
+            p.fast = 'gap';
+        }
+        this._recover = { from: gap, to: tail[tail.length - 1].seq };
+    }
+
+    _sampleRtt(s) {
+        if (!(s >= 0) || s > 2.0) return;
+        if (s <= FAST_RTO_MAX_S) this._slowRttRun = 0;
+        else if (++this._slowRttRun <= SLOW_RTT_RUN) return; // the device was busy, see SLOW_RTT_RUN
+        if (this._srtt === null) {
+            this._srtt = s;
+            this._rttvar = s / 2;
+            return;
+        }
+        const err = s - this._srtt;
+        this._srtt += err / 8;
+        this._rttvar += (Math.abs(err) - this._rttvar) / 4;
+    }
+
+    _fastRtoS() {
+        const est = this._srtt === null ? 0.05 : this._srtt + 4 * this._rttvar + 0.005;
+        return Math.min(FAST_RTO_MAX_S, Math.max(FAST_RTO_MIN_S, est));
+    }
+
+    /**
+     * Stale session (device kept its counter across a reconnect, or the
+     * seq-0 PING was lost). The old fix jumped _txSeq forward and deleted
+     * every pending frame "before" the gap -- commands the device had never
+     * received. Re-sync the device to our numbering instead: a seq-0 PING
+     * resets its expected seq, and the pending frames follow in order.
+     */
+    _resyncSession(gap, n) {
+        if (n - this._lastSessionReset < 1.0) return;
+        this._lastSessionReset = n;
+        this._log.warn(`SEQ_GAP for seq ${gap} (next to send ${this._txSeq}) -- re-syncing device to this session`);
+        // Seq 0 makes the device reset its expected seq to 0, so it
+        // will want 1 next. Sending the PING alone left our own
+        // counter untouched: the device asked for 1, we kept
+        // sending 40000-something, and both sides repeated
+        // themselves forever. Renumber what is still unacknowledged
+        // and re-send it in order. The device has processed none of
+        // it -- it has been refusing everything with SEQ_GAP -- so
+        // nothing can be executed twice.
+        this._sendRawPing(0);
+        this._txSeq = 1;
+        this._devAckSeq = -1;
+        this._recover = null;
+        this._slowEnd = null;
+        const pending = [...this._sent.values()].sort((a, b) => a.firstSentAt - b.firstSentAt);
+        this._sent.clear();
+        // Old-numbered slow-command entries mean nothing in the new numbering;
+        // only the ones whose frames are renumbered below are kept.
+        const slowCmds = this._slowCmds;
+        this._slowCmds = new Map();
+        const silentOps = this._silentOps;
+        this._silentOps = new Map();
+        for (const p of pending) {
+            const seq = this._takeSeq();
+            const waiter = this._replyWaiters.get(p.seq);
+            if (waiter) {
+                this._replyWaiters.delete(p.seq);
+                this._replyWaiters.set(seq, waiter);
+            }
+            const slow = slowCmds.get(p.seq);
+            if (slow) this._slowCmds.set(seq, slow);
+            const silent = silentOps.get(p.seq);
+            if (silent) this._silentOps.set(seq, silent);
+            const q = new Pending(seq, p.payload, n, this.rtoS, p.durable, p.firstSentAt);
+            q.budgetS = p.budgetS;
+            q.resent = true;
+            this._sent.set(seq, q);
+            try {
+                this.transport.send(buildFrame(FT_CMD, F_ACK, seq, p.payload));
+                this._lastTx = n;
+            } catch (exc) {
+                this._setLink(false, 'tx_error');
+                break;
+            }
+        }
+        if (pending.length) this._log.info(`re-sent ${pending.length} unacknowledged frame(s) under the new numbering`);
     }
 
     _throttleRejectConsole(seq, opName, reasonName) {

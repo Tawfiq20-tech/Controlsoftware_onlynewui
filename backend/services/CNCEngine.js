@@ -67,6 +67,12 @@ class CNCEngine extends EventEmitter {
         // cancels job starts waiting on them -- see _handleCommand.
         this._loadsInFlight = new Set();
         this._startGeneration = 0;
+        // socket -> { name, reason } of that screen's last file:load that was
+        // refused or failed. While set, every Start-type command from that
+        // socket is refused: its screen shows a file the machine does not
+        // have, so Start would run (or resume) something else. Cleared by that
+        // socket's next successful load or its file:unload.
+        this._refusedLoads = new WeakMap();
 
         // Detects a controller board that rebooted between connections (its
         // position is gone) -- see services/ControllerRestartMonitor.js.
@@ -163,8 +169,10 @@ class CNCEngine extends EventEmitter {
             socket.on('file:load', (data) => {
                 const load = this._handleFileLoad(socket, data).catch((err) => {
                     logger.error(`[Engine] file:load failed: ${err && err.stack ? err.stack : err}`);
-                    socket.emit('file:loadError', { name: (data && data.name) || '', errorCount: 1, errors: [{ line: null, msg: `Loading failed: ${err && err.message ? err.message : err}` }] });
-                });
+                    const msg = `Loading failed: ${err && err.message ? err.message : err}`;
+                    socket.emit('file:loadError', { name: (data && data.name) || '', errorCount: 1, errors: [{ line: null, msg }] });
+                    return { ok: false, reason: msg };
+                }).then((outcome) => this._noteLoadOutcome(socket, data, outcome));
                 // Start commands wait for this (see _handleCommand).
                 this._loadsInFlight.add(load);
                 load.finally(() => this._loadsInFlight.delete(load));
@@ -577,6 +585,11 @@ class CNCEngine extends EventEmitter {
 
         // Create the appropriate controller
         this.controller = createController(firmware);
+        // Jogs are held to the same per-axis rates as programs (RSP), read
+        // from the config at each jog so a changed setting applies at once.
+        if (typeof this.controller.setMachineLimitsProvider === 'function') {
+            this.controller.setMachineLimitsProvider(() => ({ maxRate: this._machineMaxRate() }));
+        }
 
         // Bind controller to connection
         this.controller.bind(this.connection);
@@ -761,14 +774,26 @@ class CNCEngine extends EventEmitter {
         // in the controller only survives while the process does.
         this.controller.on('sender:start', (info) => {
             if (!this.jobResumeService) return;
+            // A macro (RSP) is not the loaded file: it must not overwrite the
+            // checkpoint a stopped job left behind with the file at line 0.
+            if (info && info.macro) return;
             try {
-                this.jobResumeService.onLoad({
-                    filename: (this.loadedFile && this.loadedFile.name) || 'untitled.nc',
-                    gcodeText: this._loadedGcodeContent || '',
-                    modalState: typeof this.controller.getModalState === 'function' ? this.controller.getModalState() : {},
-                });
+                // No file loaded through here: a resume from the checkpoint
+                // after a backend restart (JobResumeService.resumeFromCheckpoint
+                // loads straight into the controller and has set the file
+                // itself). Overwriting that saved the resumed job's checkpoint
+                // with no G-code, so it could not be resumed again.
+                if (this._loadedGcodeContent) {
+                    this.jobResumeService.onLoad({
+                        filename: (this.loadedFile && this.loadedFile.name) || 'untitled.nc',
+                        gcodeText: this._loadedGcodeContent,
+                        modalState: typeof this.controller.getModalState === 'function' ? this.controller.getModalState() : {},
+                        ...(this._loadedFileOptions || {}),
+                    });
+                }
                 this.jobResumeService.onStart({
                     totalLines: (info && info.total) || (this.loadedFile && this.loadedFile.total) || 0,
+                    startLine: info && info.resumedFrom,
                 });
             } catch (err) {
                 logger.warn(`[Engine] could not start the resume checkpoint: ${err.message}`);
@@ -1083,10 +1108,15 @@ class CNCEngine extends EventEmitter {
                     logger.info(`[Engine] command: ${cmd} cancelled (stop/unload while the file was loading)`);
                     return;
                 }
+                if (this._refuseStartAfterRefusedLoad(socket, cmd)) return;
                 this._dispatchToController(socket, cmd, args);
             });
             return;
         }
+
+        // A Start from a screen whose last file load was refused or failed
+        // must not run (or resume) the program the machine still holds.
+        if (JOB_START_COMMANDS.has(cmd) && this._refuseStartAfterRefusedLoad(socket, cmd)) return;
 
         // Save the durable checkpoint at the moments worth saving it.
         if (this.jobResumeService) {
@@ -1099,6 +1129,35 @@ class CNCEngine extends EventEmitter {
         }
 
         this._dispatchToController(socket, cmd, args);
+    }
+
+    /**
+     * Remember whether this socket's file:load was accepted. `outcome` is what
+     * _handleFileLoad returned: { ok: true }, { ok: false, reason }, or
+     * undefined (superseded by a newer load / controller changed: no verdict).
+     */
+    _noteLoadOutcome(socket, data, outcome) {
+        if (!outcome) return outcome;
+        if (outcome.ok === false) {
+            const name = (data && data.name) || 'untitled.gcode';
+            this._refusedLoads.set(socket, { name, reason: outcome.reason || 'the machine refused it' });
+            logger.warn(`[Engine] file:load "${name}" was not accepted (${outcome.reason}); Start from this screen is blocked until a file loads`);
+        } else if (outcome.ok === true) {
+            this._refusedLoads.delete(socket);
+        }
+        return outcome;
+    }
+
+    /** True (and the operator told why) when `cmd` must not run because this socket's last load was refused. */
+    _refuseStartAfterRefusedLoad(socket, cmd) {
+        const refused = this._refusedLoads.get(socket);
+        if (!refused) return false;
+        const reason = String(refused.reason || '').replace(/\.\s*$/, '');
+        const message = `The file you loaded was not accepted: ${reason}. Nothing was started.`;
+        logger.warn(`[Engine] command: ${cmd} refused -- "${refused.name}" was not accepted (${refused.reason})`);
+        socket.emit('serialport:error', { error: message }); // shown in that screen's console
+        socket.emit('job:startRefused', { command: cmd, name: refused.name, reason: refused.reason, message });
+        return true;
     }
 
     _dispatchToController(socket, cmd, args) {
@@ -1124,13 +1183,18 @@ class CNCEngine extends EventEmitter {
         this.controller.writeln(data, context);
     }
 
+    /** machine.maxRate (mm/min per axis): the compiler's clamp for programs, and the RSP jog cap. */
+    _machineMaxRate() {
+        return this.config.get('machine.maxRate', { x: 5000, y: 5000, z: 3000 });
+    }
+
     // ─── File Management ─────────────────────────────────────────────
 
     async _handleFileLoad(socket, data) {
         if (!this.controller) {
             logger.warn('[Engine] file:load rejected: no active controller');
             socket.emit('serialport:error', { error: 'No active controller' });
-            return;
+            return { ok: false, reason: 'the machine is not connected' };
         }
 
         const { name, content, gcode } = data || {};
@@ -1139,7 +1203,7 @@ class CNCEngine extends EventEmitter {
         if (!gcodeContent) {
             logger.warn('[Engine] file:load rejected: missing content');
             socket.emit('serialport:error', { error: 'Missing G-code content' });
-            return;
+            return { ok: false, reason: 'the file was empty' };
         }
 
         const fileName = name || 'untitled.gcode';
@@ -1157,7 +1221,7 @@ class CNCEngine extends EventEmitter {
                 logger.info(`[Engine] file:load "${fileName}" is the file already running -- job left untouched`);
                 socket.emit('file:load', this.loadedFile);
                 if (typeof this.controller.getResumePoint === 'function') socket.emit('job:resumePoint', this.controller.getResumePoint());
-                return;
+                return { ok: true };
             }
             logger.warn(`[Engine] file:load "${fileName}" refused: a job is running`);
             socket.emit('file:loadError', {
@@ -1166,7 +1230,7 @@ class CNCEngine extends EventEmitter {
                 errors: [{ line: null, msg: 'A job is running. Stop it before loading another file.' }],
                 busy: true,
             });
-            return;
+            return { ok: false, reason: `a job ("${(this.loadedFile && this.loadedFile.name) || 'the previous file'}") is still running, paused or waiting to resume -- press Stop before loading another file, or load that job's file again on this screen to continue it` };
         }
         if (this._jobPaused || (this.controller && this.controller.job && this.controller.job.active)) {
             logger.info(`[Engine] file:load replacing previous active/paused job with "${fileName}"`);
@@ -1187,7 +1251,7 @@ class CNCEngine extends EventEmitter {
         // conservative values the plan specifies until CAL-1 measures them.
         const compileOptions = {
             rapidFeed: Number(this.config.get('machine.rapidFeed', 3000)) || 3000,
-            maxRate: this.config.get('machine.maxRate', { x: 5000, y: 5000, z: 3000 }),
+            maxRate: this._machineMaxRate(),
             zHeadroom: this.config.get('machine.zHeadroom', null),
             safeHeight: Number(this.config.get('preferences.safeHeight', 10)) || 10,
             // M0/M1 program pauses stop the job until Resume. Off by default:
@@ -1206,7 +1270,7 @@ class CNCEngine extends EventEmitter {
         if (typeof controller.loadGcode === 'function') {
             loadResult = await controller.loadGcode(fileName, gcodeContent, spindleDelay, compileOptions);
             // A newer load, an unload or a disconnect happened meanwhile: that one counts.
-            if (!loadResult || loadResult.superseded || this.controller !== controller) return;
+            if (!loadResult || loadResult.superseded || this.controller !== controller) return undefined;
         } else {
             controller.command('gcode:load', fileName, gcodeContent, spindleDelay, compileOptions);
             loadResult = controller.lastLoadResult;
@@ -1217,6 +1281,7 @@ class CNCEngine extends EventEmitter {
         if (loadResult && loadResult.ok === false) {
             this.loadedFile = null;
             this._loadedGcodeContent = null;
+            this._loadedFileOptions = null;
             this.io.emit('file:loadError', {
                 name: fileName,
                 errorCount: loadResult.meta.errorCount,
@@ -1225,7 +1290,8 @@ class CNCEngine extends EventEmitter {
             if (this.sessionLogger) {
                 this.sessionLogger.logJob({ event: 'loadRejected', name: fileName, errorCount: loadResult.meta.errorCount, errors: (loadResult.meta.errors || []).slice(0, 5) });
             }
-            return;
+            const first = (loadResult.meta && loadResult.meta.errors && loadResult.meta.errors[0]) || null;
+            return { ok: false, reason: (first && first.msg) || 'it cannot run on this machine' };
         }
 
         // Store file info for reconnecting clients
@@ -1243,21 +1309,35 @@ class CNCEngine extends EventEmitter {
         this.io.emit('file:load', this.loadedFile);
 
         this._loadedGcodeContent = gcodeContent;
+        // Recorded with the durable checkpoint so a resume from it compiles the same lines.
+        this._loadedFileOptions = { spindleDelay, compileOptions };
 
         if (this.sessionLogger) {
             this.sessionLogger.logJob({ event: 'loaded', name: fileName, total: senderTotal });
         }
+        return { ok: true };
     }
 
     _handleFileUnload(socket) {
         this._startGeneration += 1; // a Start still waiting for a file load is cancelled
+        if (socket) this._refusedLoads.delete(socket); // that screen no longer shows the refused file
         if (this.controller) {
             this.controller.command('gcode:unload');
+        }
+        // The controller just dropped its resume point for this file; the
+        // durable checkpoint goes with it (a Stop keeps the checkpoint now).
+        if (this.jobResumeService && this._loadedGcodeContent) {
+            try {
+                this.jobResumeService.discardCheckpointFor(this._loadedGcodeContent);
+            } catch (err) {
+                logger.warn(`[Engine] could not clear the unloaded file's checkpoint: ${err.message}`);
+            }
         }
         this._jobPaused = false;
         this._pendingUpload = null;
         this.loadedFile = null;
         this._loadedGcodeContent = null;
+        this._loadedFileOptions = null;
         this.io.emit('file:unload');
     }
 

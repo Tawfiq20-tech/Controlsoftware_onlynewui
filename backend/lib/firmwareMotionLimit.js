@@ -18,6 +18,12 @@
  * per-axis acceleration (inside the ramp) or an instantaneous speed change
  * (between legs). Long and gently-sloped legs keep their programmed feed.
  * Positions are never touched; only the F word of a motion line changes.
+ *
+ * Firmware 0.2.1 keeps the same edge speed and AVERAGE ramp acceleration for
+ * legs without Z (so this model stays exact for them) but ramps at constant
+ * acceleration, and limits legs that move Z further (Z_MAX_EDGE_MM_S,
+ * Z_MAX_ACCEL_MM_S2). For Z legs this model is therefore an upper bound: the
+ * limits stay safe, analyze() times are no longer exact there.
  */
 
 const STEPS_PER_MM = 200;

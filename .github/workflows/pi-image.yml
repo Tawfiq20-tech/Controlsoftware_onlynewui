@@ -8,6 +8,10 @@ on:
     paths:
       - 'pi-kiosk/**'
       - '.github/workflows/pi-image.yml'
+      # The image carries the app too: a sender or UI release must rebuild it.
+      - 'backend/**'
+      - '!backend/tests/**'
+      - 'frontend/dist/**'
 
 jobs:
   build:

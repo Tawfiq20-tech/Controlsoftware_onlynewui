@@ -1,25 +1,16 @@
 'use strict';
 
 // Worker-thread entry for prepareProgramAsync() (lib/prepareProgram.js).
+// The file arrives as transferred UTF-8 bytes; the compiled program, its
+// file-line map and the motion-limit flags go back as transferred buffers.
 
 const { parentPort, workerData } = require('worker_threads');
-const { prepareProgram } = require('./prepareProgram');
+const { prepareInWorker } = require('./prepareProgram');
 
 try {
-    const { gcode, spindleDelaySeconds, compileOptions } = workerData;
-    const r = prepareProgram(gcode, spindleDelaySeconds, compileOptions);
-    const limited = r.compiled.feedLimitedLines;
-    // Copy into a buffer of its own so it can be transferred, not cloned.
-    const feedLimited = limited ? limited.slice().buffer : null;
-    parentPort.postMessage({
-        ok: true,
-        arcCount: r.arcCount,
-        segmentCount: r.segmentCount,
-        insertedCount: r.insertedCount,
-        text: r.compiled.text,
-        meta: r.compiled.meta,
-        feedLimited,
-    }, feedLimited ? [feedLimited] : []);
+    const { source, spindleDelaySeconds, compileOptions } = workerData;
+    const { message, transfer } = prepareInWorker(source, spindleDelaySeconds, compileOptions);
+    parentPort.postMessage(message, transfer);
 } catch (err) {
     parentPort.postMessage({ ok: false, error: err && err.message ? err.message : String(err) });
 }

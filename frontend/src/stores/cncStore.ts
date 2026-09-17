@@ -47,6 +47,17 @@ interface CNCStore {
     fileLoadedBackend: boolean;
     setFileLoadedBackend: (loaded: boolean) => void;
 
+    // Another screen loaded a different design onto the machine (the name of
+    // that design). While set, this screen never re-uploads its own design by
+    // itself: the operator loads it again deliberately, then presses Play.
+    otherScreenFile: string | null;
+    setOtherScreenFile: (name: string | null) => void;
+
+    // Run Outline from this screen is loading/running outline.gcode: the
+    // design must not be re-uploaded automatically until the outline is over.
+    outlineRunActive: boolean;
+    setOutlineRunActive: (active: boolean) => void;
+
     // Set when the backend refused the file because it cannot run correctly on
     // this machine (wire compiler errors, with line numbers). Cleared when a new
     // file is chosen or the backend confirms a load. Start stays disabled meanwhile.
@@ -356,7 +367,8 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // (see gcodeFileStorage doc comment for the incident this fixes).
     rawGcodeContent: restoredGcodeFile?.content ?? null,
     setRawGcodeContent: (rawGcodeContent) => {
-        set({ rawGcodeContent, fileLoadedBackend: false, fileLoadError: null, jobActive: false, safetyValidation: null });
+        // Never touches jobActive: loading a file must not hide Stop during a job.
+        set({ rawGcodeContent, fileLoadedBackend: false, fileLoadError: null, otherScreenFile: null, safetyValidation: null });
         const fi = get().fileInfo;
         gcodeFileStorage.save(
             rawGcodeContent && fi ? { name: fi.name, size: fi.size, lines: fi.lines, content: rawGcodeContent } : null
@@ -366,6 +378,10 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     // Backend feeder file-loaded flag
     fileLoadedBackend: false,
     setFileLoadedBackend: (fileLoadedBackend) => set({ fileLoadedBackend }),
+    otherScreenFile: null,
+    setOtherScreenFile: (otherScreenFile) => set({ otherScreenFile }),
+    outlineRunActive: false,
+    setOutlineRunActive: (outlineRunActive) => set({ outlineRunActive }),
 
     fileLoadError: null,
     setFileLoadError: (fileLoadError) => set({ fileLoadError }),
@@ -456,7 +472,8 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
             rawGcodeContent: null,
             fileInfo: null,
             fileLoadedBackend: false,
-            jobActive: false,
+            // jobActive is left alone: loading a file never hides Stop.
+            otherScreenFile: null,
             jobProgress: 0,
             currentLine: 0,
             safetyValidation: null,

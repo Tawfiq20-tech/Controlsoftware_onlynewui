@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import { useCNCStore } from '../stores/cncStore';
 import controller from '../utils/controller';
+import { loadAndConfirm } from '../utils/designLoad';
 import './SafetyBanner.css';
 
 export function SafetyBanner() {
@@ -22,6 +23,10 @@ export function SafetyBanner() {
     const zRunaway = useCNCStore((s) => s.safetyZRunaway);
     const setSafetyZRunaway = useCNCStore((s) => s.setSafetyZRunaway);
     const controllerRestart = useCNCStore((s) => s.controllerRestart);
+    const otherScreenFile = useCNCStore((s) => s.otherScreenFile);
+    const myFileName = useCNCStore((s) => s.fileInfo?.name);
+    const jobActive = useCNCStore((s) => s.jobActive);
+    const [reloading, setReloading] = useState(false);
     const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
     // Auto-dismiss Z runaway notice after 60 seconds so the banner doesn't
@@ -33,6 +38,44 @@ export function SafetyBanner() {
     }, [zRunaway, setSafetyZRunaway]);
 
     const banners: JSX.Element[] = [];
+
+    // Another screen put a different design on the machine. This screen does
+    // not load its own design back by itself any more (that made two screens
+    // swap designs forever); the operator decides.
+    if (otherScreenFile) {
+        const reloadMine = async () => {
+            const s = useCNCStore.getState();
+            if (!s.rawGcodeContent) return;
+            const name = s.fileInfo?.name || 'job.gcode';
+            setReloading(true);
+            try {
+                const r = await loadAndConfirm(name, s.rawGcodeContent);
+                if (r.ok) useCNCStore.getState().addConsoleLog('success', `"${name}" is loaded on the machine again. Check the preview, then press Play.`);
+                else useCNCStore.getState().addConsoleLog('error', r.message);
+            } finally {
+                setReloading(false);
+            }
+        };
+        banners.push(
+            <div key="otherscreen" className="ecss-banner ecss-banner--critical">
+                <div className="ecss-banner__icon">⚠️</div>
+                <div className="ecss-banner__body">
+                    <strong>
+                        Another screen loaded {otherScreenFile === myFileName ? <>a different version of "{otherScreenFile}"</> : <>"{otherScreenFile}"</>} onto the machine.
+                    </strong>
+                    <div className="ecss-banner__detail">
+                        The design shown here{myFileName ? <> ("{myFileName}")</> : null} is NOT loaded and will not run.
+                        To cut it, load it again, check the preview, then press <b>Play</b>.
+                    </div>
+                </div>
+                <button className="ecss-banner__dismiss" disabled={reloading || jobActive} onClick={() => { void reloadMine(); }}
+                    title={jobActive ? 'A job is running' : 'Load the design shown here onto the machine (does not start it)'}
+                    style={{ width: 'auto', padding: '0 10px', fontSize: 13 }}>
+                    {reloading ? 'Loading...' : 'Load my design again'}
+                </button>
+            </div>
+        );
+    }
 
     // Not dismissible: it clears itself once X, Y and Z are zeroed or the
     // machine is homed (the backend refuses Start until then).

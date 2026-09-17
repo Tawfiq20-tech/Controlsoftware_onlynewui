@@ -27,10 +27,13 @@
  *   gcode:start ─► checkpoint written to disk (line 0, job in progress)
  *   progress    ─► checkpoint updated every CHECKPOINT_EVERY_N lines
  *   sender:pause─► checkpoint SAVED immediately (pause = potential resume)
- *   sender:end  ─► checkpoint CLEARED  (job completed OK — no resume needed)
+ *   sender:end  ─► checkpoint CLEARED  (job completed OK — no resume needed);
+ *                  { aborted: true } is a Stop: checkpoint SAVED, not cleared;
+ *                  { macro: true } (RSP macro run) is ignored
  *   sender:error─► checkpoint SAVED with last executed line (resume available)
  *   gcode:stop  ─► checkpoint SAVED with last executed line (user aborted)
  *   link lost   ─► checkpoint SAVED with last executed line (power/cable loss)
+ *   file:unload ─► checkpoint CLEARED when it is the unloaded file's
  *
  *   On next boot: JobResumeService.getCheckpoint() returns the saved record.
  *   Frontend calls POST /api/job/resume → resumeFromCheckpoint() reloads
@@ -39,6 +42,7 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { JobResumeStore } = require('./JobResumeStore');
 const { RecoveryOrchestrator } = require('./RecoveryOrchestrator');
@@ -88,22 +92,32 @@ class JobResumeService extends EventEmitter {
     // index.js hooks these after each gcode:load / gcode:start / gcode:stop.
     // ------------------------------------------------------------------
 
-    /** Called when gcode:load fires — store pending state. */
-    onLoad({ filename, gcodeText, modalState }) {
+    /**
+     * Called when gcode:load fires — store pending state. spindleDelay /
+     * compileOptions: how the controller loaded the file, kept so a resume
+     * from the checkpoint compiles the same lines (see resumeFromCheckpoint).
+     */
+    onLoad({ filename, gcodeText, modalState, spindleDelay, compileOptions }) {
         this._pending = {
             filename:   filename || 'untitled.nc',
             gcodeText:  gcodeText || '',
             modalState: modalState || {},
+            spindleDelay,
+            compileOptions,
         };
     }
 
-    /** Called when gcode:start fires — write initial checkpoint to disk. */
-    onStart({ totalLines, modalState } = {}) {
+    /**
+     * Called when gcode:start fires — write initial checkpoint to disk.
+     * `startLine` > 1 is a resume: lines before it are already cut, so the
+     * first save must not put the checkpoint back to line 0.
+     */
+    onStart({ totalLines, modalState, startLine } = {}) {
         if (!this._pending) return;
         this._active = {
             ...this._pending,
             totalLines:        totalLines ?? 0,
-            lastExecutedLine:  0,
+            lastExecutedLine:  startLine > 1 ? startLine - 1 : 0,
             lastConfirmedPos:  { x: 0, y: 0, z: 0 },
             modalState:        modalState || this._pending.modalState || {},
         };
@@ -194,6 +208,8 @@ class JobResumeService extends EventEmitter {
             filename:   cp.filename,
             gcodeText:  cp.gcodeText,
             modalState: cp.modalState || {},
+            spindleDelay:   cp.spindleDelay,
+            compileOptions: cp.compileOptions,
         };
 
         // Controllers that build their own safe resume (RSP: lib/wireCompiler +
@@ -206,7 +222,10 @@ class JobResumeService extends EventEmitter {
         const controllerBuildsPreamble = typeof ctl.getResumePoint === 'function';
         let preamble = [];
         if (controllerBuildsPreamble) {
-            ctl.command('gcode:load', cp.filename, cp.gcodeText);
+            // Loaded the way the checkpointed run was: without its spin-up
+            // delay the reloaded program is one line shorter per M3 before the
+            // resume point, and lastExecutedLine + 1 skips a line.
+            ctl.command('gcode:load', cp.filename, cp.gcodeText, cp.spindleDelay, cp.compileOptions);
             ctl.command('gcode:startFromLine', fromLine, { safeZ });
         } else {
             if (!opts.skipPreamble) {
@@ -244,6 +263,22 @@ class JobResumeService extends EventEmitter {
         this.io.emit('job:checkpoint', null);
         this._active  = null;
         this._pending = null;
+    }
+
+    /**
+     * The operator unloaded `gcodeText`: its checkpoint goes too, as the
+     * controller's own resume point does. A Stop keeps the checkpoint now, so
+     * without this an unloaded file could still be resumed after a restart.
+     * A checkpoint for a different file is left alone.
+     * @returns {boolean} true if a checkpoint was cleared
+     */
+    discardCheckpointFor(gcodeText) {
+        if (!gcodeText) return false;
+        const cp = this.store.load();
+        if (!cp || cp.gcodeHash !== crypto.createHash('sha1').update(gcodeText).digest('hex')) return false;
+        this._log.info?.(`[JobResume] "${cp.filename}" unloaded — clearing its checkpoint`);
+        this.clearCheckpoint();
+        return true;
     }
 
     // ------------------------------------------------------------------
@@ -292,9 +327,14 @@ class JobResumeService extends EventEmitter {
         this._attachedController = ctl;
 
         // Progress — update lastExecutedLine every N lines.
-        this._onProgress = ({ executed, total, lineNo }) => {
-            if (!this._active) return;
-            this._active.lastExecutedLine = lineNo ?? executed;
+        this._onProgress = ({ executed, total, lineNo, macro } = {}) => {
+            if (!this._active || macro) return; // a macro's line numbers are not the file's
+            // sender:status also carries updates that are not progress (RSP
+            // sends { feedOverridePct } alone). Taking those as progress set
+            // lastExecutedLine to undefined, and a save then recorded line 0.
+            const line = lineNo ?? executed;
+            if (typeof line !== 'number' || !Number.isFinite(line)) return;
+            this._active.lastExecutedLine = line;
             if (this._active.totalLines === 0 && total) this._active.totalLines = total;
             this._progressCount++;
             // Every N lines AND at most once a second: a 3D finishing file
@@ -309,8 +349,19 @@ class JobResumeService extends EventEmitter {
             }
         };
 
-        // Job completed successfully — clear checkpoint.
-        this._onSenderEnd = () => {
+        // sender:end is also a Stop ({ aborted: true } from RSP / RTS). On
+        // 2026-09-17 onStop() saved the checkpoint and this cleared it 22 ms
+        // later, so a backend restart lost the resume point. Only a finished
+        // job clears it; a stopped one is saved. A macro run is not the job.
+        this._onSenderEnd = (data) => {
+            if (data && data.macro) return;
+            if (data && data.aborted) {
+                if (this._active) {
+                    this._log.info?.(`[JobResume] Job stopped — checkpoint kept at line ${this._active.lastExecutedLine}`);
+                    this._saveActive();
+                }
+                return;
+            }
             this._log.info?.('[JobResume] Job complete — clearing checkpoint');
             this.store.clear();
             this.io.emit('job:checkpoint', null);
@@ -342,11 +393,15 @@ class JobResumeService extends EventEmitter {
             }
         };
 
+        // on(), not once(): this attaches once per controller (see the early
+        // return above), and a connection runs many jobs. With once() every
+        // job after the first never saved or cleared its checkpoint on
+        // end/error. _detachController() removes them when the controller changes.
         ctl.on('sender:status', this._onProgress);
-        ctl.once('sender:end',  this._onSenderEnd);
-        ctl.once('sender:error', this._onSenderError);
-        ctl.on('sender:pause', this._onPause);
-        ctl.once('error', this._onError);
+        ctl.on('sender:end',    this._onSenderEnd);
+        ctl.on('sender:error',  this._onSenderError);
+        ctl.on('sender:pause',  this._onPause);
+        ctl.on('error',         this._onError);
     }
 
     _detachController() {

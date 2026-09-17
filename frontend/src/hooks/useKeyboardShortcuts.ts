@@ -6,10 +6,9 @@ import {
     backendJobPause,
     backendJobResume,
     backendJobStop,
-    backendJobStart,
     backendZeroAll,
 } from '../utils/backendConnection';
-import controller from '../utils/controller';
+import { startShownDesign } from '../utils/designLoad';
 
 export interface ShortcutDef {
     key: string;
@@ -107,7 +106,7 @@ export function useKeyboardShortcuts(
         if (!enabled || isInputFocused()) return;
 
         const store = useCNCStore.getState();
-        const { connected, machineState, jogDistance, setJogDistance, rawGcodeContent, fileInfo } = store;
+        const { connected, machineState, jogDistance, setJogDistance, rawGcodeContent } = store;
 
         // --- Jog keys ---
         if (JOG_KEYS.has(e.key) && !e.ctrlKey && !e.altKey) {
@@ -157,9 +156,14 @@ export function useKeyboardShortcuts(
                 backendJobResume();
                 store.addConsoleLog('info', 'Job resumed (keyboard shortcut)');
             } else if (machineState === 'idle' && rawGcodeContent) {
-                controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
-                backendJobStart();
-                store.addConsoleLog('info', 'Job started (keyboard shortcut)');
+                if (store.jobActive) return;
+                if (store.fileLoadError) {
+                    store.addConsoleLog('error', `"${store.fileLoadError.name}" cannot run on this machine -- see the reasons above. Load a corrected file.`);
+                    return;
+                }
+                // Same path as the Play button: waits for the machine to
+                // confirm this exact design before sending Start.
+                startShownDesign('keyboard');
             }
             return;
         }

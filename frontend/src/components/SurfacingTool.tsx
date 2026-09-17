@@ -218,6 +218,12 @@ export default function SurfacingTool() {
 
     const handleLoadToWorkspace = useCallback(async () => {
         if (!gcode) return;
+        // Same guard as the Sidebar: a job that is running or paused keeps its file.
+        const st = useCNCStore.getState();
+        if (st.jobActive || st.machineState === 'running' || st.machineState === 'paused') {
+            addConsoleLog('warning', 'Cannot load file while a carve job is active. Press STOP [■] in the control bar first.');
+            return;
+        }
         try {
             cleanupForNewFile();
             const result = await parseGcodeAsync(gcode);

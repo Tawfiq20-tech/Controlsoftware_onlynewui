@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Play, Pause, Square, Zap, SkipForward, Maximize2, AlertTriangle } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import {
-    backendJobStart,
     backendJobPause,
     backendJobResume,
     backendJobStop,
@@ -10,7 +9,7 @@ import {
 } from '../utils/backendConnection';
 import StartFromLine from './StartFromLine';
 import RunOutline from './RunOutline';
-import controller from '../utils/controller';
+import { startShownDesign } from '../utils/designLoad';
 import './JobControlBar.css';
 
 export default function JobControlBar() {
@@ -25,8 +24,6 @@ export default function JobControlBar() {
         jobProgress,
         currentLine,
         fileLoadedBackend,
-        fileInfo,
-        rawGcodeContent,
         safetyValidation,
         safetyOverrideArmed,
         fileLoadError,
@@ -50,25 +47,15 @@ export default function JobControlBar() {
             return;
         }
         if (!jobActive) {
-            if (!fileLoadedBackend) {
-                if (rawGcodeContent) {
-                    controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
-                    addConsoleLog('info', 'Syncing G-code to controller and starting job...');
-                    setTimeout(() => {
-                        backendJobStart();
-                    }, 250);
-                    return;
-                }
-                addConsoleLog('warning', 'File still loading on backend — try again in a moment.');
-                return;
-            }
-            if (machineState === 'paused') {
+            if (fileLoadedBackend && machineState === 'paused') {
                 backendJobResume();
                 addConsoleLog('info', 'Job resumed');
-            } else {
-                backendJobStart();
-                addConsoleLog('info', 'Job started');
+                return;
             }
+            // Starts only the design shown on this screen: when it is not on
+            // the machine yet, it is loaded first and Start is sent only after
+            // the machine confirms exactly this content (no fixed timer).
+            startShownDesign('play');
         } else if (machineState === 'paused') {
             backendJobResume();
             addConsoleLog('info', 'Job resumed');
@@ -163,7 +150,7 @@ export default function JobControlBar() {
                             ? `Blocked by pre-flight check — see banner above (${safetyValidation?.issues?.length || 0} issue${(safetyValidation?.issues?.length || 0) === 1 ? '' : 's'}).`
                             : jobActive && machineState !== 'paused' ? 'Pause'
                             : willResumeFrom
-                            ? `Resume from line ${willResumeFrom}${resumePoint?.reason ? ` (stopped: ${resumePoint.reason})` : ''} — the tool lifts, returns and plunges before cutting`
+                            ? `Resume from line ${willResumeFrom}${resumePoint?.reason ? ` (stopped: ${resumePoint.reason})` : ''} — the tool lifts, returns and plunges before cutting, unless a Stop left it on that spot`
                             : 'Start'
                     }
                 >

@@ -28,7 +28,7 @@ interface ResumePreview {
     total: number;
     context: Array<{ num: number; text: string }>;
     plan:
-        | { ok: true; preamble: string[]; startMm: { x: number; y: number; z: number | null }; retractMm: number; units: string; warnings: string[] }
+        | { ok: true; preamble: string[]; startMm: { x: number; y: number; z: number | null }; retractMm: number; inPlace?: boolean; inPlaceZ?: 'lower' | 'raise' | 'none' | null; units: string; warnings: string[] }
         | { ok: false; error: string };
     resumePoint: ResumePoint;
 }
@@ -73,7 +73,14 @@ function extractModalStates(lines: string[], targetLine: number): string[] {
 
 export default function StartFromLine({ onClose }: StartFromLineProps) {
     const { gcode, rawGcodeContent, connected, fileInfo, addConsoleLog, appPreferences, firmwareType } = useCNCStore();
-    const isRsp = firmwareType === 'RSP';
+    // A screen that joined after the port opened (reload, kiosk browser
+    // restart, phone over the tunnel) never hears the controller type and
+    // keeps 'unknown'. It used to take the local non-RSP fallback, which
+    // uploaded a cut-down program under the design's own name. Now only a
+    // controller KNOWN to be non-RSP uses the local path; everything else asks
+    // the backend, which refuses cleanly when it cannot start from a line.
+    const typeKnown = !!firmwareType && firmwareType !== 'unknown';
+    const isRsp = !typeKnown || firmwareType === 'RSP';
 
     const [lineNumber, setLineNumber] = useState(1);
     const [safeHeight, setSafeHeight] = useState(Math.abs(appPreferences?.safeHeight ?? 5) || 5);
@@ -161,8 +168,16 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
     const warnings: string[] = [];
     if (isRsp && preview?.line === lineNumber) {
         if (preview.plan.ok) {
-            const { startMm, retractMm } = preview.plan;
-            warnings.push(`Machine will raise Z to ${retractMm.toFixed(2)} mm, move to X${startMm.x.toFixed(3)} Y${startMm.y.toFixed(3)}${startMm.z === null ? '' : `, lower slowly to Z${startMm.z.toFixed(3)}`} (mm, work zero), then run from line ${lineNumber}.`);
+            const { startMm, retractMm, inPlace, inPlaceZ } = preview.plan;
+            if (inPlace && startMm.z !== null) {
+                // The tool already stands at this line's X/Y: no lift, no travel.
+                const how = inPlaceZ === 'lower' ? `no lift or travel, lower slowly to Z${startMm.z.toFixed(3)}`
+                    : inPlaceZ === 'raise' ? `no travel, straight up to Z${startMm.z.toFixed(3)}`
+                        : 'no lift, travel or Z move';
+                warnings.push(`Tool is already at X${startMm.x.toFixed(3)} Y${startMm.y.toFixed(3)}: ${how} (mm, work zero), then run from line ${lineNumber}.`);
+            } else {
+                warnings.push(`Machine will raise Z to ${retractMm.toFixed(2)} mm, move to X${startMm.x.toFixed(3)} Y${startMm.y.toFixed(3)}${startMm.z === null ? '' : `, lower slowly to Z${startMm.z.toFixed(3)}`} (mm, work zero), then run from line ${lineNumber}.`);
+            }
             preview.plan.warnings.forEach((w) => warnings.push(w));
         } else {
             warnings.push(preview.plan.error);

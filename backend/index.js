@@ -18,6 +18,8 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const logger = require('./logger');
+const runtimePaths = require('./lib/runtimePaths');
+const processGuards = require('./lib/processGuards');
 const { CNCEngine } = require('./services/CNCEngine');
 const { WebcamService } = require('./services/webcam/WebcamService');
 const { GamepadService } = require('./services/gamepad/GamepadService');
@@ -50,7 +52,9 @@ app.use(express.json());
 // Remote-access gate — own ConfigStore file so it doesn't depend on
 // CNCEngine's init order. Remote (non-local) access requires a PIN set from
 // Settings on the control PC itself; see RemoteAccessService.js.
-const remoteAccessConfigStore = new ConfigStore(path.join(__dirname, 'data', 'remote-access.json'));
+// data folder: backend/data unless EASYCNC_DATA_DIR says otherwise (tests).
+const dataDir = runtimePaths.dataDir();
+const remoteAccessConfigStore = new ConfigStore(path.join(dataDir, 'remote-access.json'));
 const remoteAccessService = new RemoteAccessService({ configStore: remoteAccessConfigStore, port: PORT });
 app.use(remoteAccessService.httpGate());
 
@@ -96,7 +100,6 @@ const engine = new CNCEngine(io);
 
 // ─── Phase A/B services (AxioCNC + gSender parity) ───────────────
 const getController = () => engine.controller || null;
-const dataDir = path.join(__dirname, 'data');
 
 const webcamService     = new WebcamService({     configStore: engine.config, io, logger });
 const gamepadService    = new GamepadService({    configStore: engine.config, io, logger, getController });
@@ -826,52 +829,33 @@ function openBrowserApp(targetUrl) {
 // The controller stops the machine by itself if the PC goes quiet for 5 s
 // (host watchdog). So a backend crash, or this window being closed during a
 // carve, does not just end the program -- it stops the machine mid-cut and
-// leaves the spindle in the material. Two guards:
-//   1. an unexpected error never takes the process down while a job is
-//      running; it is logged and reported to the UI instead
-//   2. an intentional shutdown stops the job cleanly first (drivers off,
-//      position and resume point kept) rather than letting the watchdog fire
+// leaves the spindle in the material. Two guards (lib/processGuards.js, which
+// also records why an uncaught exception does not exit):
+//   1. an unexpected error never takes the process down; it is logged
+//      (rate-limited) and reported to the UI, and a running job's resume
+//      checkpoint is saved at once
+//   2. an intentional shutdown saves the resume checkpoint, then stops the
+//      job cleanly (drivers off, position kept) rather than letting the
+//      watchdog fire
 
 function jobIsActive() {
-    return !!(engine && engine.controller && engine.controller.job && engine.controller.job.active);
+    return processGuards.jobIsActive(engine);
 }
 
-process.on('uncaughtException', (err) => {
-    logger.error(`UNCAUGHT EXCEPTION: ${err && err.stack ? err.stack : err}`);
-    try {
-        io.emit('controller:error', { message: `Internal error: ${err && err.message ? err.message : err}` });
-    } catch (_) { /* never throw from the handler */ }
-    // Deliberately not exiting: dying here would stop a running carve.
+processGuards.installExceptionGuards({
+    logger,
+    notify: (message) => io.emit('controller:error', { message }),
+    isJobActive: jobIsActive,
+    saveCheckpoint: (reason) => processGuards.saveCheckpointNow(jobResumeService, reason),
 });
 
-process.on('unhandledRejection', (reason) => {
-    logger.error(`UNHANDLED REJECTION: ${reason && reason.stack ? reason.stack : reason}`);
+const shutdown = processGuards.createShutdown({
+    logger,
+    getEngine: () => engine,
+    jobResumeService,
+    jobHistoryService,
 });
-
-let shuttingDown = false;
-function shutdown(signal) {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`[shutdown] ${signal} received`);
-    const hadJob = jobIsActive();
-    try {
-        if (hadJob) {
-            logger.warn('[shutdown] a job is running -- stopping the machine and saving the resume point first');
-            engine.controller.command('gcode:stop');
-        }
-    } catch (exc) {
-        logger.error(`[shutdown] could not stop the job: ${exc.message || exc}`);
-    }
-    // Let the stop frame reach the controller before the port closes.
-    setTimeout(() => {
-        try { if (engine && typeof engine._closeConnection === 'function') engine._closeConnection(); } catch (_) {}
-        process.exit(0);
-    }, hadJob ? 1500 : 100);
-}
-
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
-    process.on(sig, () => shutdown(sig));
-}
+processGuards.installSignalHandlers(shutdown);
 
 // Start server
 const HOST = process.env.HOST || '0.0.0.0';
@@ -882,3 +866,6 @@ server.listen(PORT, HOST, () => {
     openBrowserApp(url);
 });
 
+
+// For tests that boot the real backend (tests/shutdown_saves_checkpoint.test.js).
+module.exports = { app, server, io, engine, jobResumeService, jobHistoryService, shutdown };

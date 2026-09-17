@@ -188,11 +188,26 @@ function parseProbeResult(payload) {
     };
 }
 
+// OP_GET_RUN_STATE reply data (after [op, status]): job_id u16,
+// last_executed_line u16, x f32, y f32, z f32 -- rsp_handle_get_run_state()
+// in easycnc_protocol.c. last_executed_line is set when a move completes,
+// but also when a no-motion line is merely received.
+function parseRunState(payload) {
+    if (!payload || payload.length < 4) return null;
+    return {
+        jobId: payload.readUInt16LE(0),
+        lastExecutedLine: payload.readUInt16LE(2),
+        x: payload.length >= 16 ? payload.readFloatLE(4) : null,
+        y: payload.length >= 16 ? payload.readFloatLE(8) : null,
+        z: payload.length >= 16 ? payload.readFloatLE(12) : null,
+    };
+}
+
 module.exports = {
     MAX_GCODE_LEN,
     buildJog, buildHome, buildZero, buildJobStart, buildJobLine, buildJobEnd,
     buildJobAbort, buildFeedOverride, buildMove, parseMove, buildProbe,
     parseJog, parseHomeZero, parseJobStart, parseJobLine, parseJobEnd,
     parseFeedOverride, parseEvExecuted, parseEvJobDone, parseEvFault, parseEvAlmGlitch,
-    parseProbeResult,
+    parseProbeResult, parseRunState,
 };

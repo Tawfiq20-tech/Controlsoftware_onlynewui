@@ -22,7 +22,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
 import { useJobWakeLock } from './hooks/useJobWakeLock';
 import { useCNCStore } from './stores/cncStore';
-import controller from './utils/controller';
+import { sendDesign } from './utils/designLoad';
 import { GCodeParser } from './utils/gcodeParser';
 
 function getInitialLayout(): 'auto' | 'horizontal' | 'vertical' {
@@ -104,14 +104,24 @@ function AppInner() {
         setToolpathSegments,
         setParsedToolpath,
         addConsoleLog,
+        otherScreenFile,
+        outlineRunActive,
     } = useCNCStore();
     useEffect(() => {
         if (!connected) return;
         if (!controllerReady) return;
         if (!rawGcodeContent) return;
         if (fileLoadedBackend) return;
-        controller.loadFile(fileInfo?.name || 'job.gcode', rawGcodeContent);
-    }, [connected, controllerReady, rawGcodeContent, fileLoadedBackend, fileInfo?.name]);
+        // Another screen's design is on the machine. Never load this screen's
+        // design over it by itself: two screens used to swap the machine's
+        // program back and forth forever, and Play ran whichever landed last.
+        // The operator re-loads deliberately (banner button / open the file).
+        if (otherScreenFile) return;
+        // Run Outline has outline.gcode on the machine on purpose; RunOutline
+        // loads the design back itself when the outline is over.
+        if (outlineRunActive) return;
+        sendDesign(fileInfo?.name || 'job.gcode', rawGcodeContent);
+    }, [connected, controllerReady, rawGcodeContent, fileLoadedBackend, fileInfo?.name, otherScreenFile, outlineRunActive]);
 
     // rawGcodeContent/fileInfo survive a page refresh via localStorage
     // (cncStore.ts gcodeFileStorage), but the parsed `gcode` array that

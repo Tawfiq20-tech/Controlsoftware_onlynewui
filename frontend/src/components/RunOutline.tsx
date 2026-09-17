@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { Square, Maximize2, AlertTriangle, Play, X } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import controller from '../utils/controller';
+import { loadAndConfirm } from '../utils/designLoad';
 import './RunOutline.css';
 
 interface BoundingBox {
@@ -164,12 +165,83 @@ function generateDetailedOutline(rawGcode: string, safeZ: number, feedRate: numb
     return outLines.join('\n');
 }
 
+type LogFn = (level: 'info' | 'success' | 'warning' | 'error', msg: string) => void;
+
+// Loads the design shown on this screen back onto the machine after an outline
+// run. It is never started: the operator presses Play when ready.
+async function restoreDesignAfterOutline(log: LogFn): Promise<void> {
+    const cur = useCNCStore.getState();
+    const name = cur.fileInfo?.name || 'job.gcode';
+    const content = cur.rawGcodeContent;
+    try {
+        if (content && !cur.otherScreenFile) {
+            const r = await loadAndConfirm(name, content);
+            if (r.ok) log('success', `"${name}" is loaded again. It was NOT started: press Play when ready.`);
+            else log('error', `Could not load "${name}" back after the outline: ${r.message} Open the file again before pressing Play.`);
+        }
+    } finally {
+        useCNCStore.getState().setOutlineRunActive(false);
+    }
+}
+
+// Outline run: outline.gcode goes onto the machine, Start is sent only after
+// the machine confirms outline.gcode is loaded (so Start can never run the
+// design), and the design is loaded back -- not started -- afterwards. While
+// this runs, App.tsx does not auto re-upload the design.
+export async function runOutlineProgram(outlineGcode: string, log: LogFn): Promise<void> {
+    useCNCStore.getState().setOutlineRunActive(true);
+    const loaded = await loadAndConfirm('outline.gcode', outlineGcode);
+    if (!loaded.ok) {
+        log('error', `Outline not started: ${loaded.message}`);
+        await restoreDesignAfterOutline(log);
+        return;
+    }
+    let started = false;
+    let finished = false;
+    const cleanup = () => {
+        clearTimeout(refusedTimer);
+        controller.off('sender:start', onStart);
+        controller.off('sender:end', onEnd);
+        controller.off('sender:error', onEnd);
+    };
+    const onStart = () => {
+        started = true;
+        clearTimeout(refusedTimer);
+        log('success', 'Outline run started');
+    };
+    const onEnd = () => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        // An end/error before the outline ever started belongs to a refused
+        // start or another job, not to the outline.
+        log('info', started
+            ? 'Outline finished. Loading the design back onto the machine (it will not start by itself).'
+            : 'The outline did not run. Loading the design back onto the machine -- nothing will start.');
+        void restoreDesignAfterOutline(log);
+    };
+    // A refused start (controller restart block, alarm, safety check) sends no
+    // sender:end. Without this the listeners stayed armed and re-loaded an old
+    // design when a LATER job ended.
+    const refusedTimer = setTimeout(() => {
+        if (started || finished) return;
+        finished = true;
+        cleanup();
+        log('error', 'The outline did not start (see the message above). Loading the design back onto the machine -- nothing will start.');
+        void restoreDesignAfterOutline(log);
+    }, 4000);
+    controller.on('sender:start', onStart);
+    controller.on('sender:end', onEnd);
+    controller.on('sender:error', onEnd);
+    controller.startJob();
+}
+
 interface RunOutlineProps {
     onClose: () => void;
 }
 
 export default function RunOutline({ onClose }: RunOutlineProps) {
-    const { rawGcodeContent, fileInfo, connected, addConsoleLog, appPreferences } = useCNCStore();
+    const { rawGcodeContent, connected, addConsoleLog, appPreferences } = useCNCStore();
     const [mode, setMode] = useState<'square' | 'detailed'>(
         (appPreferences?.outlineStyle?.toLowerCase() as 'square' | 'detailed') ?? 'square'
     );
@@ -183,6 +255,17 @@ export default function RunOutline({ onClose }: RunOutlineProps) {
 
     const handleRun = () => {
         if (!connected || !rawGcodeContent || !boundingBox) return;
+        const st = useCNCStore.getState();
+        if (st.jobActive || st.machineState === 'running' || st.machineState === 'paused') {
+            addConsoleLog('error', 'Run Outline is not available while a job is running or paused. Stop the job first.');
+            onClose();
+            return;
+        }
+        if (st.outlineRunActive) {
+            addConsoleLog('warning', 'An outline run is already in progress.');
+            onClose();
+            return;
+        }
 
         let outlineGcode: string;
         if (mode === 'square') {
@@ -191,28 +274,9 @@ export default function RunOutline({ onClose }: RunOutlineProps) {
             outlineGcode = generateDetailedOutline(rawGcodeContent, safeZ, feedRate);
         }
 
-        const origFileName = fileInfo?.name || 'job.gcode';
-        const origGcode = rawGcodeContent;
-
         addConsoleLog('info', `Running ${mode} outline at Z=${safeZ}mm, F=${feedRate}`);
-        controller.loadFile('outline.gcode', outlineGcode);
-        setTimeout(() => {
-            controller.command('gcode:start');
-            addConsoleLog('success', 'Outline run started');
-
-            const restoreOriginal = () => {
-                controller.off('sender:end', restoreOriginal);
-                controller.off('sender:error', restoreOriginal);
-                if (origGcode) {
-                    addConsoleLog('info', `Restoring original design: ${origFileName}`);
-                    controller.loadFile(origFileName, origGcode);
-                }
-            };
-            controller.on('sender:end', restoreOriginal);
-            controller.on('sender:error', restoreOriginal);
-        }, 200);
-
         onClose();
+        void runOutlineProgram(outlineGcode, addConsoleLog);
     };
 
     const dims = boundingBox ? {

@@ -5,12 +5,15 @@
  * running firmware executes exactly as the file means.
  *
  * Checks per file:
- *  - arc conversion ran (expected arc counts) and no G2/G3 survives
+ *  - arcs converted (expected arc counts) and no G2/G3 survives
  *  - zero compile errors
  *  - every wire line <= 63 bytes, no "0x"/"0X" (hex-float) pattern
  *  - every motion line has an explicit F and absolute G21 G90
  *  - every coordinate is on the 0.005 mm step grid
- *  - geometry equals an independent interpreter of the linearized source
+ *  - geometry equals an independent interpreter of the ORIGINAL file, file
+ *    line by file line (meta.sourceLines): straight moves exactly, arc chords
+ *    on the file's own circle and ending on its end point. (This used to read
+ *    the arc-converted text, so a mis-converted arc agreed with itself.)
  *  - replaying the firmware's float32 leg math (stepper.c jogeng_begin_leg)
  *    gives 0 steps of drift after every line
  *
@@ -21,9 +24,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const linearizeArcs = require('../lib/linearizeArcs');
 const { compileWire } = require('../lib/wireCompiler');
-const { cleanGcodeLines } = require('../lib/resumeFromLine');
 
 const CORPUS = process.env.EASYCNC_CORPUS || 'C:/Users/Tawfiq/Downloads/gcode_test_file/file_finity';
 const EXPECTED_ARCS = {
@@ -62,38 +63,63 @@ function replayDrift(wireLines) {
 }
 
 /**
- * Independent interpreter of the linearized source (mm, unrounded).
- * G53 Z lines are the one intentional rewrite: they retract to retractZ in
- * work coordinates, and later XY-only moves stay at that height.
+ * Independent interpreter of the ORIGINAL file (mm, unrounded). Returns a map
+ * file line -> { kind: 'move'|'arc'|'retract', end, arc? }.
+ * G53 Z / G28 / G30 lines are the one intentional rewrite: they retract to
+ * retractZ in work coordinates, X/Y held, and later XY-only moves stay at that
+ * height. Arcs: XY plane, I/J relative to the start (all this corpus uses).
  */
-function interpret(sourceLines, retractZ) {
+function interpret(text, retractZ) {
     let scale = 1;
     let abs = true;
+    let motion = null;
     const pos = { x: null, y: null, z: null };
-    const res = [];
-    for (const l of sourceLines) {
-        const up = l.toUpperCase();
-        const words = [...up.matchAll(/([A-Z])\s*([-+]?(?:\d+\.?\d*|\.\d+))/g)].map((m) => [m[1], parseFloat(m[2])]);
-        let g53 = false;
+    const res = new Map();
+    const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\r|\n/);
+    for (let li = 0; li < lines.length; li++) {
+        let s = lines[li];
+        // comments: nested parentheses, then ';'
+        let prev;
+        do { prev = s; s = s.replace(/\([^()]*\)/g, ' '); } while (s !== prev);
+        s = s.replace(/\(.*$/, ' ').replace(/;.*$/, '').trim();
+        if (!s || s.startsWith('%')) continue;
+        const words = [...s.toUpperCase().matchAll(/([A-Z])\s*([-+]?(?:\d+\.?\d*|\.\d+))/g)].map((m) => [m[1], parseFloat(m[2])]);
+        const get = (L) => { const w = words.find(([k]) => k === L); return w ? w[1] : undefined; };
+        let retract = false;
+        let dwell = false;
         for (const [L, v] of words) {
             if (L !== 'G') continue;
             if (v === 20) scale = 25.4;
-            if (v === 21) scale = 1;
-            if (v === 90) abs = true;
-            if (v === 91) abs = false;
-            if (v === 53) g53 = true;
+            else if (v === 21) scale = 1;
+            else if (v === 90) abs = true;
+            else if (v === 91) abs = false;
+            else if (v === 53 || v === 28 || v === 30) retract = v === 53 ? get('Z') !== undefined : true;
+            else if (v === 4) dwell = true;
+            else if (v >= 0 && v <= 3 && Number.isInteger(v)) motion = v;
+            else if (v === 18 || v === 19 || v === 90.1) throw new Error(`reference interpreter does not handle G${v} (file line ${li + 1})`);
         }
-        let moved = false;
-        const g53z = g53 && words.some(([L]) => L === 'Z');
-        for (const [L, v] of words) {
+        if (dwell) continue;
+        if (words.some(([L, v]) => L === 'G' && (v === 53 || v === 28 || v === 30))) {
+            if (retract) { pos.z = retractZ; res.set(li + 1, { kind: 'retract', end: { ...pos } }); }
+            continue;
+        }
+        const has = (L) => get(L) !== undefined;
+        if (!has('X') && !has('Y') && !has('Z') && !has('I') && !has('J')) continue;
+        const target = { ...pos };
+        for (const L of ['X', 'Y', 'Z']) {
+            if (!has(L)) continue;
             const k = L.toLowerCase();
-            if (!'xyz'.includes(k) || k.length !== 1) continue;
-            if (g53) continue;
-            pos[k] = abs ? v * scale : (pos[k] || 0) + v * scale;
-            moved = true;
+            target[k] = abs ? get(L) * scale : pos[k] + get(L) * scale;
         }
-        if (g53z) pos.z = retractZ;
-        res.push({ moved, g53: g53z, pos: { ...pos } });
+        if (motion === 2 || motion === 3) {
+            if (has('R')) throw new Error(`reference interpreter does not handle R arcs (file line ${li + 1})`);
+            const c = { x: pos.x + (get('I') || 0) * scale, y: pos.y + (get('J') || 0) * scale };
+            const full = Math.abs(target.x - pos.x) < 1e-9 && Math.abs(target.y - pos.y) < 1e-9;
+            res.set(li + 1, { kind: 'arc', end: { ...target }, arc: { c, r: Math.hypot(pos.x - c.x, pos.y - c.y), rEnd: Math.hypot(target.x - c.x, target.y - c.y), cw: motion === 2, from: { ...pos }, full, scale } });
+        } else {
+            res.set(li + 1, { kind: 'move', end: { ...target } });
+        }
+        Object.assign(pos, target);
     }
     return res;
 }
@@ -101,23 +127,19 @@ function interpret(sourceLines, retractZ) {
 function checkFile(file) {
     const raw = fs.readFileSync(path.join(CORPUS, file), 'utf8');
     const t0 = Date.now();
-    const lin = linearizeArcs(raw);
-    const { lines, meta } = compileWire(lin.text);
+    const { lines, meta } = compileWire(raw);
     const ms = Date.now() - t0;
 
     const label = `${file}`;
-    if (EXPECTED_ARCS[file] !== undefined) {
-        assert.strictEqual(lin.arcCount, EXPECTED_ARCS[file], `${label}: arc count`);
-    } else {
-        assert.strictEqual(lin.arcCount, 0, `${label}: unexpected arcs`);
-    }
+    assert.strictEqual(meta.arcCount, EXPECTED_ARCS[file] || 0, `${label}: arc count`);
     assert.strictEqual(meta.errorCount, 0, `${label}: compile errors ${JSON.stringify(meta.errors)}`);
+    assert.strictEqual(meta.sourceLines.length, lines.length, `${label}: every compiled line has a file line`);
 
-    const src = cleanGcodeLines(lin.text);
-    assert.strictEqual(lines.length, src.length, `${label}: 1:1 line mapping`);
-    const ref = interpret(src, meta.retractZ);
-
+    const ref = interpret(raw, meta.retractZ);
+    const AX = ['x', 'y', 'z'];
+    const at = { x: null, y: null, z: null };
     let maxLen = 0;
+    let worstArc = 0;
     for (let i = 0; i < lines.length; i++) {
         const l = lines[i];
         maxLen = Math.max(maxLen, l.length);
@@ -134,21 +156,31 @@ function checkFile(file) {
         for (const m of l.matchAll(/([XYZ])(-?\d+\.\d{3})/g)) {
             const v = parseFloat(m[2]);
             assert.ok(Math.abs(v * 200 - Math.round(v * 200)) < 1e-6, `${label} line ${i + 1}: off-grid ${m[0]}`);
+            at[m[1].toLowerCase()] = v;
         }
-        const r = ref[i];
-        {
-            for (const k of ['x', 'y', 'z']) {
-                const m = new RegExp(`${k.toUpperCase()}(-?\\d+\\.\\d{3})`).exec(l);
-                if (r.pos[k] === null) { assert.ok(!m, `${label} line ${i + 1}: ${k} emitted before known`); continue; }
-                assert.ok(m, `${label} line ${i + 1}: ${k} missing "${l}"`);
-                assert.ok(Math.abs(parseFloat(m[1]) - r.pos[k]) <= 0.0025 + 1e-9,
-                    `${label} line ${i + 1}: ${k}=${m[1]} but source means ${r.pos[k].toFixed(5)}`);
+        const fileLine = meta.sourceLines[i];
+        const r = ref.get(fileLine);
+        assert.ok(r, `${label} compiled line ${i + 1} moves, but file line ${fileLine} does not`);
+        const lastOfLine = i + 1 === lines.length || meta.sourceLines[i + 1] !== fileLine;
+        if (r.kind === 'arc') {
+            const d = Math.hypot(at.x - r.arc.c.x, at.y - r.arc.c.y) - r.arc.r;
+            worstArc = Math.max(worstArc, Math.abs(d));
+            // grid rounding (0.0035) + chord text at 4 decimals in file units + the file's own start/end radius difference
+            assert.ok(Math.abs(d) <= 0.0036 + 0.0000708 * r.arc.scale + Math.abs(r.arc.rEnd - r.arc.r), `${label} file line ${fileLine}: chord point ${at.x},${at.y} is ${d.toFixed(5)} mm off the arc`);
+        }
+        if (lastOfLine) {
+            for (const k of AX) {
+                if (r.end[k] === null) { assert.strictEqual(at[k], null, `${label} line ${i + 1}: ${k} emitted before known`); continue; }
+                assert.ok(at[k] !== null && Math.abs(at[k] - r.end[k]) <= 0.0025 + 1e-9,
+                    `${label} file line ${fileLine}: ${k}=${at[k]} but the file means ${r.end[k].toFixed(5)}`);
             }
+        } else {
+            assert.strictEqual(r.kind, 'arc', `${label} file line ${fileLine} is one move but compiled into several`);
         }
     }
     const drift = replayDrift(lines);
     assert.strictEqual(drift.worst, 0, `${label}: firmware replay drift ${drift.worst} steps at line ${drift.worstLine}`);
-    return { file, lines: lines.length, arcs: lin.arcCount, motion: meta.motionCount, clamped: meta.clampedCount, pauses: meta.pauses.length, g53Retract: meta.retractZ, maxLen, warnings: meta.warnings.length, ms };
+    return { file, lines: lines.length, arcs: meta.arcCount, motion: meta.motionCount, clamped: meta.clampedCount, pauses: meta.pauses.length, g53Retract: meta.retractZ, maxLen, warnings: meta.warnings.length, worstArc, ms };
 }
 
 function unitTests() {
@@ -172,13 +204,13 @@ function unitTests() {
     // spindle words stay with a motion line
     r = c('G21\nG0 X1 Y1 M3 S15000');
     assert.strictEqual(r.lines[1], 'G21 G90 G0 X1.000 Y1.000 F3000 M3 S15000');
-    // M0 pause recorded with its message
+    // M0 pause recorded with its message and file line
     r = c("G21\nM0 (MSG, Click 'Continue' when ready)\nG0 X1");
-    assert.deepStrictEqual(r.meta.pauses, [{ line: 2, optional: false, message: "Click 'Continue' when ready" }]);
+    assert.deepStrictEqual(r.meta.pauses, [{ line: 2, fileLine: 2, optional: false, message: "Click 'Continue' when ready", afterCutting: false, toolChange: false }]);
     assert.strictEqual(r.lines[1], 'M0');
     // G4 dwell recorded for the host to wait out; absurd P refused
     r = c('G21\nG0 X1 M3 S12000\nG4 P2.5\nG1 X2 F100');
-    assert.deepStrictEqual(r.meta.dwells, [{ line: 3, seconds: 2.5 }]);
+    assert.deepStrictEqual(r.meta.dwells, [{ line: 3, fileLine: 3, seconds: 2.5 }]);
     assert.strictEqual(r.meta.errorCount, 0);
     r = c('G21\nG0 X1\nG4 P5000');
     assert.ok(r.meta.errors.some((e) => e.line === 3 && /longer than an hour/.test(e.msg)));
@@ -186,14 +218,14 @@ function unitTests() {
     // position -- reading it as one turned "wait 2.5 s" into a cutting move to
     // X2.5, straight across the workpiece.
     r = c('G21\nG0 X10 Y10\nG1 Z-1 F300\nG4 X2.5\nG1 X20 F300');
-    assert.deepStrictEqual(r.meta.dwells, [{ line: 4, seconds: 2.5 }]);
+    assert.deepStrictEqual(r.meta.dwells, [{ line: 4, fileLine: 4, seconds: 2.5 }]);
     assert.strictEqual(r.lines[3], 'G17', 'a G4 line never moves the machine');
     assert.strictEqual(r.lines[4], 'G21 G90 G1 X20.000 Y10.000 Z-1.000 F300', 'and does not move X for the next line either');
     assert.ok(r.meta.warnings.some((w) => /dwell time on a G4 line, not a position/.test(w.msg)));
     // G4 sharing a line with spindle words keeps them
     r = c('G21\nG0 X1 Y1\nG04 P0.5 M3 S1000\nG1 X2 F100');
     assert.strictEqual(r.lines[2], 'M3 S1000');
-    assert.deepStrictEqual(r.meta.dwells, [{ line: 3, seconds: 0.5 }]);
+    assert.deepStrictEqual(r.meta.dwells, [{ line: 3, fileLine: 3, seconds: 0.5 }]);
     // a dwell with no time at all is ignored, not guessed
     r = c('G21\nG0 X1 Y1\nG4\nG1 X2 F100');
     assert.deepStrictEqual(r.meta.dwells, []);
@@ -220,16 +252,23 @@ function unitTests() {
     r = c('G21\nG0 Z40', { zHeadroom: 30 });
     assert.ok(r.meta.errors.some((e) => /Z travel/.test(e.msg)));
 
-    // arc fast path: compact forms convert
+    // arcs in every compact spelling convert
     for (const t of ['G2X1Y1I0.5J0.5', 'G02X1Y1I0.5J0.5', 'g3x1y1i0.5j0.5', 'G17 G2 X1 Y1 I0.5 J0.5', 'G90G3X1Y1I.5J.5']) {
-        const lin = linearizeArcs(`G21\nG0 X0 Y0\n${t}`);
-        assert.strictEqual(lin.arcCount, 1, `arc not converted: ${t}`);
-        assert.ok(!/G0*[23](?![0-9])/i.test(lin.text.split('\n').slice(2).join('\n')), `arc survived: ${t}`);
+        r = c(`G21\nG0 X0 Y0\n${t} F100`);
+        assert.strictEqual(r.meta.errorCount, 0, `${t}: ${JSON.stringify(r.meta.errors)}`);
+        assert.strictEqual(r.meta.arcCount, 1, `arc not converted: ${t}`);
+        assert.ok(!r.lines.some((l) => /G0*[23](?![0-9])/i.test(l)), `arc survived: ${t}`);
+        assert.ok(r.lines[r.lines.length - 1].startsWith('G21 G90 G1 X1.000 Y1.000 '), `${t} ends at its end point`);
     }
     // G20/G21/G28 are not arcs
-    assert.strictEqual(linearizeArcs('G20\nG21\nG28 Z0').arcCount, 0);
-    assert.throws(() => linearizeArcs('G0 X0 Y0\nG91\nG2 X1 Y1 I1 J0'), /Incremental/);
-    assert.throws(() => linearizeArcs('G0 X0 Y0\nG18\nG2 X1 Z1 I1 K0'), /XY plane|Helical/);
+    assert.strictEqual(c('G20\nG21\nG28 Z0').meta.arcCount, 0);
+    // an incremental arc runs from where the tool is
+    r = c('G21\nG0 X0 Y0\nG91\nG2 X1 Y1 I1 J0 F100');
+    assert.strictEqual(r.meta.errorCount, 0, JSON.stringify(r.meta.errors));
+    assert.ok(r.lines[r.lines.length - 1].startsWith('G21 G90 G1 X1.000 Y1.000 '));
+    // an arc whose start is unknown is refused with its file line, never guessed
+    r = c('G0 X0 Y0\nG18\nG2 X1 Z1 I1 K0 F100');
+    assert.ok(r.meta.errors.some((e) => e.line === 3 && /position is known/.test(e.msg)), JSON.stringify(r.meta.errors));
 }
 
 (function main() {
@@ -246,7 +285,7 @@ function unitTests() {
     for (const f of files) {
         rows.push(checkFile(f));
         const r = rows[rows.length - 1];
-        console.log(`  ok  ${r.file}: ${r.lines} lines, ${r.motion} moves, arcs ${r.arcs}, clamped ${r.clamped}, pauses ${r.pauses}, G53->Z ${r.g53Retract ?? '-'}, max ${r.maxLen} B, ${r.ms} ms`);
+        console.log(`  ok  ${r.file}: ${r.lines} lines, ${r.motion} moves, arcs ${r.arcs}${r.arcs ? ` (chords within ${r.worstArc.toFixed(4)} mm of the file's arcs)` : ''}, clamped ${r.clamped}, pauses ${r.pauses}, G53->Z ${r.g53Retract ?? '-'}, max ${r.maxLen} B, ${r.ms} ms`);
     }
     assert.ok(rows.length >= 13, `expected >= 13 corpus files, found ${rows.length}`);
     console.log('ALL TESTS PASSED SUCCESSFULLY!');

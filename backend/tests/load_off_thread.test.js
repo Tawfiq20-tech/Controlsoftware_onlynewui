@@ -27,7 +27,9 @@ function reliefProgram(rows, perRow) {
             const x = ((r % 2 ? perRow - i : i) * 0.02).toFixed(3);
             out.push(`X${x} Z${(-0.2 - ((i * 7 + r) % 5) * 0.01).toFixed(3)}`);
         }
-        if (r % 50 === 0) out.push('G2 X0.5 Y' + y + ' I0.25 J0 F125');
+        // A half circle from where the row ended (a centre at the same distance
+        // from both ends: an arc that is not a circle is refused at load).
+        if (r % 50 === 0) out.push(`G2 X${(perRow * 0.02 + 0.5).toFixed(3)} Y${y} I0.25 J0 F125`);
         out.push('G0 Z0.15');
     }
     out.push('M05', 'M02');

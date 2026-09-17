@@ -83,6 +83,12 @@ export default function Library() {
     }
 
     async function loadIntoSender(item: LibraryItem) {
+        // Same guard as the Sidebar: a job that is running or paused keeps its file.
+        const st = useCNCStore.getState();
+        if (st.jobActive || st.machineState === 'running' || st.machineState === 'paused') {
+            addConsoleLog('warning', 'Cannot load file while a carve job is active. Press STOP [■] in the control bar first.');
+            return;
+        }
         try {
             const r = await fetch(`${BACKEND_BASE}/api/library/${item.id}/body`, { headers: remoteAuthHeaders() });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);

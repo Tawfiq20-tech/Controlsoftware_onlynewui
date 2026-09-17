@@ -104,7 +104,14 @@ and a 70,508-line job that crosses both the line-number and sequence wrap.
 - Hex-float parsing (`G0X11.1` lost the X), feed lag and step-grid drift — all
   removed by compiling every line before it is streamed (`lib/wireCompiler.js`).
 - Start From Line used to plunge to machine Z (−254 mm on an inch file). Resume
-  and Start From Line now always lift, travel above the work, then plunge.
+  and Start From Line now lift, travel above the work, then plunge. Since
+  2026-09-17 there is one exception: after an operator Stop the tool is still on
+  the resume point, so it no longer lifts 38 mm and comes straight back down.
+  When the idle, trusted position is on that X/Y (within 0.01 mm), there is no
+  lift or travel: straight down at the slow plunge feed, or no Z move at all.
+  The spindle pause then says the bit may still be in the material. After an
+  E-STOP, a driver alarm or a lost host, it always lifts first: the spindle may
+  have lost power, or an axis its place.
 - The power-cut checkpoint prepended its own preamble to the raw file, which
   re-read an inch file's remaining coordinates as millimetres. It now uses the
   controller's safe resume.
@@ -129,6 +136,14 @@ the lines it has not streamed yet, re-clamped to the machine's per-axis limits
 (200% never exceeds the axis maximum). It takes effect within the few moves
 already queued. **The Controls tab is open during a carve** so the speed can be
 changed while cutting; the Jog tab is locked instead (the job owns the machine).
+
+Above 100%, a move that goes down in Z (a plunge or a downward ramp) keeps its
+programmed feed: on 2026-09-17 at 200%, every plunge of the SHIP roughing file
+ran at 1524 instead of 762 mm/min. Below 100% every move slows down. On 3D
+finishing files that go up and down on every segment, the speed above 100% now
+switches between 1x and the override on consecutive moves. Files full of fine
+detail gain little from 200% anyway: on the SHIP file only 2141 of 45069 level
+cuts are sped up, because the motion limit already slows the rest.
 
 ### Safety / access
 
@@ -199,8 +214,10 @@ the list is now correct and machine-checkable (`sha256sum -c SHA256SUMS.txt`).
 1. **Air cut first, no stock, spindle off, Z well clear.** Load
    `Buildbotics_DRAGON ROUGH.ngc` and check, in order: it pauses at the `M0`
    with its message; Resume continues; the feed override changes the speed
-   while cutting; Stop then Start continues from the stopped line by lifting,
-   travelling and plunging; E-STOP stops at once and keeps the position.
+   while cutting; Stop then Start continues from the stopped line, with no
+   lift when the tool has not moved since the Stop (jog it away and Start
+   lifts, travels and plunges); E-STOP stops at once, keeps the position,
+   and the resume after it lifts first.
 2. **Then flash `firmware_0.2.0.hex`** (`"FLASH (2).bat" firmware_0.2.0.hex`,
    checksums first) and repeat the same air cut. Roll back any time with
    `tillnow_good_firmware.hex`. The sender is tested against both, so this is

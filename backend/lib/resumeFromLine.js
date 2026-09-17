@@ -24,9 +24,15 @@
  *   G1 Z<sz> F<plunge>     plunge back to line N's start depth, slowly
  *   G1 Z<sz> F<feed>       zero-length move -- re-arms the cutting feed
  *   ...line N onwards
+ *
+ * When the tool already stands at line N's X/Y (after a Stop it is exactly
+ * there), the lift and the travel are left out: it goes straight down to <sz>
+ * with the same slow plunge, rises straight to it, or stays where it is.
  */
 
 const MM_PER_INCH = 25.4;
+// How close the current X/Y (and Z) must be to line N's start to count as "there".
+const AT_START_TOL_MM = 0.01;
 
 /**
  * Splits one raw line into executable code and comment text.
@@ -60,10 +66,15 @@ function splitComment(line) {
     return { code: code.trim(), comment: comment.replace(/\s+/g, ' ').trim() };
 }
 
-/** Same cleaning JobStream.upload() applies, so line numbers match exactly. */
+/**
+ * Same cleaning JobStream.upload() applies, so line numbers match exactly.
+ * Any line ending counts -- LF, CRLF or a lone CR (old Mac editors). When this
+ * split on LF only, a CR-only program was one line and the whole job ran as a
+ * single move (2026-09-17 dialect audit D4-5).
+ */
 function cleanGcodeLines(text) {
     const out = [];
-    for (const raw of String(text || '').split(/\r?\n/)) {
+    for (const raw of String(text || '').split(/\r\n|\r|\n/)) {
         const { code } = splitComment(raw);
         if (code && !code.startsWith('%')) out.push(code);
     }
@@ -145,13 +156,23 @@ function scanModalState(lines, targetLine) {
     return st;
 }
 
+function finiteOrNull(v) {
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
 /**
  * @param {string[]} lines  cleaned job lines (cleanGcodeLines)
  * @param {number} targetLine 1-based line to resume at
- * @param {{safeZMm?: number, plungeFeedMm?: number}} [opts]
+ * @param {{safeZMm?: number, plungeFeedMm?: number, currentXMm?: number,
+ *          currentYMm?: number, currentZMm?: number}} [opts]
+ *   currentX/Y/ZMm: where the tool is now, in the same work coordinates.
+ *   Pass X/Y only when that position is exact and the machine is still.
  * @returns {{ok: true, preamble: string[], program: string[], lineOffset: number,
  *            units: string, startMm: {x:number,y:number,z:number|null},
- *            retractMm: number, warnings: string[]} | {ok: false, error: string}}
+ *            retractMm: number, inPlace: boolean, inPlaceZ: 'lower'|'raise'|'none'|null,
+ *            warnings: string[]} | {ok: false, error: string}}
+ *   inPlace: the tool is already at line N's X/Y -- no lift, no travel;
+ *   inPlaceZ says what Z does then, and retractMm is the current Z.
  */
 function buildResumeProgram(lines, targetLine, opts = {}) {
     const total = lines.length;
@@ -208,20 +229,46 @@ function buildResumeProgram(lines, targetLine, opts = {}) {
     // own parse-time feed and hex-float handling can never change what it does.
     const x = mm(st.pos.x);
     const y = mm(st.pos.y);
-    const preamble = [
-        'G21 G90',
-        `G21 G90 G0 Z${mm(retractMm)} F${fmt(zRate)}`, // Z first, wherever X/Y are now
-        `G21 G90 G0 X${x} Y${y} Z${mm(retractMm)} F${fmt(xyRate)}`,
-    ];
+
+    // Already standing on line N's start: the lift to the clearance height
+    // (38 mm on the 2026-09-17 SHIP roughing file) and the travel back to
+    // the same X/Y were pure extra Z motion followed by a slow plunge. Only
+    // with a known resume depth -- without one the old program lifts to safe
+    // height, which is still the right call.
+    const cur = { x: finiteOrNull(opts.currentXMm), y: finiteOrNull(opts.currentYMm), z: finiteOrNull(opts.currentZMm) };
+    const inPlace = st.pos.z !== null && cur.x !== null && cur.y !== null && cur.z !== null &&
+        Math.abs(cur.x - grid(st.pos.x)) <= AT_START_TOL_MM && Math.abs(cur.y - grid(st.pos.y)) <= AT_START_TOL_MM;
+    let inPlaceZ = null;
+    if (inPlace) {
+        const dz = cur.z - grid(st.pos.z);
+        inPlaceZ = dz > AT_START_TOL_MM ? 'lower' : (dz < -AT_START_TOL_MM ? 'raise' : 'none');
+        retractMm = grid(cur.z);
+    }
+
+    const preamble = ['G21 G90'];
+    if (!inPlace) {
+        preamble.push(
+            `G21 G90 G0 Z${mm(retractMm)} F${fmt(zRate)}`, // Z first, wherever X/Y are now
+            `G21 G90 G0 X${x} Y${y} Z${mm(retractMm)} F${fmt(xyRate)}`,
+        );
+    } else if (inPlaceZ === 'raise') {
+        // Below line N's start (stopped part-way down a plunge): straight up
+        // the way it came, at the lift's rate -- the first part of the lift
+        // the full program would make, no further.
+        preamble.push(`G21 G90 G0 X${x} Y${y} Z${mm(st.pos.z)} F${fmt(zRate)}`);
+    }
     if (st.spindle === 'M3' || st.spindle === 'M4') {
         preamble.push(st.spindleSpeed !== null ? `${st.spindle} S${fmt(st.spindleSpeed)}` : st.spindle);
     }
     if (st.pos.z !== null) {
         const cutFeedMm = st.feedMm !== null ? st.feedMm : 300;
         const plungeMm = Math.min(Math.max(Number(opts.plungeFeedMm) || Math.min(cutFeedMm, 300), 10), 10000);
-        preamble.push(`G21 G90 G1 X${x} Y${y} Z${mm(st.pos.z)} F${fmt(Math.min(plungeMm, zRate))}`);
+        const plunges = !inPlace || inPlaceZ === 'lower';
+        if (plunges) {
+            preamble.push(`G21 G90 G1 X${x} Y${y} Z${mm(st.pos.z)} F${fmt(Math.min(plungeMm, zRate))}`);
+        }
         if (st.feedMm !== null) preamble.push(`G21 G90 G1 X${x} Y${y} Z${mm(st.pos.z)} F${fmt(st.feedMm)}`);
-        else warnings.push('No feed rate was set before this line -- the machine keeps the plunge feed until the file sets F again.');
+        else warnings.push(`No feed rate was set before this line -- the machine keeps ${plunges ? 'the plunge feed' : 'its last feed'} until the file sets F again.`);
     } else {
         warnings.push('No Z move happens before this line -- Z stays at safe height until the file moves it.');
     }
@@ -237,6 +284,8 @@ function buildResumeProgram(lines, targetLine, opts = {}) {
         units,
         startMm: { x: st.pos.x, y: st.pos.y, z: st.pos.z },
         retractMm,
+        inPlace,
+        inPlaceZ,
         warnings,
     };
 }

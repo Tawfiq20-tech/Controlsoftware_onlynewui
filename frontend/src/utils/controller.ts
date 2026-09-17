@@ -370,7 +370,7 @@ class Controller {
     resumeJob(): void { this.command('gcode:resume'); }
     stopJob(): void { this.command('gcode:stop'); }
     startFromLine(line: number): void { this.command('gcode:startFromLine', line); }
-    /** Safe start (RSP): lift to safeZ, travel to line's start, plunge, continue. */
+    /** Safe start (RSP): lift to safeZ, travel to line's start, plunge, continue (no lift or travel when the tool is already on that X/Y). */
     startFromLineSafe(line: number, opts: { safeZ: number }): void { this.command('gcode:startFromLine', line, opts); }
     requestResumePoint(): void { this.command('gcode:resumePoint'); }
     requestResumePreview(line: number, opts: { safeZ: number }): void { this.command('gcode:resumePreview', line, opts); }

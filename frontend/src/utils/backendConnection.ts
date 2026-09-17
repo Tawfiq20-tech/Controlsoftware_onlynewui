@@ -11,6 +11,8 @@ import { useCNCStore } from '../stores/cncStore';
 import type { ControllerRestartInfo } from '../stores/cncStore';
 import { log } from './logger';
 import { getRemoteToken } from './remoteAuth';
+import { loadedFileMatches, takeOwnLoadEcho, sendDesign, forgetOwnLoad } from './designLoad';
+import type { LoadedFileInfo } from './designLoad';
 
 const getBackendUrl = (): string => {
     const url = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
@@ -210,11 +212,11 @@ function _wireControllerToStore(): void {
         // Defensive retry: if the backend rejected file:load because it lost the
         // controllerReady race despite the gate below, retry once instead of
         // leaving fileLoadedBackend stuck false with no recovery path.
-        if (data.error === 'No active controller' && !s.fileLoadedBackend && s.rawGcodeContent) {
+        if (data.error === 'No active controller' && !s.fileLoadedBackend && s.rawGcodeContent && !s.otherScreenFile && !s.outlineRunActive) {
             setTimeout(() => {
                 const cur = getStore();
-                if (cur.controllerReady && !cur.fileLoadedBackend && cur.rawGcodeContent) {
-                    controller.loadFile(cur.fileInfo?.name || 'job.gcode', cur.rawGcodeContent);
+                if (cur.controllerReady && !cur.fileLoadedBackend && cur.rawGcodeContent && !cur.otherScreenFile && !cur.outlineRunActive) {
+                    sendDesign(cur.fileInfo?.name || 'job.gcode', cur.rawGcodeContent);
                 }
             }, 500);
         }
@@ -425,6 +427,8 @@ function _wireControllerToStore(): void {
 
     controller.on('file:loadError', (data: import('../stores/cncStore').FileLoadError) => {
         const s = getStore();
+        // That load will never echo as file:load: do not keep it as "own".
+        forgetOwnLoad(data?.name);
         // "A job is running": the file was not judged, and the file that IS
         // running is still loaded -- do not mark anything as refused.
         if (data.busy) {
@@ -439,19 +443,36 @@ function _wireControllerToStore(): void {
         }
     });
 
-    controller.on('file:load', (data: { name: string; total: number }) => {
+    controller.on('file:load', (data: LoadedFileInfo & { name: string; total: number }) => {
         const s = getStore();
-        // Someone else (another tab, another screen) loaded a different file
-        // onto the machine. This screen still shows ITS file in the preview,
-        // so pressing Start here would cut the other one. Say so and make them
-        // re-load deliberately.
+        const ownEcho = takeOwnLoadEcho(data);
+        // Someone else (another tab, another screen) loaded a different design
+        // onto the machine -- compared by name AND content, so a re-exported
+        // file with the same name counts as different. This screen still shows
+        // ITS design in the preview, so Start here would cut the other one.
+        // It used to set fileLoadedBackend=false, which App.tsx answered with an
+        // automatic re-upload of this screen's design: two screens then swapped
+        // the machine's program back and forth forever. Now the screen only
+        // warns (console + banner) and waits for a deliberate re-load.
         const mine = s.fileInfo?.name;
-        if (mine && data?.name && data.name !== mine) {
+        const content = s.rawGcodeContent;
+        if (mine && content && data?.name && !loadedFileMatches(data, mine, content)) {
             s.setFileLoadedBackend(false);
-            s.addConsoleLog('error',
-                `Another screen loaded "${data.name}" onto the machine. The file shown here ("${mine}") is NOT the one that would run — load it again if you want it.`);
+            // This screen's own outline run, or an older load from this screen
+            // (operator switched designs quickly): not another screen.
+            if (s.outlineRunActive && data.name === 'outline.gcode') return;
+            if (ownEcho) return;
+            if (s.otherScreenFile !== data.name) {
+                const what = data.name === mine ? `a different version of "${data.name}"` : `"${data.name}"`;
+                const msg = `Another screen loaded ${what} onto the machine. The design shown here ("${mine}") is NOT loaded any more and will not run. To cut it: load it again here (button in the warning at the top, or open the file again), check the preview, then press Play.`;
+                s.addConsoleLog('error', msg);
+                log('warn', msg);
+                console.warn('[file:load] ' + msg);
+            }
+            s.setOtherScreenFile(data.name);
             return;
         }
+        s.setOtherScreenFile(null);
         s.setFileLoadedBackend(true);
         s.setFileLoadError(null);
         // MED#10: without this, currentLine/jobProgress kept showing the
@@ -474,6 +495,9 @@ function _wireControllerToStore(): void {
     // ("no G-code is loaded on the controller" from RSPController.js:676).
     controller.on('serialport:close', () => {
         getStore().setFileLoadedBackend(false);
+        // The backend's new controller starts with no file: this screen may
+        // load its design again when the machine is back.
+        getStore().setOtherScreenFile(null);
     });
 
     // ECSS — EasyCNC Safety System v1

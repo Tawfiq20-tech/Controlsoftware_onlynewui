@@ -237,20 +237,58 @@ async function testStopAndResumeExact() {
     const status = await sendAndSettle(r.ctrl, defs.OP_PING);
     assert.ok(!(status instanceof Error), `commands still work after stop: ${status && status.message}`);
 
+    // Stop is pressed as a move completes, so the next move had not stepped:
+    // the tool stands on the resume line's start X/Y, and the resume makes no
+    // lift or travel (lib/resumeFromLine.js). Stopping part-way through a move
+    // gets the full lift / travel / plunge: testStopMidMoveResumesWithLift.
+    const startPos = moves.filter((m) => m.line < point).pop().target;
+    assert.ok(Math.abs(r.fw.cur.x - startPos.x) <= 0.01 && Math.abs(r.fw.cur.y - startPos.y) <= 0.01,
+        `test premise: stopped on line ${point}'s start ${JSON.stringify(startPos)}, tool at ${JSON.stringify(r.fw.cur)}`);
+
     const before = r.fw.executed.length;
     r.ctrl.command('gcode:start'); // resumes from the point through the safe program
     await until(r.done, 300000, 'resumed job end');
     const resumed = r.fw.executed.slice(before);
-    // preamble: lift, travel at safe height, plunge, re-arm feed; then the file from the point
     const rest = expectedMoves(lines, point);
     const pre = resumed.slice(0, resumed.length - rest.length);
-    assert.ok(pre.length >= 3, `safe preamble ran (${pre.length} legs)`);
-    assert.ok(pre[0].to.z >= 5, 'first preamble move lifts Z to safe height');
-    assert.ok(near({ ...pre[1].to, z: 0 }, { ...rest[0].target, z: 0 }) || pre.some((p) => p.to.z >= 5), 'travels at safe height');
+    // at most the zero-length move that re-arms the cutting feed
+    assert.ok(pre.length <= 1, `in-place preamble is at most the feed re-arm (${pre.length} legs)`);
+    assert.ok(pre.every((p) => near(p.to, startPos)), 'no lift, no travel');
     assertExecutedExactly(resumed.slice(pre.length), rest, 'resumed remainder', false);
     assert.strictEqual(r.ctrl._currentLine, lines.length, 'progress reports file line numbers, not program lines');
     r.close();
-    console.log(`  ok  stop at move ${executedAtStop}: firmware IDLE, resume point exact (line ${point}), safe resume completes the file`);
+    console.log(`  ok  stop at move ${executedAtStop}: firmware IDLE, resume point exact (line ${point}), in-place resume completes the file`);
+}
+
+async function testStopMidMoveResumesWithLift() {
+    const r = rig({ legTimeScale: 1 });
+    const lines = r.load(genProgram(300));
+    await advance(50);
+    r.ctrl.command('gcode:start');
+    await until(() => r.fw.executed.length >= 120 && r.fw.leg && r.fw.legProgress() > 0.3 && r.fw.legProgress() < 0.7, 300000, 'part-way through a move');
+    const interrupted = r.fw.leg;
+    r.ctrl.command('gcode:stop');
+    await advance(500);
+    assert.strictEqual(r.fw.state, defs.ST_IDLE);
+    const point = r.ctrl.getResumePoint().line;
+    assert.strictEqual(point, interrupted.line, `resume point is the interrupted move (line ${interrupted.line})`);
+    const startPos = expectedMoves(lines).filter((m) => m.line < point).pop().target;
+    assert.ok(Math.abs(r.fw.cur.x - startPos.x) > 0.1 || Math.abs(r.fw.cur.y - startPos.y) > 0.1,
+        `test premise: the tool left line ${point}'s start ${JSON.stringify(startPos)}: ${JSON.stringify(r.fw.cur)}`);
+
+    const before = r.fw.executed.length;
+    r.ctrl.command('gcode:start');
+    await until(r.done, 600000, 'resumed job end');
+    const resumed = r.fw.executed.slice(before);
+    const rest = expectedMoves(lines, point);
+    const pre = resumed.slice(0, resumed.length - rest.length);
+    // preamble: lift, travel at safe height, plunge, re-arm feed; then the file from the point
+    assert.ok(pre.length >= 3, `safe preamble ran (${pre.length} legs)`);
+    assert.ok(pre[0].to.z >= 5, 'first preamble move lifts Z to safe height');
+    assert.ok(near({ ...pre[1].to, z: pre[0].to.z }, { ...startPos, z: pre[0].to.z }) && pre[1].to.z >= 5, 'travels to the start at safe height');
+    assertExecutedExactly(resumed.slice(pre.length), rest, 'resumed remainder', false);
+    r.close();
+    console.log(`  ok  stop part-way through the move at line ${point}: resume lifts, travels and plunges, completes the file`);
 }
 
 async function testAlarmMidMoveAndResume() {
@@ -547,6 +585,7 @@ function testStrtofMirror() {
     await testLostEventsAndTelemetry();
     await testLostFrames();
     await testStopAndResumeExact();
+    await testStopMidMoveResumesWithLift();
     await testAlarmMidMoveAndResume();
     await testProgramPauseM0();
     await testProgramPauseOffByDefault();
