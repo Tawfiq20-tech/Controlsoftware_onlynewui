@@ -1,0 +1,112 @@
+/* ===== Remote activity badge (status bar) ===== */
+
+.rab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    height: 100%;
+    white-space: nowrap;
+}
+
+.rab-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 100%;
+    padding: 0 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    color: var(--text-dim, #9ca3af);
+    border-radius: 4px;
+}
+
+.rab-chip:hover {
+    color: var(--text-main, #d1d5db);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.rab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--status-idle, #8b949e);
+}
+
+.rab-dot.ok   { background: var(--status-ok, #22c55e); }
+.rab-dot.warn { background: var(--status-warn, #f59e0b); }
+
+.rab-alert {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 4px 0 6px;
+    min-height: 32px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+}
+
+.rab-alert.warn {
+    background: color-mix(in srgb, var(--status-warn, #f59e0b) 22%, transparent);
+    border-color: color-mix(in srgb, var(--status-warn, #f59e0b) 55%, transparent);
+    animation: rabPulse 1.4s ease-in-out infinite;
+}
+
+.rab-alert.warn .rab-chip {
+    color: color-mix(in srgb, var(--status-warn, #f59e0b) 60%, var(--text-main));
+    font-family: var(--font-mono, monospace);
+}
+
+.rab-alert.bad {
+    background: color-mix(in srgb, var(--status-bad, #ef4444) 20%, transparent);
+    border-color: color-mix(in srgb, var(--status-bad, #ef4444) 60%, transparent);
+}
+
+.rab-alert.bad .rab-chip {
+    color: color-mix(in srgb, var(--status-bad, #ef4444) 65%, var(--text-main));
+}
+
+/* 44px touch target: the status bar grows while a Revoke button is shown. */
+.rab-revoke {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 12px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--status-bad, #ef4444) 60%, transparent);
+    background: var(--status-bad, #ef4444);
+    color: #fff;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    animation: none;
+}
+
+.rab-revoke:hover {
+    background: color-mix(in srgb, var(--status-bad, #ef4444) 85%, #000);
+}
+
+.rab-revoke:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+@keyframes rabPulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-warn, #f59e0b) 0%, transparent); }
+    50%       { box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-warn, #f59e0b) 35%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rab-alert.warn { animation: none; }
+}

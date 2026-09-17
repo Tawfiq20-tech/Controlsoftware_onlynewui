@@ -225,3 +225,15 @@
 }
 
 
+
+/* ── On-screen keyboard: shrink the shell so the sheet never covers the
+      field being typed into (see components/OnScreenKeyboard). ── */
+body.osk-open .app {
+    height: calc(100vh - var(--osk-height, 300px));
+    height: calc(100dvh - var(--osk-height, 300px));
+}
+
+body.osk-open .app-body-wrap {
+    /* The fixed 100dvh-74px above would fight the shrink; let flex size it. */
+    height: auto;
+}

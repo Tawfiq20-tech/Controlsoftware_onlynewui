@@ -1,0 +1,5 @@
+{"name":"onefinity-relay","version":"1.0.0","private":true,"type":"commonjs",
+ "engines":{"node":">=22.13 <25"},
+ "dependencies":{"ws":"8.21.3"},
+ "scripts":{"start":"node --disable-warning=ExperimentalWarning server/index.js",
+            "test":"node --disable-warning=ExperimentalWarning tests/run-all.js"}}

@@ -1,0 +1,14 @@
+{
+    "name": "Onefinity Remote",
+    "short_name": "Onefinity",
+    "description": "Monitor and control your Onefinity machine through your own relay.",
+    "start_url": "/#/devices",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#111418",
+    "theme_color": "#111418",
+    "icons": [
+        { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    ]
+}

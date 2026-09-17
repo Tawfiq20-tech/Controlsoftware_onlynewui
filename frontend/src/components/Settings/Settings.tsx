@@ -12,10 +12,12 @@
  * Persistence happens via the backend ConfigStore (REST), so settings
  * survive process restarts and roam to all connected browsers.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-    Camera, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu, Wifi,
+    Camera, Cloud, FolderOpen, Crosshair, Wrench, History, Layers, MessageCircle, Palette, Cpu, Wifi,
+    Smartphone,
 } from 'lucide-react';
+import { useCNCStore } from '../../stores/cncStore';
 import SectionWebcam from './SectionWebcam';
 import SectionWatchDir from './SectionWatchDir';
 import SectionProbing from './SectionProbing';
@@ -26,9 +28,11 @@ import SectionNotifications from './SectionNotifications';
 import SectionAppearance from './SectionAppearance';
 import SectionFirmwareUpdate from './SectionFirmwareUpdate';
 import SectionRemoteAccess from './SectionRemoteAccess';
+import SectionCloudAccess from './SectionCloudAccess';
+import SectionWifi from './SectionWifi';
 import './Settings.css';
 
-type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware' | 'remote';
+type Tab = 'surfacing' | 'webcam' | 'watchdir' | 'probing' | 'tools' | 'history' | 'notifications' | 'appearance' | 'firmware' | 'wifi' | 'remote' | 'cloud';
 
 interface TabDef { id: Tab; label: string; icon: React.ReactNode; }
 
@@ -50,10 +54,12 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
         title: 'Hardware',
         tabs: [
             // Gamepad dropped per Tawfiq msg 7396 — duplicates DevicePanel → Joystick.
+            { id: 'wifi',     label: 'Wi-Fi',        icon: <Wifi size={16} /> },
             { id: 'webcam',   label: 'Cameras',      icon: <Camera size={16} /> },
             { id: 'watchdir', label: 'Watch folder', icon: <FolderOpen size={16} /> },
             { id: 'firmware', label: 'Firmware',     icon: <Cpu size={16} /> },
-            { id: 'remote',   label: 'Remote access', icon: <Wifi size={16} /> },
+            { id: 'remote',   label: 'Remote access', icon: <Smartphone size={16} /> },
+            { id: 'cloud',    label: 'Cloud access',  icon: <Cloud size={16} /> },
         ],
     },
     {
@@ -74,8 +80,24 @@ const GROUPS: { id: string; title: string; tabs: TabDef[] }[] = [
     },
 ];
 
+const TAB_IDS = new Set<string>(GROUPS.flatMap((g) => g.tabs.map((t) => t.id)));
+
+function asTab(id: string): Tab {
+    return TAB_IDS.has(id) ? (id as Tab) : 'appearance';
+}
+
 export default function Settings() {
-    const [active, setActive] = useState<Tab>('appearance');
+    const storeTab = useCNCStore((s) => s.settingsTab);
+    const setStoreTab = useCNCStore((s) => s.setSettingsTab);
+    const [active, setActiveLocal] = useState<Tab>(() => asTab(storeTab));
+
+    // Deep links (Header firmware button, remote badge) write the store.
+    useEffect(() => { setActiveLocal(asTab(storeTab)); }, [storeTab]);
+
+    const setActive = (tab: Tab) => {
+        setActiveLocal(tab);
+        setStoreTab(tab);
+    };
 
     return (
         <div className="settings-root">
@@ -106,6 +128,8 @@ export default function Settings() {
                 {active === 'notifications' && <SectionNotifications />}
                 {active === 'appearance'   && <SectionAppearance />}
                 {active === 'remote'       && <SectionRemoteAccess />}
+                {active === 'wifi'         && <SectionWifi />}
+                {active === 'cloud'        && <SectionCloudAccess />}
             </div>
         </div>
     );

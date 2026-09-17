@@ -15,6 +15,33 @@ import './CameraView.css';
  * - Automatic hardware detection on load.
  * - Bottom tab popup mode: stays anchored at bottom and pops UPWARDS on click.
  */
+// Frame posting to the backend (SPEC §8.1). Without a remote viewer the kiosk
+// posts a full-resolution frame every 2 s for the notification bots. While the
+// cloud relay reports viewer demand it posts at the requested fps, downscaled,
+// and steps down further when the relay says a frame was too large.
+const IDLE_POST_MS = 2000;
+const DEMAND_STALE_MS = 15000;
+const DEMAND_LEVELS = [
+    { maxWidth: 640, quality: 0.6 },
+    { maxWidth: 480, quality: 0.5 },
+    { maxWidth: 320, quality: 0.5 },
+];
+
+interface CameraDemand {
+    cameraId: string | null;
+    fps: number;
+    maxBytes?: number;
+}
+
+interface DemandState {
+    fps: number;
+    maxBytes: number | null;
+    level: number;
+    lastEventAt: number;
+}
+
+const NO_DEMAND: DemandState = { fps: 0, maxBytes: null, level: 0, lastEventAt: 0 };
+
 interface CameraViewProps {
     className?: string;
     showHeader?: boolean;
@@ -40,6 +67,9 @@ export default function CameraView({
     const fsVideoRef = useRef<HTMLVideoElement | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const frameSyncTimerRef = useRef<number | null>(null);
+    const demandRef = useRef<DemandState>({ ...NO_DEMAND });
+    const selectedIdRef = useRef<string>('');
+    const kickFrameSyncRef = useRef<(() => void) | null>(null);
 
     // ── Load configured cameras, keep list live via socket ──
     const refresh = useCallback(async () => {
@@ -83,10 +113,46 @@ export default function CameraView({
 
     const selectedCamera = cameras.find(c => c.id === selectedId) || null;
 
+    // ── Remote viewer demand from the cloud relay ──
+    useEffect(() => {
+        selectedIdRef.current = selectedId;
+        demandRef.current = { ...NO_DEMAND };
+    }, [selectedId]);
+
+    useEffect(() => {
+        const onDemand = (d: CameraDemand | null) => {
+            if (!d) return;
+            // cameraId null = link down: drop demand for every camera.
+            if (d.cameraId !== null && d.cameraId !== selectedIdRef.current) return;
+            const prev = demandRef.current;
+            if (!(d.fps > 0)) {
+                demandRef.current = { ...NO_DEMAND };
+            } else if (typeof d.maxBytes === 'number') {
+                demandRef.current = {
+                    fps: d.fps,
+                    maxBytes: d.maxBytes,
+                    level: Math.min(prev.level + 1, DEMAND_LEVELS.length - 1),
+                    lastEventAt: performance.now(),
+                };
+            } else {
+                demandRef.current = {
+                    fps: d.fps,
+                    maxBytes: prev.fps > 0 ? prev.maxBytes : null,
+                    level: prev.fps > 0 ? prev.level : 0,
+                    lastEventAt: performance.now(),
+                };
+            }
+            kickFrameSyncRef.current?.();
+        };
+        controller.on('remote:camera:demand', onDemand);
+        return () => controller.off('remote:camera:demand', onDemand);
+    }, []);
+
     // ── Native USB Camera Stream Management ──
     const stopLocalStream = useCallback(() => {
+        kickFrameSyncRef.current = null;
         if (frameSyncTimerRef.current) {
-            clearInterval(frameSyncTimerRef.current);
+            clearTimeout(frameSyncTimerRef.current);
             frameSyncTimerRef.current = null;
         }
         if (localStreamRef.current) {
@@ -141,25 +207,60 @@ export default function CameraView({
                     if (fsVideoRef.current) fsVideoRef.current.srcObject = stream;
                     setStreamOk(true);
 
-                    // Sync periodic snapshots to backend (every 2s) for WhatsApp/Telegram bot /jog snapshots
-                    frameSyncTimerRef.current = window.setInterval(() => {
+                    // Sync snapshots to the backend: every 2 s for the WhatsApp/Telegram
+                    // bots, or at the remote viewers' fps while the relay reports demand.
+                    let encoding = false;
+                    const postFrame = () => {
                         const el = videoRef.current || fsVideoRef.current;
-                        if (!el || el.readyState < 2 || !selectedCamera?.id) return;
+                        const camId = selectedCamera?.id;
+                        if (!el || el.readyState < 2 || !camId || encoding) return;
+                        const d = demandRef.current;
+                        const level = d.fps > 0 ? DEMAND_LEVELS[d.level] : null;
                         try {
+                            const srcW = el.videoWidth || 640;
+                            const srcH = el.videoHeight || 480;
+                            const scale = level ? Math.min(1, level.maxWidth / srcW) : 1;
                             const canvas = document.createElement('canvas');
-                            canvas.width = el.videoWidth || 640;
-                            canvas.height = el.videoHeight || 480;
+                            canvas.width = Math.max(1, Math.round(srcW * scale));
+                            canvas.height = Math.max(1, Math.round(srcH * scale));
                             const ctx = canvas.getContext('2d');
-                            if (ctx) {
-                                ctx.drawImage(el, 0, 0);
-                                canvas.toBlob((blob) => {
-                                    if (blob && selectedCamera?.id) {
-                                        webcam.postFrame(selectedCamera.id, blob);
+                            if (!ctx) return;
+                            ctx.drawImage(el, 0, 0, canvas.width, canvas.height);
+                            encoding = true;
+                            canvas.toBlob((blob) => {
+                                encoding = false;
+                                if (!blob || !active) return;
+                                const cur = demandRef.current;
+                                if (cur.fps > 0 && cur.maxBytes !== null && blob.size > cur.maxBytes) {
+                                    // Too big for the relay: shrink for the next tick instead of sending it.
+                                    if (cur.level < DEMAND_LEVELS.length - 1) {
+                                        demandRef.current = { ...cur, level: cur.level + 1 };
                                     }
-                                }, 'image/jpeg', 0.65);
-                            }
-                        } catch (_) {}
-                    }, 2000);
+                                    return;
+                                }
+                                webcam.postFrame(camId, blob);
+                            }, 'image/jpeg', level ? level.quality : 0.65);
+                        } catch (_) {
+                            encoding = false;
+                        }
+                    };
+
+                    const schedule = (delay: number) => {
+                        if (frameSyncTimerRef.current) clearTimeout(frameSyncTimerRef.current);
+                        frameSyncTimerRef.current = window.setTimeout(tick, delay);
+                    };
+                    const tick = () => {
+                        if (!active) return;
+                        const d = demandRef.current;
+                        if (d.fps > 0 && performance.now() - d.lastEventAt > DEMAND_STALE_MS) {
+                            demandRef.current = { ...NO_DEMAND };
+                        }
+                        postFrame();
+                        const fps = demandRef.current.fps;
+                        schedule(fps > 0 ? Math.max(100, 1000 / fps) : IDLE_POST_MS);
+                    };
+                    kickFrameSyncRef.current = () => { if (active) schedule(0); };
+                    schedule(IDLE_POST_MS);
 
                 } catch (err) {
                     console.warn('[CameraView] getUserMedia fallback to backend proxy:', err);

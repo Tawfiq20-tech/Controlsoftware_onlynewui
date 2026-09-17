@@ -22,11 +22,13 @@ import { useCNCStore } from '../../stores/cncStore';
 import {
     backendHome,
     backendUnlock,
+    backendFeedHold,
     backendJobPause,
     backendJobResume,
     backendJobStop,
     backendJog,
 } from '../../utils/backendConnection';
+import type { MachineState } from '../../types/cnc';
 import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { remoteAuthHeaders } from '../../utils/remoteAuth';
@@ -35,7 +37,7 @@ import './ChatBot.css';
 /* ── Types ─────────────────────────────────────────────── */
 
 interface SuggestedAction {
-    action: 'home' | 'unlock' | 'job_pause' | 'job_resume' | 'job_stop' | 'jog' | 'probe' | 'job_start';
+    action: 'home' | 'unlock' | 'feed_hold' | 'job_pause' | 'job_resume' | 'job_stop' | 'jog' | 'probe' | 'job_start';
     label: string;
     autoExec: boolean;
     // Only present for a successfully-parsed jog action (see ChatbotService.js
@@ -49,7 +51,13 @@ interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
     suggestedAction?: SuggestedAction | null;
-    actionState?: 'idle' | 'confirming' | 'done' | 'error';
+    actionState?: 'idle' | 'confirming' | 'done' | 'error' | 'expired' | 'blocked';
+    // Why the action was refused at tap time (actionState 'blocked').
+    blockedReason?: string;
+    createdAt?: number;
+    // Closest known questions, sent when the backend couldn't match the
+    // query confidently -- rendered as tap-to-ask buttons.
+    suggestions?: string[];
 }
 
 interface ChatApiResponse {
@@ -57,6 +65,7 @@ interface ChatApiResponse {
     sources: string[];
     usedOnline: boolean;
     suggestedAction: SuggestedAction | null;
+    suggestions?: string[];
 }
 
 /* ── Config ─────────────────────────────────────────────── */
@@ -73,6 +82,12 @@ const getBackendBase = (): string => {
 
 const CHATBOT_API_URL = `${getBackendBase()}/api/chat`;
 const MAX_HISTORY = 6; // Send last N messages as context
+const MAX_MESSAGE_CHARS = 500; // matches ChatbotService MAX_MESSAGE_CHARS
+
+// A suggestion answers the machine as it was when the operator asked. Past
+// this age the confirm button is withdrawn -- same idea as the Telegram
+// bot's CONFIRMATIONS_TTL_MS.
+const ACTION_TTL_MS = 60_000;
 
 // Parameter-free actions -- "do the thing" is the whole command, so there's
 // nothing an operator needs to double-check beyond the label itself. Jog is
@@ -81,10 +96,40 @@ const MAX_HISTORY = 6; // Send last N messages as context
 const ACTION_EXECUTORS: Partial<Record<SuggestedAction['action'], () => void>> = {
     home: backendHome,
     unlock: backendUnlock,
+    feed_hold: backendFeedHold,
     job_pause: backendJobPause,
     job_resume: backendJobResume,
     job_stop: backendJobStop,
 };
+
+// Returns null when the action makes sense in the current machine state, or
+// a short reason it doesn't. Mirrors the panel gates: JobControlBar's
+// canStop/pause logic and the idle-only jog/DRO controls.
+function actionBlockedReason(
+    action: SuggestedAction['action'],
+    machineState: MachineState,
+    jobActive: boolean,
+): string | null {
+    switch (action) {
+        case 'home':
+            if (jobActive) return "A job is running — stop it before homing.";
+            return machineState === 'idle' || machineState === 'alarm' ? null : `Can't home while the machine is ${machineState}.`;
+        case 'unlock':
+            return machineState === 'alarm' || machineState === 'motorError' ? null : 'There is no alarm to clear.';
+        case 'feed_hold':
+            return machineState === 'running' ? null : 'Nothing is moving right now.';
+        case 'job_pause':
+            return jobActive && machineState !== 'paused' ? null : 'No job is running.';
+        case 'job_resume':
+            return machineState === 'paused' ? null : 'Nothing is paused.';
+        case 'job_stop':
+            return jobActive || machineState === 'paused' ? null : 'No job is running.';
+        case 'jog':
+            return machineState === 'idle' && !jobActive ? null : `Can't jog while the machine is ${jobActive ? 'running a job' : machineState}.`;
+        default:
+            return null;
+    }
+}
 
 /* ── ChatMessageItem (Memoized to prevent markdown re-parsing on typing) ── */
 
@@ -92,17 +137,26 @@ const ChatMessageItem = memo(function ChatMessageItem({
     msg,
     index,
     connected,
+    machineState,
+    jobActive,
     onRequestConfirm,
     onRunAction,
     onCancelConfirm,
+    onAsk,
 }: {
     msg: ChatMessage;
     index: number;
     connected: boolean;
+    machineState: MachineState;
+    jobActive: boolean;
     onRequestConfirm: (index: number) => void;
     onRunAction: (index: number, action: SuggestedAction) => void;
     onCancelConfirm: (index: number) => void;
+    onAsk: (text: string) => void;
 }) {
+    const blockedNow = msg.suggestedAction
+        ? actionBlockedReason(msg.suggestedAction.action, machineState, jobActive)
+        : null;
     return (
         <div
             className={`chatbot-msg ${
@@ -111,21 +165,39 @@ const ChatMessageItem = memo(function ChatMessageItem({
         >
             <ReactMarkdown>{msg.content}</ReactMarkdown>
 
+            {msg.role === 'assistant' && msg.suggestions && msg.suggestions.length > 0 && (
+                <div className="chatbot-suggestions">
+                    {msg.suggestions.map((s) => (
+                        <button
+                            key={s}
+                            className="chatbot-action-btn chatbot-suggestion-btn"
+                            onClick={() => onAsk(s)}
+                        >
+                            {s}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {msg.role === 'assistant' && msg.suggestedAction && (
                 <div className="chatbot-action-row">
                     {msg.actionState === 'idle' && (
                         msg.suggestedAction.autoExec ? (
-                            connected ? (
+                            !connected ? (
+                                <div className="chatbot-action-hint">
+                                    (Machine isn't connected — connect first, then ask again.)
+                                </div>
+                            ) : blockedNow ? (
+                                <div className="chatbot-action-hint">
+                                    ({msg.suggestedAction.label} isn't available: {blockedNow})
+                                </div>
+                            ) : (
                                 <button
                                     className="chatbot-action-btn"
                                     onClick={() => onRequestConfirm(index)}
                                 >
                                     Want me to do this — {msg.suggestedAction.label}?
                                 </button>
-                            ) : (
-                                <div className="chatbot-action-hint">
-                                    (Machine isn't connected — connect first, then ask again.)
-                                </div>
                             )
                         ) : (
                             <div className="chatbot-action-hint">
@@ -156,6 +228,14 @@ const ChatMessageItem = memo(function ChatMessageItem({
                     {msg.actionState === 'error' && (
                         <div className="chatbot-error">Couldn't run that — try the button on the panel instead.</div>
                     )}
+                    {msg.actionState === 'expired' && (
+                        <div className="chatbot-action-hint">
+                            (This suggestion expired — ask again so it matches the machine's current state.)
+                        </div>
+                    )}
+                    {msg.actionState === 'blocked' && (
+                        <div className="chatbot-error">Not sent: {msg.blockedReason}</div>
+                    )}
                 </div>
             )}
         </div>
@@ -166,6 +246,8 @@ const ChatMessageItem = memo(function ChatMessageItem({
 
 export default function ChatBot() {
     const connected = useCNCStore(s => s.connected);
+    const machineState = useCNCStore(s => s.machineState);
+    const jobActive = useCNCStore(s => s.jobActive);
     const [isOpen, setIsOpen] = useState(false);
     const [isClosing, setIsClosing] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -174,6 +256,25 @@ export default function ChatBot() {
     const [error, setError] = useState<string | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const expiryTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+    // Lets the memoized action callbacks read createdAt without depending on
+    // `messages` (which would re-create them, and re-render every item, per message).
+    const messagesRef = useRef(messages);
+    messagesRef.current = messages;
+
+    useEffect(() => () => expiryTimersRef.current.forEach(clearTimeout), []);
+
+    /* Withdraw confirm buttons older than ACTION_TTL_MS */
+    const expireStaleActions = useCallback(() => {
+        const now = Date.now();
+        setMessages(prev => prev.map(m =>
+            m.createdAt !== undefined
+            && now - m.createdAt >= ACTION_TTL_MS
+            && (m.actionState === 'idle' || m.actionState === 'confirming')
+                ? { ...m, actionState: 'expired' }
+                : m
+        ));
+    }, []);
 
     /* Auto-scroll to latest message without running continuous smooth-scroll animation frames */
     const scrollToBottom = useCallback(() => {
@@ -213,13 +314,14 @@ export default function ChatBot() {
 
     /* ── Send Message ──────────────────────────────────── */
 
-    const sendMessage = async () => {
-        const trimmed = input.trim();
+    // `text` is a tapped suggestion; without it, send what's in the input box.
+    const sendMessage = async (text?: string) => {
+        const trimmed = (text ?? input).trim();
         if (!trimmed || isLoading) return;
 
         const userMsg: ChatMessage = { role: 'user', content: trimmed };
         setMessages(prev => [...prev, userMsg]);
-        setInput('');
+        if (text === undefined) setInput('');
         setError(null);
         setIsLoading(true);
 
@@ -260,8 +362,13 @@ export default function ChatBot() {
                 content: data.answer,
                 suggestedAction: data.suggestedAction,
                 actionState: 'idle',
+                createdAt: Date.now(),
+                suggestions: data.suggestions,
             };
             setMessages(prev => [...prev, botMsg]);
+            if (data.suggestedAction?.autoExec) {
+                expiryTimersRef.current.push(setTimeout(expireStaleActions, ACTION_TTL_MS + 50));
+            }
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to assistant';
             setError(msg);
@@ -269,6 +376,13 @@ export default function ChatBot() {
             setIsLoading(false);
         }
     };
+
+    // Stable callback for the memoized message items -- sendMessage itself is
+    // rebuilt every render (it reads `input`), which would re-render every
+    // message on each keystroke.
+    const sendMessageRef = useRef(sendMessage);
+    sendMessageRef.current = sendMessage;
+    const askSuggestion = useCallback((text: string) => { sendMessageRef.current(text); }, []);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -283,7 +397,14 @@ export default function ChatBot() {
         setMessages(prev => prev.map((m, i) => (i === index ? { ...m, actionState: state } : m)));
     }, []);
 
-    const requestConfirm = useCallback((index: number) => setActionState(index, 'confirming'), [setActionState]);
+    const isExpired = useCallback((index: number) => {
+        const createdAt = messagesRef.current[index]?.createdAt;
+        return createdAt !== undefined && Date.now() - createdAt >= ACTION_TTL_MS;
+    }, []);
+
+    const requestConfirm = useCallback((index: number) => {
+        setActionState(index, isExpired(index) ? 'expired' : 'confirming');
+    }, [setActionState, isExpired]);
     const cancelConfirm = useCallback((index: number) => setActionState(index, 'idle'), [setActionState]);
 
     const runAction = useCallback((index: number, action: SuggestedAction) => {
@@ -292,6 +413,18 @@ export default function ChatBot() {
         // confirm button can't silently no-op against a disconnected machine.
         if (!connected) {
             setActionState(index, 'error');
+            return;
+        }
+        if (isExpired(index)) {
+            setActionState(index, 'expired');
+            return;
+        }
+        // Re-check against the live store, not the render-time props: the
+        // machine may have changed state between showing and tapping "Yes".
+        const live = useCNCStore.getState();
+        const blocked = actionBlockedReason(action.action, live.machineState, live.jobActive);
+        if (blocked) {
+            setMessages(prev => prev.map((m, i) => (i === index ? { ...m, actionState: 'blocked', blockedReason: blocked } : m)));
             return;
         }
         try {
@@ -316,7 +449,7 @@ export default function ChatBot() {
         } catch (err) {
             setActionState(index, 'error');
         }
-    }, [connected, setActionState]);
+    }, [connected, setActionState, isExpired]);
 
     /* ── Render ─────────────────────────────────────────── */
 
@@ -375,9 +508,12 @@ export default function ChatBot() {
                                 msg={msg}
                                 index={i}
                                 connected={connected}
+                                machineState={machineState}
+                                jobActive={jobActive}
                                 onRequestConfirm={requestConfirm}
                                 onRunAction={runAction}
                                 onCancelConfirm={cancelConfirm}
+                                onAsk={askSuggestion}
                             />
                         ))}
 
@@ -403,6 +539,7 @@ export default function ChatBot() {
                             className="chatbot-input"
                             type="text"
                             placeholder="Type your message..."
+                            maxLength={MAX_MESSAGE_CHARS}
                             value={input}
                             onChange={e => setInput(e.target.value)}
                             onKeyDown={handleKeyDown}
@@ -411,7 +548,7 @@ export default function ChatBot() {
                         />
                         <button
                             className="chatbot-send-btn"
-                            onClick={sendMessage}
+                            onClick={() => sendMessage()}
                             disabled={isLoading || !input.trim()}
                             id="chatbot-send"
                         >

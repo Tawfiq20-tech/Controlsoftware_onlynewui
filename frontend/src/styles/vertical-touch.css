@@ -191,41 +191,59 @@
 
 /* ─────────────── Status bar ─────────────── */
 .app.is-vertical .status-bar {
-    height: 38px;
-    font-size: 13px;
-    padding: 0 8px;
+    height: 48px;
+    font-size: 17px;
+    padding: 0 10px;
 }
 .app.is-vertical .status-bar .sb-key {
-    font-size: 11px;
+    font-size: 14px;
+}
+.app.is-vertical .status-bar .sb-val,
+.app.is-vertical .status-bar .sb-label {
+    font-size: 17px;
+}
+.app.is-vertical .status-bar .sb-state .sb-label {
+    font-size: 17px;
+}
+.app.is-vertical .status-bar .sb-remote-diag,
+.app.is-vertical .status-bar .sb-alarm-badge {
+    font-size: 15px;
+}
+.app.is-vertical .status-bar .sb-divider {
+    height: 24px;
 }
 .app.is-vertical .status-bar .sb-dot {
-    width: 10px;
-    height: 10px;
+    width: 13px;
+    height: 13px;
+}
+.app.is-vertical .status-bar .sb-rd-dot {
+    width: 13px;
+    height: 13px;
 }
 .app.is-vertical .status-bar .sb-unit-btn svg {
-    width: 15px;
-    height: 15px;
+    width: 19px;
+    height: 19px;
 }
 .app.is-vertical .status-bar .sb-alarm-clear {
-    min-height: 30px;
-    padding: 0 14px;
-    font-size: 13px;
+    min-height: 34px;
+    padding: 0 16px;
+    font-size: 15px;
 }
 /* Assistant launcher parks inside the status bar instead of floating
    over jog keys / macro tiles. */
 .app.is-vertical .status-bar {
-    padding-right: 56px;
+    padding-right: 62px;
 }
 .app.is-vertical .chatbot-fab {
-    bottom: 2px;
+    bottom: 5px;
     right: 8px;
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
     border-width: 1px;
 }
 .app.is-vertical .chatbot-fab svg {
-    width: 18px;
-    height: 18px;
+    width: 21px;
+    height: 21px;
 }
 
 /* ─────────────── Monitor mode: column proportions ─────────────── */

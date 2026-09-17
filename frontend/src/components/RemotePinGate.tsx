@@ -2,19 +2,15 @@
  * RemotePinGate — app-root gate for the optional PIN feature
  * (backend/services/remoteAccess/RemoteAccessService.js).
  *
- * On the control PC itself this is invisible: loopback requests are never
- * gated server-side, so the one probe call below always succeeds and the
- * app renders immediately, no matter whether a PIN is set.
- *
- * On a remote LAN client, once a PIN has been set from the control PC's
- * Settings panel, this blocks rendering behind a PIN-entry screen until a
- * valid session token is obtained and cached (see utils/remoteAuth.ts).
- * A small reliability banner stays visible for the rest of the session as
- * a reminder that E-Stop lives at the machine, not on the phone screen.
+ * The backend decides: /api/remote/info reports `authorized` for the
+ * control PC itself, when no PIN is set, or for a valid session (header
+ * token or session cookie). Only an unauthorized remote client sees the
+ * PIN screen. This is UX only — the backend gates every request itself.
  */
 import { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { getRemoteToken, setRemoteToken, clearRemoteToken } from '../utils/remoteAuth';
+import { disconnectBackendSocket, REMOTE_SESSION_ENDED_EVENT } from '../utils/backendConnection';
 import './RemotePinGate.css';
 
 const getBackendBase = (): string => {
@@ -29,7 +25,7 @@ const getBackendBase = (): string => {
     return 'http://localhost:4000';
 };
 
-type GateState = 'checking' | 'open' | 'needs-pin' | 'remote-session' | 'remote-off';
+type GateState = 'checking' | 'open' | 'needs-pin';
 
 export default function RemotePinGate({ children }: { children: React.ReactNode }) {
     const [state, setState] = useState<GateState>('checking');
@@ -39,31 +35,31 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
 
     useEffect(() => { check(); }, []);
 
+    // The backend ended this client's socket (revoked session, PIN changed).
+    // Drop the dead socket, unmount the app while re-checking, and show the
+    // PIN screen if the session is gone; the app reconnects when it remounts.
+    useEffect(() => {
+        const onEnded = () => {
+            disconnectBackendSocket();
+            setState('checking');
+            check();
+        };
+        window.addEventListener(REMOTE_SESSION_ENDED_EVENT, onEnded);
+        return () => window.removeEventListener(REMOTE_SESSION_ENDED_EVENT, onEnded);
+    }, []);
+
     async function check() {
         const base = getBackendBase();
         try {
+            const token = getRemoteToken();
             const infoRes = await fetch(`${base}/api/remote/info`, {
-                headers: { 'bypass-tunnel-reminder': 'true' },
+                headers: token ? { 'X-Remote-Token': token } : {},
             });
             const info = await infoRes.json();
-            const token = getRemoteToken();
-
-            // Ask the backend whether THIS client counts as the operator at
-            // the machine. Its answer is what decides -- a client reached
-            // through the internet tunnel arrives on loopback too, so "no PIN
-            // set" no longer means "everyone may drive the machine".
-            const probe = await fetch(`${base}/api/state`, {
-                headers: token
-                    ? { 'X-Remote-Token': token, 'bypass-tunnel-reminder': 'true' }
-                    : { 'bypass-tunnel-reminder': 'true' },
-            });
-            if (probe.ok) { setState(token ? 'remote-session' : 'open'); return; }
-            // Only a 401 is the gate talking; anything else (offline backend,
-            // server error) is not a reason to block the operator's own screen.
-            if (probe.status !== 401) { setState('open'); return; }
-            const body = await probe.json().catch(() => ({}));
+            if (info.authorized) { setState('open'); return; }
+            // Stale or revoked token: drop it and ask again.
             clearRemoteToken();
-            setState(body.needsPin || !info.pinSet ? 'remote-off' : 'needs-pin');
+            setState('needs-pin');
         } catch (_) {
             // Backend unreachable -- let the rest of the app's own
             // connection-status UI surface that instead of hard-blocking here.
@@ -78,17 +74,16 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
             const base = getBackendBase();
             const r = await fetch(`${base}/api/remote/verify-pin`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'bypass-tunnel-reminder': 'true',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pin: pin.trim() }),
             });
             const data = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(data.error || 'Incorrect PIN');
             setRemoteToken(data.token);
             setPin('');
-            setState('remote-session');
+            // The app (and its socket) only mounts after this, so it starts
+            // with the session token and cookie already in place.
+            setState('open');
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -97,25 +92,6 @@ export default function RemotePinGate({ children }: { children: React.ReactNode 
     }
 
     if (state === 'checking') return null;
-
-    if (state === 'remote-off') {
-        return (
-            <div className="remote-pin-screen">
-                <div className="remote-pin-card">
-                    <Lock size={28} />
-                    <h2>Remote access is off</h2>
-                    <p>
-                        This machine can only be controlled from the PC it is plugged into.
-                        To use it from here, set a remote PIN on that PC:
-                        <strong> Settings → Remote Access</strong>.
-                    </p>
-                    <button className="remote-pin-btn" onClick={() => { setState('checking'); check(); }}>
-                        Try again
-                    </button>
-                </div>
-            </div>
-        );
-    }
 
     if (state === 'needs-pin') {
         return (

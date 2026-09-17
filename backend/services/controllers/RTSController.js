@@ -1818,7 +1818,10 @@ class RTSController extends EventEmitter {
      * @param {...*} args - Command arguments
      */
     command(cmd, ...args) {
-        const handler = this._commands[cmd];
+        // Only an own, string-named handler: an array/object cmd must never
+        // coerce to a real handler name (['gcode'] -> 'gcode').
+        const commands = this._commands;
+        const handler = typeof cmd === 'string' && Object.hasOwn(commands, cmd) ? commands[cmd] : null;
         if (handler) {
             handler.call(this, ...args);
         } else {
@@ -2739,8 +2742,17 @@ class RTSController extends EventEmitter {
     }
 
     _zeroWCS(params = {}) {
-        const axes = params?.axes || ['X', 'Y', 'Z'];
-        const wcs = params?.wcs || 'G54';
+        // Parameters are spliced into G-code text: accept only single axis
+        // letters and G54-G59, never free text (a newline would add a line).
+        const rawAxes = Array.isArray(params?.axes) ? params.axes : ['X', 'Y', 'Z'];
+        const axes = [...new Set(rawAxes
+            .filter(a => typeof a === 'string' && /^[xyzXYZ]$/.test(a))
+            .map(a => a.toUpperCase()))];
+        if (axes.length === 0) {
+            logger.warn(`[RTS] wcs:zero ignored: no valid axes in ${JSON.stringify(params?.axes)}`);
+            return;
+        }
+        const wcs = typeof params?.wcs === 'string' && /^G5[4-9]$/.test(params.wcs) ? params.wcs : 'G54';
         const wcsNum = parseInt(wcs.replace('G', '')) - 53; // G54=1, G55=2, etc.
         const axisStr = axes.map(a => `${a.toUpperCase()}0`).join(' ');
         this._sendGcode(`G10 L20 P${wcsNum} ${axisStr}`);

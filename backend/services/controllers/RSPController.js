@@ -738,7 +738,6 @@ class RSPController extends EventEmitter {
         };
         this.state.parserstate.feedrate = dict.feed;
         this.state.parserstate.spindle = dict.spindle_speed;
-
         if (this.job && this.job.active) {
             // Before any alarm handling below, so the resume point includes
             // every move this frame proves finished (heals lost EV_EXECUTED).
@@ -1463,6 +1462,14 @@ class RSPController extends EventEmitter {
     }
 
     /**
+     * Purge host-side retransmits of jog/move frames the board has not ACKed
+     * yet, so a cancelled remote jog is never (re)sent. Sends nothing.
+     */
+    cancelPendingJogs() {
+        return this.stream ? this.stream.cancelPending(p => p.payload[0] === defs.OP_JOG || p.payload[0] === defs.OP_MOVE) : 0;
+    }
+
+    /**
      * OP_RESUME for a held job. A status frame the firmware built BEFORE it
      * applied OP_RESUME still says HOLD; arriving after the host cleared
      * job.paused it re-paused the job ("The machine is on feed hold") while
@@ -1595,7 +1602,7 @@ class RSPController extends EventEmitter {
         // commands, plus margin for the ESTOP/FAULT debounce passes.
         const travelMinutes = maxTravelMm / Math.max(1, feedMmPerMin);
         const timeout = Math.max(10, travelMinutes * 60 * 1.5 + 5);
-        return this.stream.sendCommand(defs.OP_PROBE, payload, { timeout }).then((rsp) => {
+        return this._trackHostMotion('probe', () => this.stream.sendCommand(defs.OP_PROBE, payload, { timeout })).then((rsp) => {
             const status = rsp.payload[1];
             if (status !== defs.ST_OK) {
                 const name = defs.ST_ERR_NAMES[status] || `0x${status.toString(16)}`;
@@ -1611,6 +1618,32 @@ class RSPController extends EventEmitter {
             this.emit('probe', { success: out.contact, x: out.x, y: out.y, z: out.z, axis: out.axis, distMm: out.distMm });
             return out;
         });
+    }
+
+    /**
+     * Brackets a host-sequenced, awaited firmware move (OP_PROBE / OP_MOVE)
+     * with 'hostmotion' start/end events. These primitives are only driven
+     * by local routines (ProbingService, probe-fail retract), which chain
+     * many of them with Idle gaps in between; the remote gate holds its
+     * local-activity lock while one is in flight and for the usual window
+     * after the last one ends.
+     * @param {string} op
+     * @param {() => Promise} send
+     * @returns {Promise}
+     */
+    _trackHostMotion(op, send) {
+        const emit = (phase) => {
+            try { this.emit('hostmotion', { phase, op }); } catch (_) { /* observer must not break motion */ }
+        };
+        emit('start');
+        let p;
+        try {
+            p = Promise.resolve(send());
+        } catch (err) {
+            emit('end');
+            return Promise.reject(err);
+        }
+        return p.then((v) => { emit('end'); return v; }, (err) => { emit('end'); throw err; });
     }
 
     /**
@@ -1664,7 +1697,7 @@ class RSPController extends EventEmitter {
         const dist = Math.hypot(x - mpos.x, y - mpos.y, z - mpos.z);
         const travelMinutes = dist / Math.max(1, feed);
         const timeout = Math.max(10, travelMinutes * 60 * 1.5 + 5);
-        return this.stream.sendCommand(defs.OP_MOVE, codec.buildMove(x, y, z, feed), { timeout }).then((rsp) => {
+        return this._trackHostMotion('move', () => this.stream.sendCommand(defs.OP_MOVE, codec.buildMove(x, y, z, feed), { timeout })).then((rsp) => {
             const status = rsp.payload[1];
             if (status !== defs.ST_OK) {
                 const name = defs.ST_ERR_NAMES[status] || `0x${status.toString(16)}`;

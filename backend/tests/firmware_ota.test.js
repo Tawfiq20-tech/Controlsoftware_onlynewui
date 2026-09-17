@@ -182,9 +182,12 @@ async function runOtaTests() {
     }
 }
 
-runOtaTests().then(() => {
-    console.log("ALL TESTS PASSED SUCCESSFULLY!");
-}).catch((err) => {
+runOtaTests().catch((err) => {
     console.error('Test failed:', err);
     process.exit(1);
 });
+
+// tests/run-all.js treats a run as finished only when it prints this line.
+// These suites came from the remote-access branch, which ran them directly;
+// they signal failure with a non-zero exit, so a clean exit means pass.
+process.on('exit', (code) => { if (code === 0) console.log('ALL TESTS PASSED SUCCESSFULLY!'); });

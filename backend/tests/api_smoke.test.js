@@ -58,13 +58,15 @@ async function smokeTest() {
     console.log(`✓ /api/firmware/info responded 200: Latest v${fwInfo.body.latestVersion} (${fwInfo.body.board})`);
 
     console.log('All API Smoke Tests Passed!');
-    console.log('ALL TESTS PASSED SUCCESSFULLY!'); // tests/run-all.js looks for this
     process.exit(0);
 }
 
-smokeTest().then(() => {
-    console.log("ALL TESTS PASSED SUCCESSFULLY!");
-}).catch((err) => {
+smokeTest().catch((err) => {
     console.error('Smoke test failed:', err);
     process.exit(1);
 });
+
+// tests/run-all.js treats a run as finished only when it prints this line.
+// These suites came from the remote-access branch, which ran them directly;
+// they signal failure with a non-zero exit, so a clean exit means pass.
+process.on('exit', (code) => { if (code === 0) console.log('ALL TESTS PASSED SUCCESSFULLY!'); });

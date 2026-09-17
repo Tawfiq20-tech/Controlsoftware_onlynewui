@@ -1,0 +1,33 @@
+// Let the kiosk user set up Wi-Fi from the touchscreen.
+//
+// The backend (backend/services/network/WifiService.js) drives NetworkManager
+// through nmcli. NetworkManager asks polkit before it will scan, join a
+// network or save a connection, and the kiosk user has no session and no way
+// to answer a password prompt, so those actions are granted here instead.
+//
+// Scope is deliberately narrow: Wi-Fi and connection settings only. It does
+// not grant general system control, and the backend refuses these requests to
+// anyone but the operator at the machine's own screen.
+//
+// Debian Bookworm ships polkit 122, which reads JavaScript rules from
+// /etc/polkit-1/rules.d/. Installed by pi-kiosk/install.sh.
+
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "cnc") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    var allowed = [
+        "org.freedesktop.NetworkManager.wifi.scan",
+        "org.freedesktop.NetworkManager.enable-disable-wifi",
+        "org.freedesktop.NetworkManager.network-control",
+        "org.freedesktop.NetworkManager.settings.modify.system",
+        "org.freedesktop.NetworkManager.settings.modify.own",
+    ];
+
+    if (allowed.indexOf(action.id) !== -1) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

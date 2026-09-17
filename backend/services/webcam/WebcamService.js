@@ -22,6 +22,7 @@ const https = require('https');
 const { URL } = require('url');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
+const { LOCAL_ROOM } = require('../remoteAccess/RemoteAccessService');
 
 class Camera extends EventEmitter {
     constructor(cfg) {
@@ -280,6 +281,33 @@ class WebcamService extends EventEmitter {
         }));
     }
 
+    /**
+     * The camera list for callers without local control (LAN phones): no
+     * stream URL (IP-camera URLs usually embed credentials), no device path,
+     * and no upstream error text (ffmpeg/network errors echo the URL).
+     */
+    publicList() {
+        return [...this.cameras.values()].map(c => ({
+            id: c.cfg.id,
+            name: c.cfg.name,
+            type: c.cfg.type,
+            ...(c.cfg.enabled !== undefined ? { enabled: c.cfg.enabled } : {}),
+            online: c.online,
+        }));
+    }
+
+    /** Full payload to local-control sockets, redacted payload to the rest. */
+    _emitScoped(event, fullPayload, publicPayload) {
+        const io = this.io;
+        if (!io) return;
+        if (typeof io.to === 'function' && typeof io.except === 'function') {
+            io.to(LOCAL_ROOM).emit(event, fullPayload);
+            io.except(LOCAL_ROOM).emit(event, publicPayload);
+        } else if (typeof io.emit === 'function') {
+            io.emit(event, publicPayload);
+        }
+    }
+
     async detectLocalDevices() {
         const isWin = process.platform === 'win32';
         if (isWin) {
@@ -394,7 +422,7 @@ class WebcamService extends EventEmitter {
     _add(cfg) {
         const cam = new Camera(cfg);
         cam.on('status', (s) => {
-            this.io.emit('webcam:status', { id: cfg.id, ...s });
+            this._emitScoped('webcam:status', { id: cfg.id, ...s }, { id: cfg.id, online: !!s.online });
         });
         this.cameras.set(cfg.id, cam);
         try { cam.start(); }
@@ -402,7 +430,7 @@ class WebcamService extends EventEmitter {
     }
 
     _broadcastList() {
-        this.io.emit('webcam:cameras', this.list());
+        this._emitScoped('webcam:cameras', this.list(), this.publicList());
     }
 
     shutdown() {

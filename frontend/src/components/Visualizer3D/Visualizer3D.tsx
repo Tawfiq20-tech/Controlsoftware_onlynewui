@@ -1367,6 +1367,7 @@ function applyView(
     toolpathSegments?: ToolpathSegment[] | null,
 ) {
     let cx: number, cy: number, cz: number, span: number;
+    let spanX: number, spanY: number, spanZ: number;
     const ox = carveOrigin?.x ?? 0;
     const oy = carveOrigin?.y ?? 0;
     const oz = carveOrigin?.z ?? 0;
@@ -1398,14 +1399,17 @@ function applyView(
         cy = (minY + maxY) / 2;
         cz = isFinite(minZ) && isFinite(maxZ) ? (minZ + maxZ) / 2 : 0;
 
-        const spanX = Math.max(1, maxX - minX);
-        const spanY = Math.max(1, maxY - minY);
-        const spanZ = Math.max(0.1, (isFinite(maxZ) ? maxZ : 0) - (isFinite(minZ) ? minZ : 0));
+        spanX = Math.max(1, maxX - minX);
+        spanY = Math.max(1, maxY - minY);
+        spanZ = Math.max(0.1, (isFinite(maxZ) ? maxZ : 0) - (isFinite(minZ) ? minZ : 0));
         span = Math.max(spanX, spanY, spanZ, 40);
     } else {
         cx = env.x / 2;
         cy = env.y / 2;
         cz = env.z / 2;
+        spanX = env.x;
+        spanY = env.y;
+        spanZ = env.z;
         span = Math.max(env.x, env.y, env.z) * 0.8;
     }
 
@@ -1419,14 +1423,34 @@ function applyView(
     } else {
         // 2D orthographic-aligned views: lock 3D rotation, centered directly on the design
         ctrl.enableRotate = false;
-        
-        // Slightly zoomed-out framing to comfortably display labels and surrounding grid
-        const D = span * 1.48;
+
+        // Fit the face this view looks at into the viewport. The vertical
+        // layout's viewport is portrait, so width is usually the tight
+        // axis — a fixed span multiplier cropped the part sideways. PAD
+        // covers the stock's 5 mm-per-side border (RealisticStockMesh), and
+        // FIT_MARGIN makes the stock fill ~70% of the frame so the edges,
+        // ruler labels and surrounding grid stay visible.
+        const FIT_MARGIN = 1.45;
+        const PAD = 10;
+        const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+        const tanH = tanV * cam.aspect;
+        const [faceW, faceH, faceDepth] =
+            v === 'top'   ? [spanX, spanY, spanZ] :
+            v === 'front' ? [spanX, spanZ, spanY] :
+                            [spanY, spanZ, spanX];
+        const halfW = (Math.max(faceW, 40) + PAD) * FIT_MARGIN / 2;
+        const halfH = (Math.max(faceH, 40) + PAD) * FIT_MARGIN / 2;
+        // + half the depth so the near face (not the centre) is what fits.
+        const D = Math.max(halfW / tanH, halfH / tanV) + faceDepth / 2;
+
+        // Front/left/right sit level with the centre (no elevation), so the
+        // stock is seen square-on: the camera height lies inside the stock's
+        // thickness, hiding its top and bottom faces.
         const positions: Record<Exclude<ViewPreset, 'iso'>, [number, number, number]> = {
             top:   [cx, cy - D * 0.0001, cz + D],
-            front: [cx, cy - D, cz + D * 0.05],
-            left:  [cx - D, cy, cz + D * 0.05],
-            right: [cx + D, cy, cz + D * 0.05],
+            front: [cx, cy - D, cz],
+            left:  [cx - D, cy, cz],
+            right: [cx + D, cy, cz],
         };
         cam.position.set(...positions[v]);
     }

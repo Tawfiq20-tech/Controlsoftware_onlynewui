@@ -392,7 +392,7 @@ function BotConfigBlock({ status, setStatus }: { status: WhatsAppStatus | null; 
                             <li key={i} className="wa-list-item" style={{ fontSize: 11 }}>
                                 <span className="wa-list-phone">{c.phone}</span>
                                 <code>{c.cmd}</code>
-                                <span style={{ color: c.ok ? '#4ade80' : '#fca5a5' }}>{c.ok ? 'ok' : (c.error || c.reason || 'fail')}</span>
+                                <span style={{ color: c.ok ? 'var(--settings-ok)' : 'var(--settings-bad)' }}>{c.ok ? 'ok' : (c.error || c.reason || 'fail')}</span>
                                 <span style={{ color: 'var(--text-mute)' }}>{new Date(c.ts).toLocaleTimeString()}</span>
                             </li>
                         ))}
@@ -488,7 +488,7 @@ function TelegramBlock() {
         finally { setBusy(false); }
     }
 
-    const stateColor = state === 'ready' ? '#4ade80' : state === 'disabled' ? 'var(--text-mute)' : '#fbbf24';
+    const stateColor = state === 'ready' ? 'var(--settings-ok)' : state === 'disabled' ? 'var(--text-mute)' : 'var(--settings-warn)';
 
     return (
         <div className="wa-block">
@@ -535,7 +535,7 @@ function TelegramBlock() {
                 </label>
             </div>
             {!!cfg?.openMode && (!cfg?.allowedChatIds || cfg.allowedChatIds.length === 0) && (
-                <div className="wa-cfg-row" style={{ color: '#c0392b', fontSize: 12 }}>
+                <div className="wa-cfg-row" style={{ color: 'var(--settings-bad)', fontSize: 12 }}>
                     ⚠ Risk: with no chat IDs in the allow-list, open mode lets ANY sender who finds this bot
                     fire jog/home/start commands on your machine. Add at least one chat ID and disable open mode
                     before leaving this unattended.
@@ -587,7 +587,7 @@ function TelegramBlock() {
                             <li key={i} className="wa-list-item" style={{ fontSize: 11 }}>
                                 <span className="wa-list-phone">chat {c.chatId ?? '?'}</span>
                                 <code>{c.cmd}</code>
-                                <span style={{ color: c.ok ? '#4ade80' : '#fca5a5' }}>{c.ok ? 'ok' : (c.error || c.reason || 'fail')}</span>
+                                <span style={{ color: c.ok ? 'var(--settings-ok)' : 'var(--settings-bad)' }}>{c.ok ? 'ok' : (c.error || c.reason || 'fail')}</span>
                                 <span style={{ color: 'var(--text-mute)' }}>{new Date(c.ts).toLocaleTimeString()}</span>
                             </li>
                         ))}

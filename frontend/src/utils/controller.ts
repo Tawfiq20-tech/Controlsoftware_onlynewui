@@ -194,7 +194,30 @@ export type ControllerEventName =
     | 'safety:overrideArmed'
     | 'safety:overrideConsumed'
     | 'safety:remoteDiagStatus'
+    | 'remote:cloud:status'
+    | 'remote:permissions'
+    | 'remote:activity'
+    | 'remote:motion:expired'
+    | 'remote:device'
+    | 'remote:cloud:pairing'
+    | 'remote:audit'
+    | 'remote:camera:demand'
+    | 'remote:denied'
+    | 'config:denied'
     | 'hPong';
+
+const REMOTE_EVENTS = [
+    'remote:cloud:status',
+    'remote:permissions',
+    'remote:activity',
+    'remote:motion:expired',
+    'remote:device',
+    'remote:cloud:pairing',
+    'remote:audit',
+    'remote:camera:demand',
+    'remote:denied',
+    'config:denied',
+] as const;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ListenerFn = (...args: any[]) => void;
@@ -256,8 +279,10 @@ class Controller {
             this._flushPendingConnectCallbacks();
         });
 
-        this.socket.on('disconnect', () => {
-            this._emit('disconnect');
+        this.socket.on('disconnect', (reason: string) => {
+            // 'io server disconnect' = the backend ended this socket (e.g. a
+            // revoked LAN session); socket.io-client does not auto-reconnect.
+            this._emit('disconnect', reason);
         });
 
         this.socket.on('connect_error', (err: Error) => {
@@ -681,6 +706,11 @@ class Controller {
         this.socket.on('safety:remoteDiagStatus', (data: unknown) => {
             this._emit('safety:remoteDiagStatus', data);
         });
+
+        // Cloud relay / remote permissions (SPEC §7.5)
+        for (const name of REMOTE_EVENTS) {
+            this.socket.on(name, (d: unknown) => this._emit(name, d));
+        }
 
         // Feeder
         this.socket.on('feeder:status', (status: FeederStatus) => {

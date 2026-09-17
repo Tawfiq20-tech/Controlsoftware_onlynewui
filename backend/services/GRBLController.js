@@ -582,7 +582,10 @@ class GrblController extends EventEmitter {
      * @param {...*} args - Command arguments
      */
     command(cmd, ...args) {
-        const handler = this._commands[cmd];
+        // Only an own, string-named handler: an array/object cmd must never
+        // coerce to a real handler name (['gcode'] -> 'gcode').
+        const commands = this._commands;
+        const handler = typeof cmd === 'string' && Object.hasOwn(commands, cmd) ? commands[cmd] : null;
         if (handler) {
             handler.apply(this, args);
         } else {
@@ -743,12 +746,23 @@ class GrblController extends EventEmitter {
             // ─── Jogging ─────────────────────────────────────────
             'jog': (params) => {
                 const { x, y, z, a, feedRate = 1000, units = 'G21', mode = 'G91' } = params || {};
+                // Values are spliced into G-code text: accept only finite
+                // numbers and known modal words, never free text.
+                const num = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== ''))
+                    && Number.isFinite(Number(v)) ? Number(v) : null;
+                const axisVals = { X: x, Y: y, Z: z, A: a };
+                const feed = num(feedRate);
+                if (units !== 'G20' && units !== 'G21') { this.emit('error', { message: `jog rejected: bad units` }); return; }
+                if (mode !== 'G90' && mode !== 'G91') { this.emit('error', { message: `jog rejected: bad mode` }); return; }
+                if (feed === null || feed <= 0) { this.emit('error', { message: `jog rejected: bad feedRate` }); return; }
                 let cmd = `$J=${mode} ${units}`;
-                if (x !== undefined && x !== 0) cmd += ` X${x}`;
-                if (y !== undefined && y !== 0) cmd += ` Y${y}`;
-                if (z !== undefined && z !== 0) cmd += ` Z${z}`;
-                if (a !== undefined && a !== 0) cmd += ` A${a}`;
-                cmd += ` F${feedRate}`;
+                for (const [letter, v] of Object.entries(axisVals)) {
+                    if (v === undefined || v === null) continue;
+                    const n = num(v);
+                    if (n === null) { this.emit('error', { message: `jog rejected: bad ${letter}` }); return; }
+                    if (n !== 0) cmd += ` ${letter}${n}`;
+                }
+                cmd += ` F${feed}`;
                 this.writeln(cmd);
             },
             'jog:safe': (params) => {
@@ -807,11 +821,25 @@ class GrblController extends EventEmitter {
             },
             'wcs:zero': (params) => {
                 const { axes = ['x', 'y', 'z'], wcs = 'G54' } = params || {};
+                // Parameters are spliced into G-code text: accept only single
+                // axis letters and G54-G59, never free text.
+                // Anything malformed refuses the whole zero rather than
+                // zeroing a subset or a different coordinate system.
+                const list = Array.isArray(axes) ? axes : [];
+                if (list.length === 0 || !list.every(ax => typeof ax === 'string' && /^[xyzXYZ]$/.test(ax))) {
+                    this.emit('error', { message: 'wcs:zero rejected: bad axes' });
+                    return;
+                }
+                const cleanAxes = [...new Set(list.map(ax => ax.toUpperCase()))];
                 const wcsNum = { G54: 1, G55: 2, G56: 3, G57: 4, G58: 5, G59: 6 };
-                const p = wcsNum[wcs] || 1;
+                if (typeof wcs !== 'string' || !Object.hasOwn(wcsNum, wcs)) {
+                    this.emit('error', { message: 'wcs:zero rejected: bad wcs' });
+                    return;
+                }
+                const p = wcsNum[wcs];
                 let cmd = `G10 L20 P${p}`;
-                for (const axis of axes) {
-                    cmd += ` ${axis.toUpperCase()}0`;
+                for (const axis of cleanAxes) {
+                    cmd += ` ${axis}0`;
                 }
                 this.writeln(cmd);
             },

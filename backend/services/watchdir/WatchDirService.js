@@ -26,12 +26,16 @@ const DEFAULT_CFG = {
     pollMs: 5000,
 };
 
+// backend/data holds cloud-link.json, device-identity.json and operator-token.
+const DEFAULT_FORBIDDEN_ROOTS = [path.resolve(__dirname, '..', '..', 'data')];
+
 let chokidar = null;
 try { chokidar = require('chokidar'); } catch (_) { /* fall back to polling */ }
 
 class WatchDirService extends EventEmitter {
-    constructor({ configStore, io, logger }) {
+    constructor({ configStore, io, logger, forbiddenRoots }) {
         super();
+        this.forbiddenRoots = [...DEFAULT_FORBIDDEN_ROOTS, ...(forbiddenRoots || [])].map((p) => path.resolve(p));
         this.configStore = configStore;
         this.io = io;
         this.logger = logger || console;
@@ -44,15 +48,23 @@ class WatchDirService extends EventEmitter {
     init() {
         const stored = this.configStore.get('watchdir');
         this.cfg = { ...DEFAULT_CFG, ...(stored || {}) };
-        if (this.cfg.enabled && this.cfg.path) this._start();
+        if (this.cfg.path && this.isForbiddenPath(this.cfg.path)) {
+            this.logger.warn?.('[watchdir] configured path is inside the backend data folder; watching is disabled');
+        } else if (this.cfg.enabled && this.cfg.path) {
+            this._start();
+        }
         this._broadcastList();
     }
 
     getConfig() { return this.cfg; }
 
     setConfig(cfg) {
+        const next = { ...DEFAULT_CFG, ...(cfg || {}) };
+        if (typeof next.path !== 'string') throw new Error('Invalid watch path');
+        if (!Array.isArray(next.extensions)) throw new Error('Invalid extensions');
+        if (next.path && this.isForbiddenPath(next.path)) throw new Error('Forbidden watch path');
         this._stop();
-        this.cfg = { ...DEFAULT_CFG, ...cfg };
+        this.cfg = next;
         this.configStore.set('watchdir', this.cfg);
         if (this.cfg.enabled && this.cfg.path) this._start();
         this._broadcastList();
@@ -67,10 +79,12 @@ class WatchDirService extends EventEmitter {
 
     readFile(name) {
         if (!this.cfg.path) return null;
-        if (name.includes('..') || name.includes('/') || name.includes('\\')) {
+        if (typeof name !== 'string' || name.includes('..') || name.includes('/') || name.includes('\\')) {
             throw new Error('Invalid filename');
         }
-        const full = path.join(this.cfg.path, name);
+        if (this.isForbiddenPath(this.cfg.path)) throw new Error('Forbidden watch path');
+        if (!this._matches(name)) throw new Error('Invalid file type');
+        const full = path.join(path.resolve(this.cfg.path), name);
         if (!full.startsWith(path.resolve(this.cfg.path))) {
             throw new Error('Path traversal blocked');
         }
@@ -78,7 +92,33 @@ class WatchDirService extends EventEmitter {
     }
 
     _matches(name) {
-        return this.cfg.extensions.some(ext => name.toLowerCase().endsWith(ext));
+        const exts = Array.isArray(this.cfg.extensions) ? this.cfg.extensions : [];
+        return exts.some(ext => typeof ext === 'string' && ext && name.toLowerCase().endsWith(ext.toLowerCase()));
+    }
+
+    /**
+     * True when p is, or resolves into, a forbidden root. Windows paths are
+     * compared case-insensitively, and junctions/symlinks are followed when
+     * they exist, so an alias of backend/data is refused too.
+     */
+    isForbiddenPath(p) {
+        if (typeof p !== 'string' || !p) return false;
+        const candidates = [path.resolve(p)];
+        try { candidates.push(fs.realpathSync.native(p)); } catch (_) { /* may not exist yet */ }
+        const roots = [];
+        for (const root of this.forbiddenRoots) {
+            roots.push(root);
+            try { roots.push(fs.realpathSync.native(root)); } catch (_) { /* ignore */ }
+        }
+        const norm = (x) => {
+            const trimmed = x.length > 1 ? x.replace(/[\\/]+$/, '') : x;
+            return process.platform === 'win32' ? trimmed.toLowerCase() : trimmed;
+        };
+        return candidates.some((c) => roots.some((r) => {
+            const cn = norm(c);
+            const rn = norm(r);
+            return cn === rn || cn.startsWith(rn + path.sep);
+        }));
     }
 
     _start() {

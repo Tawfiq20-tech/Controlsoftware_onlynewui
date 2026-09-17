@@ -1,4 +1,6 @@
-/* FirmwareUpdate.css — Styling for Live OTA Firmware System */
+/* FirmwareUpdate.css — Styling for Live OTA Firmware System
+ * Colours come from theme tokens (styles/themes.css) and the semantic
+ * --settings-* tokens declared on .settings-root in Settings.css. */
 
 .ota-container {
     display: flex;
@@ -7,14 +9,14 @@
 }
 
 .ota-card {
-    background: linear-gradient(180deg, #191c26 0%, #13151c 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-card, #252a32);
+    border: 1px solid var(--border, #30363d);
     border-radius: 12px;
     padding: 20px;
     display: flex;
     flex-direction: column;
     gap: 16px;
-    box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.18);
     position: relative;
     overflow: hidden;
 }
@@ -26,7 +28,7 @@
     left: 0;
     right: 0;
     height: 2px;
-    background: linear-gradient(90deg, #3b82f6, #10b981, #6366f1);
+    background: linear-gradient(90deg, var(--settings-info), var(--status-ok, #10b981), var(--accent-strong, #4b5466));
     opacity: 0.8;
 }
 
@@ -48,19 +50,19 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--border, #30363d);
     padding: 4px 10px;
     border-radius: 20px;
     font-size: 13px;
     font-weight: 500;
-    color: #e2e8f0;
+    color: var(--text-main, #e6edf3);
 }
 
 .ota-ver-pill.latest {
-    background: rgba(16, 185, 129, 0.12);
-    border-color: rgba(16, 185, 129, 0.35);
-    color: #34d399;
+    background: var(--settings-ok-bg);
+    border-color: var(--settings-ok-border);
+    color: var(--settings-ok);
 }
 
 .ota-status-badge {
@@ -76,15 +78,15 @@
 }
 
 .ota-status-badge.has-update {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: var(--settings-info-bg);
+    color: var(--settings-info);
+    border: 1px solid var(--settings-info-border);
 }
 
 .ota-status-badge.up-to-date {
-    background: rgba(16, 185, 129, 0.12);
-    color: #34d399;
-    border: 1px solid rgba(16, 185, 129, 0.25);
+    background: var(--settings-ok-bg);
+    color: var(--settings-ok);
+    border: 1px solid var(--settings-ok-border);
 }
 
 .ota-release-details {
@@ -96,21 +98,21 @@
 .ota-release-title {
     font-size: 16px;
     font-weight: 600;
-    color: #f8fafc;
+    color: var(--text-bright, #ffffff);
     margin: 0;
 }
 
 .ota-release-meta {
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--text-dim, #8b949e);
     display: flex;
     align-items: center;
     gap: 12px;
 }
 
 .ota-changelog-card {
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: var(--bg-panel, #1d2127);
+    border: 1px solid var(--border, #30363d);
     border-radius: 8px;
     padding: 14px;
     display: flex;
@@ -123,7 +125,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #94a3b8;
+    color: var(--text-dim, #8b949e);
     display: flex;
     align-items: center;
     gap: 6px;
@@ -135,13 +137,13 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    color: #cbd5e1;
+    color: var(--text-main, #e6edf3);
     font-size: 13px;
     line-height: 1.45;
 }
 
 .ota-changelog-list li::marker {
-    color: #38bdf8;
+    color: var(--settings-info);
 }
 
 .ota-actions {
@@ -158,20 +160,20 @@
     gap: 8px;
     height: 38px;
     padding: 0 20px;
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: var(--accent, #383f4d);
+    border: 1px solid var(--accent-strong, #4b5466);
     border-radius: 8px;
-    color: #ffffff;
+    color: var(--accent-text, #ffffff);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    box-shadow: 0 2px 10px rgba(37, 99, 235, 0.35);
+    box-shadow: var(--btn-primary-shadow, 0 2px 8px rgba(0, 0, 0, 0.40));
     transition: all 150ms ease;
 }
 
 .ota-btn-primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    box-shadow: 0 4px 14px rgba(37, 99, 235, 0.5);
+    background: var(--accent-strong, #4b5466);
+    box-shadow: var(--btn-primary-shadow, 0 2px 8px rgba(0, 0, 0, 0.40));
     transform: translateY(-1px);
 }
 
@@ -183,8 +185,8 @@
 }
 
 .ota-confirm-modal {
-    background: rgba(234, 179, 8, 0.08);
-    border: 1px solid rgba(234, 179, 8, 0.35);
+    background: var(--settings-warn-bg);
+    border: 1px solid var(--settings-warn-border);
     border-radius: 8px;
     padding: 14px 16px;
     display: flex;
@@ -193,7 +195,7 @@
 }
 
 .ota-confirm-title {
-    color: #fde047;
+    color: var(--settings-warn);
     font-size: 13px;
     font-weight: 600;
     display: flex;
@@ -203,7 +205,7 @@
 
 .ota-confirm-text {
     font-size: 12px;
-    color: #fef08a;
+    color: var(--text-main, #e6edf3);
     line-height: 1.4;
     margin: 0;
 }
@@ -224,28 +226,28 @@
     display: flex;
     justify-content: space-between;
     font-size: 12px;
-    color: #94a3b8;
+    color: var(--text-dim, #8b949e);
     font-weight: 500;
 }
 
 .ota-progress-track {
     width: 100%;
     height: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-hover, rgba(255, 255, 255, 0.08));
     border-radius: 4px;
     overflow: hidden;
 }
 
 .ota-progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #10b981);
+    background: linear-gradient(90deg, var(--settings-info), var(--status-ok, #10b981));
     transition: width 200ms ease;
     border-radius: 4px;
 }
 
 .ota-terminal-box {
-    background: #090b10;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--bg-input, #181b20);
+    border: 1px solid var(--border, #30363d);
     border-radius: 8px;
     padding: 12px;
     max-height: 240px;
@@ -262,14 +264,14 @@
     word-break: break-word;
 }
 
-.ota-log-line.info { color: #94a3b8; }
-.ota-log-line.error { color: #f87171; }
-.ota-log-line.success { color: #4ade80; }
+.ota-log-line.info { color: var(--text-dim, #8b949e); }
+.ota-log-line.error { color: var(--settings-bad); }
+.ota-log-line.success { color: var(--settings-ok); }
 
 .ota-dev-badge {
-    background: rgba(168, 85, 247, 0.15);
-    border: 1px dashed rgba(168, 85, 247, 0.4);
-    color: #c084fc;
+    background: var(--settings-dev-bg);
+    border: 1px dashed var(--settings-dev-border);
+    color: var(--settings-dev);
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 4px;
@@ -280,8 +282,8 @@
 }
 
 .ota-dev-section {
-    background: rgba(168, 85, 247, 0.05);
-    border: 1px dashed rgba(168, 85, 247, 0.3);
+    background: color-mix(in srgb, #a855f7 5%, transparent);
+    border: 1px dashed var(--settings-dev-border);
     border-radius: 10px;
     padding: 16px;
     display: flex;
@@ -293,7 +295,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    color: #c084fc;
+    color: var(--settings-dev);
     font-size: 13px;
     font-weight: 600;
 }

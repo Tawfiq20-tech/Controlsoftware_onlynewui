@@ -18,6 +18,7 @@ import type { AlarmInfo } from '../utils/controller';
 import { getTimestamp } from '../utils/formatters';
 import { jogDistanceStorage, jogSpeedStorage, coordSystemStorage, gcodeFileStorage } from '../utils/localStorage';
 import type { ParsedToolpath } from '../utils/gcodeParser';
+import type { ActiveJog, CloudStatus, DeviceView, TierState } from '../components/Settings/api';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type CoordSystem = 'Z' | 'XYZ' | 'XY' | 'X' | 'Y';
@@ -220,6 +221,19 @@ interface CNCStore {
     setSafetyZRunaway: (z: ZRunawayEvent | null) => void;
     setSafetyOverrideArmed: (armed: boolean) => void;
     setRemoteDiagStatus: (s: RemoteDiagStatus | null) => void;
+
+    // Cloud relay / remote permissions (docs/cloud-relay/SPEC.md §8.1)
+    cloudStatus: CloudStatus | null;
+    remotePermissions: TierState | null;
+    // performance.now() when remotePermissions arrived; motionRemainingMs is
+    // relative to that instant (useServerCountdown).
+    remotePermissionsReceivedAt: number | null;
+    remoteActivity: ActiveJog | null;
+    remoteDevice: DeviceView | null;
+    setCloudStatus: (s: CloudStatus | null) => void;
+    setRemotePermissions: (p: TierState | null) => void;
+    setRemoteActivity: (a: ActiveJog | null) => void;
+    setRemoteDevice: (d: DeviceView | null) => void;
 
     // Machine profiles (Device tab)
     machineProfiles: MachineProfile[];
@@ -592,6 +606,19 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     setSafetyZRunaway: (safetyZRunaway) => set({ safetyZRunaway }),
     setSafetyOverrideArmed: (safetyOverrideArmed) => set({ safetyOverrideArmed }),
     setRemoteDiagStatus: (remoteDiagStatus) => set({ remoteDiagStatus }),
+
+    cloudStatus: null,
+    remotePermissions: null,
+    remotePermissionsReceivedAt: null,
+    remoteActivity: null,
+    remoteDevice: null,
+    setCloudStatus: (cloudStatus) => set({ cloudStatus }),
+    setRemotePermissions: (remotePermissions) => set({
+        remotePermissions,
+        remotePermissionsReceivedAt: remotePermissions ? performance.now() : null,
+    }),
+    setRemoteActivity: (remoteActivity) => set({ remoteActivity }),
+    setRemoteDevice: (remoteDevice) => set({ remoteDevice }),
 
     // Machine profiles (Device tab)
     machineProfiles: [],

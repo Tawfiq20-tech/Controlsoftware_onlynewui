@@ -706,87 +706,50 @@ export default function Sidebar({ activeHeaderTab: _activeHeaderTab = 'Prepare',
                         <span className="section-label">Manual Jog Control</span>
 
                         <div className="jog-grid">
-                            {/* Circular Jog Control - 8 pie slices with 3° gaps */}
-                            <div className="jog-radial-container">
-                                <svg viewBox="0 0 240 240" className="jog-clean-svg">
-                                    {/*
-                                        Math: center=(120,120), radius=98
-                                        x = 120 + 98*sin(θ°), y = 120 - 98*cos(θ°)
-                                        8 segments × 42° + 8 gaps × 3° = 360°
-                                        N:339°-21° NE:24°-66° E:69°-111° SE:114°-156°
-                                        S:159°-201° SW:204°-246° W:249°-291° NW:294°-336°
-                                    */}
+                            {/* Square XY jog pad — 3×3: diagonals in the corners
+                                (corner-pointing triangles), cardinals on the edges,
+                                STOP in the centre. */}
+                            <div className="jog-square-pad">
+                                <button type="button" className="jog-sq-btn jog-sq-corner" aria-label="Jog X- Y+" onClick={() => handleDiagonalJog(-1, 1)}>
+                                    <svg viewBox="0 0 16 16" className="jog-sq-diag"><polygon points="2,2 14,2 2,14" /></svg>
+                                </button>
+                                <button type="button" className="jog-sq-btn jog-sq-axis" onClick={() => handleJog('y', 1)}>Y+</button>
+                                <button type="button" className="jog-sq-btn jog-sq-corner" aria-label="Jog X+ Y+" onClick={() => handleDiagonalJog(1, 1)}>
+                                    <svg viewBox="0 0 16 16" className="jog-sq-diag"><polygon points="2,2 14,2 14,14" /></svg>
+                                </button>
 
-                                    {/* N - Up (Y+) : 339° to 21° */}
-                                    <path d="M120 120 L84.88 28.51 A98 98 0 0 1 155.12 28.51Z" className="jog-ref-segment" onClick={() => handleJog('y', 1)}/>
+                                <button type="button" className="jog-sq-btn jog-sq-axis" onClick={() => handleJog('x', -1)}>X-</button>
+                                <button
+                                    type="button"
+                                    className="jog-sq-btn jog-sq-stop"
+                                    onClick={() => {
+                                        if (!connected) return;
+                                        backendJogCancel();
+                                        backendJobStop();
+                                        addConsoleLog('warning', 'Motion stopped');
+                                    }}
+                                >
+                                    STOP
+                                </button>
+                                <button type="button" className="jog-sq-btn jog-sq-axis" onClick={() => handleJog('x', 1)}>X+</button>
 
-                                    {/* NE - Diagonal : 24° to 66° */}
-                                    <path d="M120 120 L159.86 30.47 A98 98 0 0 1 209.52 80.14Z" className="jog-ref-segment" onClick={() => handleDiagonalJog(1, 1)}/>
-
-                                    {/* E - Right (X+) : 69° to 111° */}
-                                    <path d="M120 120 L211.49 84.88 A98 98 0 0 1 211.49 155.12Z" className="jog-ref-segment" onClick={() => handleJog('x', 1)}/>
-
-                                    {/* SE - Diagonal : 114° to 156° */}
-                                    <path d="M120 120 L209.52 159.86 A98 98 0 0 1 159.86 209.52Z" className="jog-ref-segment" onClick={() => handleDiagonalJog(1, -1)}/>
-
-                                    {/* S - Down (Y-) : 159° to 201° */}
-                                    <path d="M120 120 L155.12 211.49 A98 98 0 0 1 84.88 211.49Z" className="jog-ref-segment" onClick={() => handleJog('y', -1)}/>
-
-                                    {/* SW - Diagonal : 204° to 246° */}
-                                    <path d="M120 120 L80.14 209.52 A98 98 0 0 1 30.48 159.86Z" className="jog-ref-segment" onClick={() => handleDiagonalJog(-1, -1)}/>
-
-                                    {/* W - Left (X-) : 249° to 291° */}
-                                    <path d="M120 120 L28.51 155.12 A98 98 0 0 1 28.51 84.88Z" className="jog-ref-segment" onClick={() => handleJog('x', -1)}/>
-
-                                    {/* NW - Diagonal : 294° to 336° */}
-                                    <path d="M120 120 L30.48 80.14 A98 98 0 0 1 80.14 30.48Z" className="jog-ref-segment" onClick={() => handleDiagonalJog(-1, 1)}/>
-
-                                    {/* Cardinal block arrows + labels */}
-                                    {/* N - Up arrow */}
-                                    <g transform="translate(120 56)" pointerEvents="none"><polygon points="0,-14 12,0 5,0 5,12 -5,12 -5,0 -12,0" className="jog-ref-icon"/></g>
-                                    <text x="120" y="82" textAnchor="middle" className="jog-ref-label" pointerEvents="none">Y+</text>
-
-                                    {/* E - Right arrow */}
-                                    <g transform="translate(186 120) rotate(90)" pointerEvents="none"><polygon points="0,-14 12,0 5,0 5,12 -5,12 -5,0 -12,0" className="jog-ref-icon"/></g>
-                                    <text x="166" y="124" textAnchor="middle" className="jog-ref-label" pointerEvents="none">X+</text>
-
-                                    {/* S - Down arrow */}
-                                    <g transform="translate(120 184) rotate(180)" pointerEvents="none"><polygon points="0,-14 12,0 5,0 5,12 -5,12 -5,0 -12,0" className="jog-ref-icon"/></g>
-                                    <text x="120" y="168" textAnchor="middle" className="jog-ref-label" pointerEvents="none">Y-</text>
-
-                                    {/* W - Left arrow */}
-                                    <g transform="translate(54 120) rotate(270)" pointerEvents="none"><polygon points="0,-14 12,0 5,0 5,12 -5,12 -5,0 -12,0" className="jog-ref-icon"/></g>
-                                    <text x="74" y="124" textAnchor="middle" className="jog-ref-label" pointerEvents="none">X-</text>
-
-                                    {/* Diagonal arrows (triangles) */}
-                                    <g transform="translate(163 77) rotate(45)" pointerEvents="none"><polygon points="0,-9 7,4 -7,4" className="jog-ref-icon"/></g>
-                                    <g transform="translate(163 163) rotate(135)" pointerEvents="none"><polygon points="0,-9 7,4 -7,4" className="jog-ref-icon"/></g>
-                                    <g transform="translate(77 163) rotate(225)" pointerEvents="none"><polygon points="0,-9 7,4 -7,4" className="jog-ref-icon"/></g>
-                                    <g transform="translate(77 77) rotate(315)" pointerEvents="none"><polygon points="0,-9 7,4 -7,4" className="jog-ref-icon"/></g>
-
-                                    {/* Center STOP button - OCTAGONAL like reference */}
-                                    <polygon
-                                        points="133,88 152,107 152,133 133,152 107,152 88,133 88,107 107,88"
-                                        className="jog-ref-stop"
-                                        onClick={() => {
-                                            if (!connected) return;
-                                            backendJogCancel();
-                                            backendJobStop();
-                                            addConsoleLog('warning', 'Motion stopped');
-                                        }}
-                                        style={{ cursor: 'pointer' }}
-                                    />
-                                    <text x="120" y="127" textAnchor="middle" className="jog-ref-stop-text" pointerEvents="none">STOP</text>
-                                </svg>
+                                <button type="button" className="jog-sq-btn jog-sq-corner" aria-label="Jog X- Y-" onClick={() => handleDiagonalJog(-1, -1)}>
+                                    <svg viewBox="0 0 16 16" className="jog-sq-diag"><polygon points="2,2 2,14 14,14" /></svg>
+                                </button>
+                                <button type="button" className="jog-sq-btn jog-sq-axis" onClick={() => handleJog('y', -1)}>Y-</button>
+                                <button type="button" className="jog-sq-btn jog-sq-corner" aria-label="Jog X+ Y-" onClick={() => handleDiagonalJog(1, -1)}>
+                                    <svg viewBox="0 0 16 16" className="jog-sq-diag"><polygon points="14,2 14,14 2,14" /></svg>
+                                </button>
                             </div>
 
-                            {/* Z Controls */}
+                            {/* Z Controls — label sits between the keys so Z+/Z−
+                                line up with the pad's top and bottom rows */}
                             <div className="jog-z-column">
-                                <span className="jog-z-label">Z Axis</span>
                                 <button className="jog-z-btn" onClick={() => handleJog('z', 1)}>
                                     <ChevronUp size={20} />
                                     <span>Z+</span>
                                 </button>
+                                <span className="jog-z-label">Z Axis</span>
                                 <button className="jog-z-btn" onClick={() => handleJog('z', -1)}>
                                     <ChevronDown size={20} />
                                     <span>Z−</span>

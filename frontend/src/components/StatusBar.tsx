@@ -1,6 +1,7 @@
 import { Ruler } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { backendUnlock, sendBackendCommand } from '../utils/backendConnection';
+import RemoteActivityBadge from './RemoteActivityBadge';
 import './StatusBar.css';
 
 const STATE_LABELS: Record<string, string> = {
@@ -21,7 +22,11 @@ export default function StatusBar() {
         firmwareType,
         firmwareVersion,
         remoteDiagStatus,
+        remotePermissions,
+        remoteActivity,
     } = useCNCStore();
+    // A Revoke button needs a 44px touch target, so the bar grows while one shows.
+    const remoteAttention = !!remoteActivity || (remotePermissions?.motionRemainingMs ?? 0) > 0;
 
     const stateLabel = !connected
         ? 'OFFLINE'
@@ -39,7 +44,7 @@ export default function StatusBar() {
     };
 
     return (
-        <footer className="status-bar" role="status" aria-label="Machine status">
+        <footer className={`status-bar${remoteAttention ? ' sb-remote-attention' : ''}`} role="status" aria-label="Machine status">
             {/* Connection indicator */}
             <div className="sb-item sb-connection" title={`Connection: ${connectionStatus}`}>
                 <span className={`sb-dot ${connected ? 'connected' : 'disconnected'}`} />
@@ -106,6 +111,9 @@ export default function StatusBar() {
                     </div>
                 </>
             )}
+
+            {/* Cloud link / remote Motion / remote jog — visible on every tab, mid-job too */}
+            <RemoteActivityBadge />
 
             {/* Firmware */}
             {connected && firmwareType !== 'unknown' && (

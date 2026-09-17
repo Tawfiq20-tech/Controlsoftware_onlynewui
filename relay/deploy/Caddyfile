@@ -1,0 +1,29 @@
+# Onefinity relay - Caddy site (Caddy >= 2.7 for stream_close_delay).
+# Replace relay.example.com with your DNS name, copy to /etc/caddy/Caddyfile,
+# then: sudo systemctl reload caddy
+# See relay/README.md for why each proxy option is set.
+
+relay.example.com {
+    encode gzip
+    header -Server
+    request_body {
+        max_size 110MB
+    }
+    reverse_proxy 127.0.0.1:8787 {
+        flush_interval -1
+        # Replaces any client-supplied value, so the relay (RELAY_TRUST_PROXY=1)
+        # can trust the last X-Forwarded-For entry.
+        header_up X-Forwarded-For {remote_host}
+        # Keep WebSockets open for up to 5 min across `caddy reload`.
+        stream_close_delay 5m
+        transport http {
+            # Must stay below Node's keepAliveTimeout (65 s) so Caddy never reuses
+            # an upstream connection Node has just closed (sporadic 502 on PUT/POST).
+            keepalive 30s
+        }
+    }
+    log {
+        output file /var/log/caddy/relay-access.log
+        format json
+    }
+}

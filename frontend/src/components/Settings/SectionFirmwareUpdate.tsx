@@ -232,7 +232,7 @@ export default function SectionFirmwareUpdate() {
                     >
                         Firmware & Updates
                         {devClicks > 0 && devClicks < 5 && (
-                            <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 8 }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-dim)', marginLeft: 8 }}>
                                 ({5 - devClicks} clicks to Developer Mode)
                             </span>
                         )}
@@ -293,7 +293,7 @@ export default function SectionFirmwareUpdate() {
                             <span className="ota-ver-pill">
                                 Current: <b>{currentVer}</b>
                             </span>
-                            <ChevronRight size={14} style={{ color: '#64748b' }} />
+                            <ChevronRight size={14} style={{ color: 'var(--text-mute)' }} />
                             <span className="ota-ver-pill latest">
                                 Latest: <b>{latestVer}</b>
                             </span>
@@ -309,10 +309,10 @@ export default function SectionFirmwareUpdate() {
                                 )}
                             </span>
                         </div>
-                        <div style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <ShieldCheck size={13} style={{ color: '#34d399' }} /> SHA-256 Verified Release
+                        <div style={{ fontSize: 11, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <ShieldCheck size={13} style={{ color: 'var(--settings-ok)' }} /> SHA-256 Verified Release
                             {firmwareInfo?.isOnline && (
-                                <span style={{ color: '#38bdf8', marginLeft: 6, fontWeight: 500 }}>
+                                <span style={{ color: 'var(--settings-info)', marginLeft: 6, fontWeight: 500 }}>
                                     • Cloud OTA
                                 </span>
                             )}
@@ -393,7 +393,7 @@ export default function SectionFirmwareUpdate() {
                             Close Dev Mode
                         </button>
                     </div>
-                    <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0 }}>
                         Override official OTA distribution and flash an unreleased development .hex binary
                         directly from disk.
                     </p>
@@ -424,11 +424,11 @@ export default function SectionFirmwareUpdate() {
                     )}
 
                     {devFile && devConfirming && (
-                        <div className="ota-confirm-modal" style={{ borderColor: 'rgba(168, 85, 247, 0.4)' }}>
-                            <div className="ota-confirm-title" style={{ color: '#c084fc' }}>
+                        <div className="ota-confirm-modal" style={{ borderColor: 'var(--settings-dev-border)' }}>
+                            <div className="ota-confirm-title" style={{ color: 'var(--settings-dev)' }}>
                                 <AlertTriangle size={15} /> Flash Unverified Custom Binary?
                             </div>
-                            <p className="ota-confirm-text" style={{ color: '#e9d5ff' }}>
+                            <p className="ota-confirm-text" style={{ color: 'var(--text-main)' }}>
                                 Custom development binaries bypass the official SHA-256 release manifest.
                                 Ensure the binary was compiled for STM32H723 at address 0x08000000.
                             </p>
@@ -438,7 +438,7 @@ export default function SectionFirmwareUpdate() {
                                 </button>
                                 <button
                                     className="settings-btn primary"
-                                    style={{ background: 'rgba(168, 85, 247, 0.25)', borderColor: '#a855f7' }}
+                                    style={{ background: 'var(--settings-dev-bg)', borderColor: 'var(--settings-dev-border)', color: 'var(--settings-dev)' }}
                                     onClick={startDevFlash}
                                 >
                                     Flash Custom Binary
@@ -453,7 +453,7 @@ export default function SectionFirmwareUpdate() {
             {(flashing || log.length > 0) && (
                 <div className="settings-form ota-progress-section">
                     <div className="ota-progress-header">
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: '#f8fafc' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--text-bright)' }}>
                             <Terminal size={14} />
                             {flashing ? 'Flashing Firmware...' : done === 'success' ? 'Update Complete' : 'Process Log'}
                         </span>
@@ -479,7 +479,7 @@ export default function SectionFirmwareUpdate() {
                     </div>
 
                     {done === 'success' && (
-                        <div className="settings-result" style={{ color: '#4ade80', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div className="settings-result" style={{ color: 'var(--settings-ok)', display: 'flex', alignItems: 'center', gap: 8 }}>
                             <CheckCircle2 size={16} />
                             <span>
                                 Firmware updated successfully! Device is rebooting into the new version and

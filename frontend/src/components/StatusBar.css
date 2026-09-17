@@ -3,15 +3,15 @@
 .status-bar {
     display: flex;
     align-items: center;
-    height: 26px;
-    padding: 0 12px;
+    height: 34px;
+    padding: 0 14px;
     background: var(--bg-sidebar, #121721);
     border-top: 1px solid var(--border-ui, #242c3d);
     flex-shrink: 0;
     overflow: hidden;
     gap: 0;
     font-family: var(--font-mono, 'JetBrains Mono', monospace);
-    font-size: 10.5px;
+    font-size: 13.5px;
     user-select: none;
     -webkit-user-select: none;
 }
@@ -46,7 +46,7 @@
 
 .sb-divider {
     width: 1px;
-    height: 14px;
+    height: 18px;
     background: var(--border-ui, #242c3d);
     flex-shrink: 0;
 }
@@ -56,7 +56,7 @@
 }
 
 .sb-key {
-    font-size: 9.5px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.07em;
@@ -70,8 +70,8 @@
 
 /* Dot */
 .sb-dot {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     flex-shrink: 0;
 }
@@ -88,7 +88,7 @@
 /* State color coding */
 .sb-state .sb-label {
     font-weight: 700;
-    font-size: 10px;
+    font-size: 13.5px;
     letter-spacing: 0.06em;
 }
 
@@ -114,7 +114,7 @@
 .sb-alarm-badge {
     color: var(--danger, #ef4444);
     font-weight: 800;
-    font-size: 10px;
+    font-size: 13px;
     letter-spacing: 0.06em;
     animation: alarmBlink 1s ease-in-out infinite;
     gap: 8px;
@@ -125,8 +125,8 @@
     color: #fff;
     border: none;
     border-radius: 3px;
-    padding: 1px 8px;
-    font-size: 9px;
+    padding: 3px 10px;
+    font-size: 11.5px;
     font-weight: 700;
     cursor: pointer;
     text-transform: uppercase;
@@ -143,14 +143,14 @@
 .sb-remote-diag {
     color: #f59e0b;
     font-weight: 700;
-    font-size: 10px;
+    font-size: 13px;
     letter-spacing: 0.08em;
     gap: 6px;
 }
 
 .sb-rd-dot {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     background: #f59e0b;
     box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
@@ -178,6 +178,13 @@
     50%       { opacity: 0.5; }
 }
 
+/* Remote Motion / remote jog: room for the 44px Revoke button (RemoteActivityBadge) */
+.status-bar.sb-remote-attention,
+.app.is-vertical .status-bar.sb-remote-attention {
+    height: 56px;
+    overflow: visible;
+}
+
 /* Firmware - right aligned */
 .sb-firmware {
     margin-left: auto;
@@ -187,11 +194,11 @@
 @media (max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px) {
     .status-bar {
         padding: 0 6px;
-        font-size: 9.5px;
+        font-size: 13px;
     }
     .sb-item {
-        padding: 0 5px;
-        gap: 3px;
+        padding: 0 7px;
+        gap: 5px;
     }
     .sb-firmware {
         display: none;

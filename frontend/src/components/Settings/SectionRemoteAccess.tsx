@@ -1,54 +1,95 @@
 /**
- * SectionRemoteAccess — Unified Single Remote Connection (Local LAN & Global Internet Tunnel)
- * with Industrial Multi-Layer Security.
+ * SectionRemoteAccess — control the machine from a phone or tablet.
  *
- * Provides ONE single QR code and connection link for the user that works
- * whether on the local workshop Wi-Fi or across the global internet.
+ *  - Anywhere: Tailscale (private, end-to-end encrypted; no public exposure,
+ *    no port forwarding). The backend only reads Tailscale's status and flags
+ *    what would silently break access later (key expiry, unattended mode,
+ *    firewall) — see backend/services/remoteAccess/TailscaleService.js.
+ *  - Same Wi-Fi: direct LAN address.
+ *  - Security: optional PIN and signed-in devices. Only the machine's own
+ *    screen (operator) may change these; remote viewers see them read-only.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-    Wifi, RefreshCw, Lock, Unlock, Globe, Power, Copy, Check, Users, ShieldAlert, Smartphone
+    AlertTriangle, Check, Copy, ExternalLink, Globe, Info, Lock, RefreshCw,
+    ShieldAlert, ShieldCheck, Smartphone, Unlock, Wifi, XCircle,
 } from 'lucide-react';
-import { remote, RemoteInfo, TunnelStatus } from './api';
+import { remote, RemoteInfo, RemoteSession, TailscaleStatus, TailscaleWarning } from './api';
+
+const POLL_MS = 10000;
+
+const TS_PILL: Record<TailscaleStatus['state'], { cls: string; label: string }> = {
+    running: { cls: 'ok', label: 'Connected' },
+    'needs-login': { cls: 'fail', label: 'Signed out' },
+    stopped: { cls: 'fail', label: 'Disconnected' },
+    'service-stopped': { cls: 'fail', label: 'Service stopped' },
+    starting: { cls: 'warn', label: 'Starting' },
+    'not-installed': { cls: 'warn', label: 'Not set up' },
+    error: { cls: 'fail', label: 'Error' },
+};
+
+function timeAgo(ms: number): string {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return `${Math.floor(s / 86400)} d ago`;
+}
 
 export default function SectionRemoteAccess() {
     const [info, setInfo] = useState<RemoteInfo | null>(null);
-    const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
-    const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-    const [activeUrl, setActiveUrl] = useState<string>('');
+    const [ts, setTs] = useState<TailscaleStatus | null>(null);
+    const [sessions, setSessions] = useState<RemoteSession[]>([]);
+    const [qr, setQr] = useState<Record<string, string>>({});
     const [pinDraft, setPinDraft] = useState('');
     const [busy, setBusy] = useState(false);
-    const [tunnelBusy, setTunnelBusy] = useState(false);
-    const [copiedUrl, setCopiedUrl] = useState(false);
-    const [copiedPw, setCopiedPw] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
+    const [copied, setCopied] = useState<string | null>(null);
+    const qrRequested = useRef(new Set<string>());
+
+    const operator = !!info?.operator;
+    const minPin = info?.minPinLength ?? 6;
+
+    async function load(refreshTailscale = false) {
+        const [i, t] = await Promise.all([remote.info(), remote.tailscale(refreshTailscale)]);
+        setInfo(i);
+        setTs(t);
+        if (i.operator) {
+            const s = await remote.sessions().catch(() => null);
+            if (s) setSessions(s.sessions);
+        }
+    }
 
     useEffect(() => {
-        refresh();
-        const timer = setInterval(() => {
-            refreshTunnelStatus();
-        }, 6000);
+        load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+        // Background polls stay quiet; a failed manual refresh reports.
+        const timer = setInterval(() => { load().catch(() => {}); }, POLL_MS);
         return () => clearInterval(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Update QR code whenever unified URL or tunnel changes
+    const tsUrl = ts?.state === 'running' ? ts.url : null;
+    const lanUrl = info?.lanUrl ?? null;
+
     useEffect(() => {
-        updateQrCode();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tunnel?.url, info?.unifiedUrl, info?.lanUrl]);
+        for (const url of [tsUrl, lanUrl]) {
+            if (!url || qrRequested.current.has(url)) continue;
+            qrRequested.current.add(url);
+            remote.qr(url)
+                .then((r) => setQr((prev) => ({ ...prev, [url]: r.dataUrl })))
+                .catch(() => qrRequested.current.delete(url));
+        }
+    }, [tsUrl, lanUrl]);
 
-    async function refresh() {
+    async function run(action: () => Promise<unknown>, success?: string) {
         setBusy(true);
         setError(null);
+        setNotice(null);
         try {
-            const [i, t] = await Promise.all([
-                remote.info(),
-                remote.tunnelStatus().catch(() => null),
-            ]);
-            setInfo(i);
-            if (t) setTunnel(t);
-            else if (i.tunnel) setTunnel(i.tunnel);
+            await action();
+            if (success) setNotice(success);
+            await load(true);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -56,310 +97,289 @@ export default function SectionRemoteAccess() {
         }
     }
 
-    async function refreshTunnelStatus() {
-        try {
-            const t = await remote.tunnelStatus();
-            setTunnel(t);
-        } catch (_) {}
+    function copy(text: string) {
+        navigator.clipboard?.writeText(text).catch(() => {});
+        setCopied(text);
+        setTimeout(() => setCopied((c) => (c === text ? null : c)), 2000);
     }
 
-    async function updateQrCode(overrideUrl?: string) {
-        try {
-            const urlToUse = overrideUrl !== undefined 
-                ? overrideUrl 
-                : (tunnel?.status === 'running' && tunnel?.url ? tunnel.url : info?.unifiedUrl);
-            const res = await remote.qr(urlToUse, !!urlToUse);
-            setQrDataUrl(res.dataUrl);
-            setActiveUrl(res.url);
-        } catch (_) {
-            setQrDataUrl(null);
-        }
-    }
-
-    async function startGlobalTunnel() {
-        if (!info?.pinSet) {
-            setError('Please set a security PIN first before enabling Global Internet Access.');
+    function savePin() {
+        const pin = pinDraft.trim();
+        if (pin.length < minPin) {
+            setError(`PIN must be at least ${minPin} characters`);
             return;
         }
-        setTunnelBusy(true);
-        setError(null);
-        setNotice(null);
-        try {
-            const res = await remote.startTunnel();
-            setNotice(`Global access online: ${res.url}`);
-            await refresh();
-            await updateQrCode(res.url);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setTunnelBusy(false);
-        }
-    }
-
-    async function stopGlobalTunnel() {
-        setTunnelBusy(true);
-        setError(null);
-        setNotice(null);
-        try {
-            await remote.stopTunnel();
-            setNotice('Switched to local workshop Wi-Fi only.');
-            await refresh();
-            await updateQrCode(info?.lanUrl);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setTunnelBusy(false);
-        }
-    }
-
-    async function revokeAllSessions() {
-        if (!confirm('Are you sure you want to disconnect all remote devices right now?')) return;
-        setBusy(true);
-        setError(null);
-        setNotice(null);
-        try {
-            await remote.revokeSessions();
-            setNotice('All remote device sessions have been revoked.');
-            await refreshTunnelStatus();
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setBusy(false);
-        }
-    }
-
-    async function setPin() {
-        const v = pinDraft.trim();
-        if (v.length < 4) {
-            setError('PIN must be at least 4 characters');
-            return;
-        }
-        setBusy(true);
-        setError(null);
-        setNotice(null);
-        try {
-            await remote.setPin(v);
+        run(async () => {
+            await remote.setPin(pin);
             setPinDraft('');
-            setNotice('Security PIN set successfully. Remote devices will be required to enter it.');
-            await refresh();
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setBusy(false);
-        }
+        }, info?.pinSet
+            ? 'PIN changed. Every remote device has been signed out and must enter the new PIN.'
+            : 'PIN set. Remote devices must now enter it before they can see or move the machine.');
     }
 
-    async function clearPin() {
-        setBusy(true);
-        setError(null);
-        setNotice(null);
-        try {
-            await remote.clearPin();
-            setNotice('PIN cleared. Remote devices on local network can connect without one.');
-            await refresh();
-        } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
-        } finally {
-            setBusy(false);
-        }
+    function removePin() {
+        if (!confirm('Remove the PIN? Anyone who can reach this PC over Wi-Fi or Tailscale will be able to control the machine.')) return;
+        run(() => remote.clearPin(), 'PIN removed. Remote devices can connect without one.');
     }
 
-    function copyToClipboard(text: string, isPassword = false) {
-        if (!text) return;
-        navigator.clipboard.writeText(text);
-        if (isPassword) {
-            setCopiedPw(true);
-            setTimeout(() => setCopiedPw(false), 2000);
-        } else {
-            setCopiedUrl(true);
-            setTimeout(() => setCopiedUrl(false), 2000);
-        }
+    function disconnectAll() {
+        if (!confirm('Sign out every remote device now?')) return;
+        run(() => remote.revokeSessions(), 'All remote devices were signed out.');
     }
 
-    const isTunnelRunning = tunnel?.status === 'running' && !!tunnel?.url;
-    const targetUrl = (isTunnelRunning ? tunnel?.url : activeUrl) || info?.unifiedUrl || '';
+    function renderWarning(w: TailscaleWarning) {
+        const Icon = w.level === 'error' ? XCircle : w.level === 'warn' ? AlertTriangle : Info;
+        return (
+            <div key={`${w.code}:${w.message}`} className={`ra-alert ${w.level}`}>
+                <Icon size={15} />
+                <div className="ra-alert-body">
+                    <span>{w.message}</span>
+                    {w.action?.url && (
+                        <a className="settings-btn" href={w.action.url} target="_blank" rel="noreferrer">
+                            <ExternalLink size={13} /> {w.action.label}
+                        </a>
+                    )}
+                    {w.action?.fix === 'firewall' && operator && (
+                        <button
+                            className="settings-btn"
+                            disabled={busy}
+                            onClick={() => run(() => remote.fixFirewall(), 'Firewall setup opened. Approve the administrator prompt on this PC.')}
+                        >
+                            <ShieldCheck size={13} /> {w.action.label}
+                        </button>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
+    function renderQr(url: string, note: string) {
+        return (
+            <div className="wa-qr-block ra-qr">
+                <div className="ra-qr-text">
+                    <div className="ra-url">{url}</div>
+                    <div className="wa-qr-note">{note}</div>
+                    <div className="ra-actions">
+                        <button className="settings-btn" onClick={() => copy(url)}>
+                            {copied === url ? <Check size={14} /> : <Copy size={14} />}
+                            {copied === url ? 'Copied' : 'Copy link'}
+                        </button>
+                    </div>
+                </div>
+                {qr[url] && <img src={qr[url]} alt={`QR code for ${url}`} className="wa-qr-img" />}
+            </div>
+        );
+    }
+
+    const pill = ts ? TS_PILL[ts.state] : null;
+    const onlinePeers = (ts?.peers ?? []).slice().sort((a, b) => Number(b.online) - Number(a.online));
 
     return (
         <div className="settings-section">
             <header className="settings-section-header">
                 <div>
                     <div className="settings-section-title">
-                        <Smartphone size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} /> Single Remote Connection
+                        <Smartphone size={18} /> Remote access
                     </div>
                     <div className="settings-section-sub">
-                        Connect and control your CNC from any phone, tablet, or laptop using a single QR code for both local Wi-Fi and worldwide internet access.
+                        Control this machine from a phone or tablet: on the same Wi-Fi, or from anywhere through Tailscale.
                     </div>
                 </div>
                 <div className="settings-section-actions">
-                    <button className="settings-btn" onClick={refresh} disabled={busy || tunnelBusy}>
+                    <button className="settings-btn" onClick={() => run(() => Promise.resolve())} disabled={busy}>
                         <RefreshCw size={14} /> Refresh
                     </button>
                 </div>
             </header>
 
             {error && <div className="settings-error">{error}</div>}
-            {notice && <div className="wa-block-sub" style={{ color: '#4ade80', fontWeight: 500 }}>{notice}</div>}
-
-            {/* ─── SINGLE UNIFIED CONNECTION CARD ─── */}
-            <div className="wa-block">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-                    <div>
-                        <div className="wa-block-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            {isTunnelRunning ? <Globe size={16} color="#38bdf8" /> : <Wifi size={16} color="#4ade80" />}
-                            <span>Single Connection Point ({isTunnelRunning ? 'Worldwide Global + Local' : 'Local Wi-Fi'})</span>
-                        </div>
-                        <div className="wa-block-sub">
-                            {isTunnelRunning
-                                ? 'Encrypted HTTPS tunnel active: Connect from anywhere in the world on 5G/cellular or inside your local shop.'
-                                : 'Direct local Wi-Fi connection active: Connect from any phone or tablet on the same workshop Wi-Fi network.'}
-                        </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span className={`settings-pill ${isTunnelRunning ? 'ok' : 'warn'}`}>
-                            {isTunnelRunning ? 'Global & Local Live' : 'Local Wi-Fi Active'}
-                        </span>
+            {info?.deviceIdentityUnavailable && (
+                <div className="ra-alert warn" role="alert">
+                    <AlertTriangle size={15} />
+                    <div className="ra-alert-body">
+                        The machine identity file cannot be read. Remote and cloud features stay LAN-only until it
+                        can; the backend keeps retrying. Local control of the machine is not affected.
                     </div>
                 </div>
+            )}
+            {notice &&<div className="ra-alert info"><Check size={15} /><div className="ra-alert-body">{notice}</div></div>}
 
-                {/* Single QR Code & Direct Link */}
-                <div style={{ marginTop: 16 }}>
-                    <div className="wa-qr-block">
-                        <div style={{ flex: 1 }}>
-                            <div className="wa-qr-title" style={{ wordBreak: 'break-all' }}>
-                                {isTunnelRunning ? <Globe size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} /> : <Wifi size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />}
-                                {targetUrl || 'Detecting connection URL...'}
-                            </div>
-                            <div className="wa-qr-note">
-                                <strong>Scan with any phone camera</strong> to open the control interface instantly.
-                            </div>
-
-                            <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                <button className="settings-btn" onClick={() => copyToClipboard(targetUrl)} disabled={!targetUrl}>
-                                    {copiedUrl ? <Check size={14} color="#4ade80" /> : <Copy size={14} />}
-                                    {copiedUrl ? 'Copied URL!' : 'Copy Connection Link'}
-                                </button>
-                                {isTunnelRunning && (
-                                    <button
-                                        className="settings-btn danger"
-                                        onClick={revokeAllSessions}
-                                        disabled={busy}
-                                        title="Immediately disconnects all external phones and browsers"
-                                    >
-                                        <Users size={14} /> Revoke Sessions ({tunnel?.activeSessions || 0})
-                                    </button>
-                                )}
-                            </div>
-
-                            {/* Global Tunnel Controls */}
-                            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                    {!isTunnelRunning ? (
-                                        <button
-                                            className="settings-btn primary"
-                                            onClick={startGlobalTunnel}
-                                            disabled={tunnelBusy || busy}
-                                            style={{ height: 34, padding: '0 16px' }}
-                                        >
-                                            <Power size={14} /> Enable Worldwide Internet Access
-                                        </button>
-                                    ) : (
-                                        <button
-                                            className="settings-btn"
-                                            onClick={stopGlobalTunnel}
-                                            disabled={tunnelBusy || busy}
-                                            style={{ height: 34 }}
-                                        >
-                                            <Power size={14} /> Switch to Local Wi-Fi Only
-                                        </button>
-                                    )}
-                                    {!isTunnelRunning && (
-                                        <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', width: '100%' }}>
-                                            ℹ️ <em>Direct Wi-Fi connects when phone & PC share private shop Wi-Fi. For 5G/cellular data or university/campus Wi-Fi, click <strong>Enable Worldwide Internet Access</strong> above.</em>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {!info?.pinSet && !isTunnelRunning && (
-                                <div style={{ marginTop: 12, padding: '8px 12px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: 6, fontSize: 12, color: '#fde047' }}>
-                                    <ShieldAlert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                                    A security PIN must be set below before opening worldwide access.
-                                </div>
-                            )}
-
-                            {isTunnelRunning && tunnel?.tunnelPassword && (
-                                <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(59, 130, 246, 0.12)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 8 }}>
-                                    <div style={{ fontSize: 12, fontWeight: 600, color: '#93c5fd' }}>
-                                        Endpoint IP / Password:
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                                        <code style={{ fontSize: 13, background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: 4, color: '#fff' }}>
-                                            {tunnel.tunnelPassword}
-                                        </code>
-                                        <button className="settings-btn" onClick={() => copyToClipboard(tunnel.tunnelPassword!, true)} style={{ height: 26, fontSize: 11 }}>
-                                            {copiedPw ? <Check size={12} color="#4ade80" /> : <Copy size={12} />}
-                                            {copiedPw ? 'Copied' : 'Copy'}
-                                        </button>
-                                    </div>
-                                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                                        If your phone browser displays a "Friendly Reminder" submit screen on first connection, enter this IP.
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Single QR Image Display */}
-                        {qrDataUrl && (
-                            <div style={{ textAlign: 'center' }}>
-                                <img src={qrDataUrl} alt="Unified Remote Connection QR" className="wa-qr-img" />
-                                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
-                                    Single QR for Phone / Tablet
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </div>
-
-            {/* ─── PIN & SECURITY CONFIGURATION ─── */}
+            {/* ─── Anywhere: Tailscale ─── */}
             <div className="wa-block">
-                <div className="wa-block-title">Security & PIN Gate</div>
+                <div className="ra-title-row">
+                    <div className="wa-block-title ra-title"><Globe size={16} /> From anywhere (Tailscale)</div>
+                    {pill && <span className={`settings-pill ${pill.cls}`}>{pill.label}</span>}
+                </div>
                 <div className="wa-block-sub">
-                    Requires external remote devices to authenticate before viewing coordinates or jogging the machine.
-                    Protected with salted <strong>scrypt</strong> hashing and automatic 15-minute brute-force lockout after 5 failed attempts.
-                    This computer (localhost) is never locked out.
+                    A private, end-to-end encrypted link between this PC and your own devices. It works over 5G and any
+                    Wi-Fi without port forwarding, and devices outside your Tailscale account cannot reach the machine.
                 </div>
 
-                <div className="wa-cfg-row" style={{ marginTop: 12 }}>
-                    <span className={`settings-pill ${info?.pinSet ? 'ok' : 'fail'}`}>
-                        {info?.pinSet ? 'PIN Set (Protected)' : 'No PIN (Unprotected)'}
-                    </span>
-                </div>
+                {!ts && <div className="wa-empty">Checking Tailscale…</div>}
 
-                {info?.pinSet ? (
-                    <div className="wa-cfg-row" style={{ marginTop: 10 }}>
-                        <button className="settings-btn danger" onClick={clearPin} disabled={busy || tunnelBusy}>
-                            <Unlock size={14} /> Clear PIN
-                        </button>
-                    </div>
-                ) : (
-                    <div className="wa-add-row" style={{ marginTop: 10, display: 'flex', gap: 10 }}>
-                        <input
-                            type="password"
-                            inputMode="numeric"
-                            className="wa-input"
-                            placeholder="New Security PIN (min 4 chars)"
-                            value={pinDraft}
-                            onChange={(e) => setPinDraft(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') setPin(); }}
-                            disabled={busy}
-                            style={{ maxWidth: 260 }}
-                        />
-                        <button className="settings-btn primary" onClick={setPin} disabled={busy || pinDraft.trim().length < 4}>
-                            <Lock size={14} /> Set PIN
-                        </button>
+                {ts?.state === 'not-installed' && (
+                    <ol className="ra-steps">
+                        <li>
+                            Install Tailscale on this PC and sign in.{' '}
+                            <a className="ra-link" href={ts.downloadUrl || 'https://tailscale.com/download'} target="_blank" rel="noreferrer">
+                                Download Tailscale <ExternalLink size={11} />
+                            </a>
+                        </li>
+                        <li>In the Tailscale tray menu, enable <strong>Preferences → Run unattended</strong> so it stays connected when you sign out of Windows.</li>
+                        <li>Install the Tailscale app on your phone and sign in with the <strong>same account</strong>.</li>
+                        <li>Come back here. The QR code for your phone appears automatically.</li>
+                    </ol>
+                )}
+
+                {ts?.state === 'error' && ts.error && (
+                    <div className="ra-alert error"><XCircle size={15} /><div className="ra-alert-body">{ts.error}</div></div>
+                )}
+
+                {tsUrl && renderQr(tsUrl, 'Scan with a phone that has the Tailscale app connected. This address stays the same.')}
+
+                {ts?.state === 'running' && ts.dnsUrl && (
+                    <div className="wa-block-sub">
+                        Also works by name: <code>{ts.dnsUrl}</code>
                     </div>
                 )}
+
+                {ts?.state === 'running' && onlinePeers.length > 0 && (
+                    <>
+                        <div className="ra-label">Your Tailscale devices{ts.tailnet ? ` · ${ts.tailnet}` : ''}</div>
+                        <div className="ra-list">
+                            {onlinePeers.map((p) => (
+                                <div key={`${p.name}:${p.ip}`} className="ra-row">
+                                    <span className={`ra-dot ${p.online ? 'on' : ''}`} />
+                                    <div className="ra-row-main">
+                                        <span className="ra-row-name">{p.name}</span>
+                                        <span className="ra-row-meta">{[p.os, p.ip, p.online ? 'online' : 'offline'].filter(Boolean).join(' · ')}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                )}
+
+                {ts && ts.warnings.length > 0 && <div className="ra-alerts">{ts.warnings.map(renderWarning)}</div>}
+            </div>
+
+            {/* ─── Same Wi-Fi ─── */}
+            <div className="wa-block">
+                <div className="ra-title-row">
+                    <div className="wa-block-title ra-title"><Wifi size={16} /> On the same Wi-Fi</div>
+                    {lanUrl && <span className="settings-pill ok">Available</span>}
+                </div>
+                <div className="wa-block-sub">Phones and tablets on the same network as this PC can open this address directly.</div>
+                {lanUrl
+                    ? renderQr(lanUrl, 'Scan with a phone on the same Wi-Fi as this PC.')
+                    : info && <div className="wa-empty">This PC has no local network address right now.</div>}
+                {(info?.lanUrls?.length ?? 0) > 1 && (
+                    <div className="wa-block-sub">
+                        Other addresses: {info!.lanUrls!.slice(1).map((u) => <code key={u} style={{ marginRight: 6 }}>{u}</code>)}
+                    </div>
+                )}
+            </div>
+
+            {/* ─── Security ─── */}
+            <div className="wa-block">
+                <div className="ra-title-row">
+                    <div className="wa-block-title ra-title"><Lock size={16} /> PIN and signed-in devices</div>
+                    {info && (
+                        <span className="ra-title">
+                            {info.pinSource === 'access-code' && (
+                                <span className="settings-pill ok">Access code is the PIN (see Cloud access)</span>
+                            )}
+                            <span className={`settings-pill ${info.pinSet ? 'ok' : 'fail'}`}>
+                                {info.pinSet ? 'PIN on' : 'No PIN'}
+                            </span>
+                        </span>
+                    )}
+                </div>
+                <div className="wa-block-sub">
+                    Remote devices must enter the PIN before they can see or move the machine. This PC's own screen never needs it.
+                    After 5 wrong tries a device is locked out for 15 minutes.
+                </div>
+
+                {info && !info.pinSet && (
+                    <div className="ra-alert warn">
+                        <ShieldAlert size={15} />
+                        <div className="ra-alert-body">
+                            Without a PIN, anyone who can reach this PC over Wi-Fi or Tailscale can control the machine. Set one before using remote access.
+                        </div>
+                    </div>
+                )}
+
+                {operator ? (
+                    <>
+                        <div className="wa-add-row ra-pin-row">
+                            <input
+                                type="password"
+                                inputMode="numeric"
+                                autoComplete="new-password"
+                                className="wa-input"
+                                placeholder={`${info?.pinSet ? 'New PIN' : 'PIN'} (at least ${minPin} characters)`}
+                                value={pinDraft}
+                                onChange={(e) => setPinDraft(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') savePin(); }}
+                                disabled={busy}
+                            />
+                            <button className="settings-btn primary" onClick={savePin} disabled={busy || pinDraft.trim().length < minPin}>
+                                <Lock size={14} /> {info?.pinSet ? 'Change PIN' : 'Set PIN'}
+                            </button>
+                            {info?.pinSet && (
+                                <button className="settings-btn danger" onClick={removePin} disabled={busy}>
+                                    <Unlock size={14} /> Remove PIN
+                                </button>
+                            )}
+                        </div>
+
+                        {info?.pinSet && (
+                            <>
+                                <div className="ra-title-row ra-label-row">
+                                    <div className="ra-label">Signed-in devices ({sessions.length})</div>
+                                    {sessions.length > 0 && (
+                                        <button className="settings-btn danger" onClick={disconnectAll} disabled={busy}>
+                                            Sign out all
+                                        </button>
+                                    )}
+                                </div>
+                                {sessions.length === 0 ? (
+                                    <div className="wa-empty">No remote devices are signed in.</div>
+                                ) : (
+                                    <div className="ra-list">
+                                        {sessions.map((s) => (
+                                            <div key={s.id} className="ra-row">
+                                                {s.via === 'tailscale' ? <Globe size={14} /> : <Wifi size={14} />}
+                                                <div className="ra-row-main">
+                                                    <span className="ra-row-name">{s.device}</span>
+                                                    <span className="ra-row-meta">
+                                                        {s.via === 'tailscale' ? 'Tailscale' : 'Wi-Fi'} · {s.ip} · active {timeAgo(s.lastSeen)}
+                                                    </span>
+                                                </div>
+                                                <button
+                                                    className="settings-btn"
+                                                    disabled={busy}
+                                                    onClick={() => run(() => remote.revokeSession(s.id), `${s.device} was signed out.`)}
+                                                >
+                                                    Sign out
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </>
+                ) : (
+                    info && <div className="wa-empty">The PIN and signed-in devices can only be changed on the machine's own screen.</div>
+                )}
+
+                <div className="ra-alert info">
+                    <AlertTriangle size={15} />
+                    <div className="ra-alert-body">
+                        A phone is not an emergency stop. Only move the machine remotely when you can see it, and keep the physical E-stop within reach.
+                    </div>
+                </div>
             </div>
         </div>
     );

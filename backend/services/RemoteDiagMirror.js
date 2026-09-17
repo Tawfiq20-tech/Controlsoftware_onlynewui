@@ -41,11 +41,32 @@ class RemoteDiagMirror {
         this.onInjectCallback = null;
         // De-noise: drop high-rate position frames if backlog grows.
         this.droppedCount = 0;
+        // LAN-only (index.js) clears this. It is checked in start() because
+        // the safety:remoteDiagToggle socket handler in CNCEngine calls
+        // start() directly and must not be able to reopen the connection.
+        this.outboundAllowed = true;
     }
 
     setUrl(url) { if (typeof url === 'string' && url.length > 0) this.url = url; }
     setToken(token) { if (typeof token === 'string' && token.length > 0) this.token = token; }
     onInject(fn) { this.onInjectCallback = fn; }
+
+    /**
+     * false: close the mirror without sending anything more and make start()
+     * a no-op. true only lifts the block; the caller restarts the mirror if
+     * preferences.remoteDiagEnabled says so.
+     */
+    setOutboundAllowed(allowed) {
+        const next = !!allowed;
+        if (next === this.outboundAllowed) return;
+        this.outboundAllowed = next;
+        if (!next && this.enabled) {
+            // stop() would queue a session-stop frame on the socket first.
+            this.enabled = false;
+            this._teardown();
+            logger.warn('[RemoteDiag] STOPPED — outbound traffic blocked (LAN-only)');
+        }
+    }
 
     _urlWithToken() {
         if (!this.token) return this.url;
@@ -54,6 +75,10 @@ class RemoteDiagMirror {
     }
 
     start() {
+        if (!this.outboundAllowed) {
+            logger.warn('[RemoteDiag] start refused — outbound traffic blocked (LAN-only)');
+            return;
+        }
         if (this.enabled) return;
         this.enabled = true;
         this.startedAt = Date.now();
@@ -66,6 +91,11 @@ class RemoteDiagMirror {
         if (!this.enabled) return;
         this.emitMeta({ kind: 'session-stop' });
         this.enabled = false;
+        this._teardown();
+        logger.warn('[RemoteDiag] STOPPED');
+    }
+
+    _teardown() {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -76,7 +106,6 @@ class RemoteDiagMirror {
         }
         this.connected = false;
         this.backlog = [];
-        logger.warn('[RemoteDiag] STOPPED');
     }
 
     _connect() {

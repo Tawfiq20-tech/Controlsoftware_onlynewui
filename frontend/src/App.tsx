@@ -18,6 +18,7 @@ import ResizeHandle from './components/ResizeHandle';
 import ProbingModal from './components/ProbingModal/ProbingModal';
 import ChatBot from './components/ChatBot/ChatBot';
 import RemotePinGate from './components/RemotePinGate';
+import OnScreenKeyboard from './components/OnScreenKeyboard/OnScreenKeyboard';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
 import { useJobWakeLock } from './hooks/useJobWakeLock';
@@ -25,52 +26,15 @@ import { useCNCStore } from './stores/cncStore';
 import { sendDesign } from './utils/designLoad';
 import { GCodeParser } from './utils/gcodeParser';
 
-function getInitialLayout(): 'auto' | 'horizontal' | 'vertical' {
-    try {
-        const bodyForced = document.body.getAttribute('data-forced-layout');
-        if (bodyForced === 'horizontal' || bodyForced === 'vertical') return bodyForced;
-        const params = new URLSearchParams(window.location.search);
-        const layout = params.get('layout') || params.get('mode');
-        if (layout === 'horizontal' || layout === 'vertical') return layout;
-        if (window.location.port === '3000' || window.location.pathname.includes('horizontal')) return 'horizontal';
-        if (window.location.port === '3001' || window.location.pathname.includes('vertical')) return 'vertical';
-    } catch (_) {}
-    return 'auto';
-}
-
-function useIsVertical(layout: 'auto' | 'horizontal' | 'vertical'): boolean {
-    const [isVert, setIsVert] = useState(() => {
-        if (layout === 'vertical') return true;
-        if (layout === 'horizontal') return false;
-        if (typeof window === 'undefined') return false;
-        return window.matchMedia('(max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px)').matches;
-    });
-
-    useEffect(() => {
-        if (layout === 'vertical') {
-            setIsVert(true);
-            return;
-        }
-        if (layout === 'horizontal') {
-            setIsVert(false);
-            return;
-        }
-        const mq = window.matchMedia('(max-aspect-ratio: 1/1), (orientation: portrait), (max-width: 900px)');
-        const handler = (e: MediaQueryListEvent) => setIsVert(e.matches);
-        setIsVert(mq.matches);
-        mq.addEventListener('change', handler);
-        return () => mq.removeEventListener('change', handler);
-    }, [layout]);
-
-    return isVert;
-}
+// The app ships vertical-only (touchscreen pendant). The Auto/Horizontal/
+// Vertical header toggle was removed, so the layout is fixed here.
+const layout = 'vertical' as const;
+const isVertical = true;
 
 function AppInner() {
     const [activeHeaderTab, setActiveHeaderTab] = useState('Prepare');
     const [probingOpen, setProbingOpen] = useState(false);
     const [probingType, setProbingType] = useState<'z' | 'xyz' | null>(null);
-    const [layout, setLayout] = useState<'auto' | 'horizontal' | 'vertical'>(getInitialLayout);
-    const isVertical = useIsVertical(layout);
 
     // Backend socket bootstrap + auto-connect poll -- must run regardless
     // of which header tab is active (Tawfiq msg11358 item 3). See
@@ -243,15 +207,28 @@ function AppInner() {
         return () => window.removeEventListener('cnc:open-probing', open);
     }, []);
 
+    // Deep link into a Settings tab (e.g. the status-bar remote badge). Header
+    // tabs are locked while carving, so only the settings tab is remembered
+    // then and the operator sees it once the job is paused or done.
+    useEffect(() => {
+        const open = (e: Event) => {
+            const tab = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+            const s = useCNCStore.getState();
+            if (tab) s.setSettingsTab(tab);
+            const tabLocked = s.machineState === 'running' || s.machineState === 'paused';
+            if (!tabLocked) setActiveHeaderTab('Settings');
+        };
+        window.addEventListener('cnc:open-settings', open);
+        return () => window.removeEventListener('cnc:open-settings', open);
+    }, []);
+
     return (
-        <div className={`app ${layout === 'horizontal' ? 'force-horizontal' : layout === 'vertical' ? 'force-vertical' : ''} ${isVertical ? 'is-vertical' : ''}`}>
+        <div className="app force-vertical is-vertical">
             <HomingOverlay />
             <SafetyBanner />
             <Header
                 activeTab={activeHeaderTab}
                 setActiveTab={setActiveHeaderTab}
-                layout={layout}
-                onLayoutChange={setLayout}
             />
 
             <div className="app-body-wrap">
@@ -351,6 +328,9 @@ function AppInner() {
 
             {/* Onefinity Assistant — floating chat widget, always available */}
             <ChatBot />
+
+            {/* Touch input for every text field in the app (see OnScreenKeyboard.tsx). */}
+            <OnScreenKeyboard />
         </div>
     );
 }

@@ -64,6 +64,7 @@ const DEFAULT_CONFIG = {
 // Slash-command catalog (Tawfiq msg 7430). Destructive commands need
 // "YES" within 30 s before they fire.
 const CONFIRMATIONS_TTL_MS = 30000;
+const LAN_ONLY_INFO = 'LAN-only mode — internet traffic is blocked';
 
 class WhatsAppService {
     constructor({ configStore, io, logger, getController, getEngine, dataDir,
@@ -91,6 +92,10 @@ class WhatsAppService {
 
         // Bot audit log path
         this._auditLog = path.join(this.dataDir, 'whatsapp-bot.jsonl');
+
+        // Cleared by LAN-only. Unlike disable(), blocking never rewrites
+        // cfg.enabled, so lifting the block restores what the operator chose.
+        this.outboundAllowed = true;
     }
 
     init() {
@@ -99,7 +104,9 @@ class WhatsAppService {
         const merged = { ...DEFAULT_CONFIG, ...cur };
         this._writeCfg(merged);
 
-        if (merged.enabled) {
+        if (!this.outboundAllowed) {
+            this._setState('disabled', LAN_ONLY_INFO);
+        } else if (merged.enabled) {
             this.enable().catch((err) => {
                 this.log.error?.('whatsapp.init.enable.failed', { err: err?.message });
                 this._setState('disabled', err?.message || 'enable failed');
@@ -137,7 +144,42 @@ class WhatsAppService {
 
     // ─── Lifecycle ──────────────────────────────────────────────────
 
+    /**
+     * false destroys the client without touching cfg.enabled and refuses
+     * enable() and sendTest(); true reconnects if the config says enabled.
+     */
+    setOutboundAllowed(allowed) {
+        const next = !!allowed;
+        if (next === this.outboundAllowed) return;
+        this.outboundAllowed = next;
+        if (!next) {
+            const client = this.client;
+            this.client = null;
+            this.pendingHooks = false;
+            this.lastQrDataUrl = null;
+            if (client) {
+                Promise.resolve().then(() => client.destroy()).catch((err) =>
+                    this.log.warn?.('whatsapp.stop.failed', { err: err?.message }));
+            }
+            this._setState('disabled', LAN_ONLY_INFO);
+            return;
+        }
+        const cfg = { ...DEFAULT_CONFIG, ...this._readCfg() };
+        if (cfg.enabled) {
+            this.enable().catch((err) => {
+                this.log.error?.('whatsapp.resume.failed', { err: err?.message });
+                this._setState('disabled', err?.message || 'enable failed');
+            });
+        } else {
+            this._setState('disabled');
+        }
+    }
+
     async enable() {
+        if (!this.outboundAllowed) {
+            this._setState('disabled', LAN_ONLY_INFO);
+            throw new Error('lan_only');
+        }
         if (this.client) return this.getStatus();
 
         let whatsappLib, qrcodeLib;
@@ -199,6 +241,8 @@ class WhatsAppService {
         });
 
         this.client.on('ready', () => {
+            // A client destroyed by LAN-only while it was still starting.
+            if (!this.outboundAllowed || !this.client) return;
             this.lastQrDataUrl = null;
             const me = this.client?.info?.wid?._serialized || 'unknown';
             this._setState('ready', `connected as ${me}`);
@@ -417,6 +461,7 @@ class WhatsAppService {
     // ─── Test ──────────────────────────────────────────────────────
 
     async sendTest() {
+        if (!this.outboundAllowed) throw new Error('lan_only');
         if (this.state !== 'ready') throw new Error(`WhatsApp not ready (state=${this.state})`);
         const cfg = { ...DEFAULT_CONFIG, ...this._readCfg() };
         if (!cfg.recipients.length) throw new Error('No recipients configured');

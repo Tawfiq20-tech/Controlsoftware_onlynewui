@@ -11,6 +11,7 @@ import { useCNCStore } from '../stores/cncStore';
 import type { ControllerRestartInfo } from '../stores/cncStore';
 import { log } from './logger';
 import { getRemoteToken } from './remoteAuth';
+import type { ActiveJog, CloudStatus, DeviceView, TierState } from '../components/Settings/api';
 import { loadedFileMatches, takeOwnLoadEcho, sendDesign, forgetOwnLoad } from './designLoad';
 import type { LoadedFileInfo } from './designLoad';
 
@@ -51,10 +52,65 @@ export function isBackendSupported(): boolean {
 // occurrence.
 let _storeWired = false;
 
+// Kiosk operator second factor (SPEC §6.5). The launcher opens the kiosk at
+// ?op=<secret>; the secret is stripped from the address bar at module load so
+// it never lingers in history, then exchanged once for the HttpOnly operator
+// cookie before the socket handshake (which must carry that cookie).
+let _operatorClaim: Promise<void> | null = null;
+
+function takeOperatorSecret(): string | null {
+    if (typeof window === 'undefined' || !window.location) return null;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.has('op')) return null;
+        const secret = params.get('op');
+        params.delete('op');
+        const qs = params.toString();
+        const { pathname, hash } = window.location;
+        window.history.replaceState(window.history.state, '', `${pathname}${qs ? `?${qs}` : ''}${hash}`);
+        return secret || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+export function claimOperator(): Promise<void> {
+    if (_operatorClaim) return _operatorClaim;
+    const secret = takeOperatorSecret();
+    _operatorClaim = (async () => {
+        if (!secret) return;
+        try {
+            const r = await fetch(`${getBackendUrl()}/api/remote/operator/claim`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ secret }),
+            });
+            if (!r.ok) {
+                log('warn', `Operator link was refused by the backend (HTTP ${r.status})`);
+                return;
+            }
+            // A 200 alone is not proof: a static server without the backend
+            // proxy answers index.html. Only {operator:true} JSON is a claim.
+            let body: unknown = null;
+            try { body = await r.json(); } catch { body = null; }
+            if (!body || typeof body !== 'object' || (body as { operator?: unknown }).operator !== true) {
+                log('warn', 'Operator link was not accepted: the backend did not answer {operator:true} (is /api proxied to the backend?)');
+            }
+        } catch (err) {
+            log('warn', `Operator link could not be claimed: ${err instanceof Error ? err.message : 'network error'}`);
+        }
+    })();
+    return _operatorClaim;
+}
+
+claimOperator();
+
 /**
  * Connect to the backend Socket.IO server and wire events to the store.
  */
-export function connectBackendSocket(): Promise<void> {
+export async function connectBackendSocket(): Promise<void> {
+    await claimOperator();
     return new Promise((resolve, reject) => {
         if (controller.socket?.connected) {
             resolve();
@@ -65,14 +121,12 @@ export function connectBackendSocket(): Promise<void> {
         const store = useCNCStore.getState();
 
         // Token is a no-op on the control PC itself (loopback is never
-        // gated) and required on a remote LAN client once a PIN is set --
-        // see RemoteAccessService.socketGate() on the backend.
+        // gated) and required on a remote client once a PIN is set -- see
+        // RemoteAccessService.socketGate() on the backend. The session
+        // cookie covers same-origin pages; the token covers the rest.
         const remoteToken = getRemoteToken();
-        const socketOptions: Record<string, unknown> = {
-            extraHeaders: {
-                'bypass-tunnel-reminder': 'true',
-            },
-        };
+        // withCredentials so the onefinity_op cookie reaches the handshake.
+        const socketOptions: Record<string, unknown> = { withCredentials: true };
         if (remoteToken) {
             socketOptions.auth = { token: remoteToken };
         }
@@ -133,6 +187,21 @@ export function connectBackendSocket(): Promise<void> {
     });
 }
 
+/** Window event RemotePinGate listens for when the backend ends a remote session. */
+export const REMOTE_SESSION_ENDED_EVENT = 'remote:session-ended';
+
+let _sessionEndedQueued = false;
+function notifyRemoteSessionEnded(): void {
+    if (typeof window === 'undefined' || _sessionEndedQueued) return;
+    // remote:denied(SESSION_REVOKED) and the disconnect usually arrive
+    // together; announce once.
+    _sessionEndedQueued = true;
+    setTimeout(() => {
+        _sessionEndedQueued = false;
+        window.dispatchEvent(new CustomEvent(REMOTE_SESSION_ENDED_EVENT));
+    }, 0);
+}
+
 /**
  * Disconnect from the backend.
  */
@@ -152,8 +221,15 @@ function _wireControllerToStore(): void {
         getStore().setBackendSocketConnected(true);
     });
 
-    controller.on('disconnect', () => {
+    controller.on('disconnect', (reason?: string) => {
         getStore().setBackendSocketConnected(false);
+        // The backend re-sends the live values on reconnect; a remote jog
+        // cannot outlive the backend's deadman, so don't keep showing one.
+        getStore().setRemoteActivity(null);
+        // The backend closed this socket itself (revoked LAN session, PIN
+        // change). socket.io-client won't reconnect on its own: let
+        // RemotePinGate re-check and ask for the PIN again if needed.
+        if (reason === 'io server disconnect') notifyRemoteSessionEnded();
     });
 
     // Serial port events
@@ -555,6 +631,45 @@ function _wireControllerToStore(): void {
                 `[RemoteDiag] ${s.connected ? 'CONNECTED' : 'reconnecting...'}  ${s.url}`
             );
         }
+    });
+
+    // Cloud relay / remote permissions (SPEC §7.5). Payloads are already
+    // redacted per socket by the backend.
+    controller.on('remote:cloud:status', (data: CloudStatus | null) => {
+        getStore().setCloudStatus(data ?? null);
+    });
+
+    controller.on('remote:permissions', (data: TierState | null) => {
+        getStore().setRemotePermissions(data ?? null);
+    });
+
+    controller.on('remote:activity', (data: ActiveJog | null) => {
+        getStore().setRemoteActivity(data ?? null);
+    });
+
+    controller.on('remote:device', (data: DeviceView | null) => {
+        getStore().setRemoteDevice(data ?? null);
+    });
+
+    controller.on('remote:motion:expired', (data: { channel?: string } | null) => {
+        const channel = data?.channel === 'lan' ? 'LAN phones' : 'cloud';
+        getStore().addConsoleLog('info', `[Remote] Motion permission for ${channel} expired`);
+    });
+
+    controller.on('remote:denied', (data: { event?: string; cmd?: string; code?: string; message?: string } | null) => {
+        const message = data?.message || data?.code || 'not allowed from this device';
+        getStore().addConsoleLog('warning', `Blocked: ${message}`);
+        log('warn', `Blocked: ${message}`);
+        if (data?.code === 'SESSION_REVOKED') notifyRemoteSessionEnded();
+    });
+
+    controller.on('config:denied', (data: { key?: string; error?: string } | null) => {
+        const why = data?.error === 'operator_required'
+            ? 'only the machine operator (control PC) can change this setting'
+            : (data?.error || 'not allowed');
+        const message = `Setting ${data?.key ? `'${data.key}' ` : ''}not saved: ${why}`;
+        getStore().addConsoleLog('warning', message);
+        log('warn', message);
     });
 
     // Settings — store in firmwareSettings and dispatch custom DOM event for FirmwareSettings UI

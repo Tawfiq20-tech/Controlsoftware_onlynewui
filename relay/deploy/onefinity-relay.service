@@ -1,0 +1,27 @@
+[Unit]
+Description=Onefinity relay
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=onefinity-relay
+Group=onefinity-relay
+WorkingDirectory=/opt/onefinity-relay
+EnvironmentFile=/etc/onefinity-relay.env
+ExecStart=/opt/node/bin/node --disable-warning=ExperimentalWarning server/index.js
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+KillSignal=SIGTERM
+StateDirectory=onefinity-relay
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/onefinity-relay
+LimitNOFILE=65536
+MemoryMax=512M
+[Install]
+WantedBy=multi-user.target

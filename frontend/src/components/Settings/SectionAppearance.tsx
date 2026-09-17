@@ -11,6 +11,8 @@
 import { useEffect, useState } from 'react';
 import { Palette, Sun, Moon, Check } from 'lucide-react';
 import { ThemeId, getStoredTheme, setTheme, onThemeChange } from '../../utils/theme';
+import { Keyboard } from 'lucide-react';
+import { isOskEnabled, setOskEnabled } from '../../utils/onScreenKeyboard';
 
 interface ThemeCard {
     id: ThemeId;
@@ -39,6 +41,7 @@ const THEMES: ThemeCard[] = [
 
 export default function SectionAppearance() {
     const [active, setActive] = useState<ThemeId>(getStoredTheme());
+    const [osk, setOsk] = useState<boolean>(isOskEnabled);
 
     useEffect(() => {
         const off = onThemeChange((t) => setActive(t));
@@ -82,6 +85,33 @@ export default function SectionAppearance() {
             <div className="theme-hint">
                 Theme applies instantly across the app, the 3D viewer, and the Carve controls.
                 Your choice is remembered on this browser.
+            </div>
+
+            <header className="settings-section-header" style={{ marginTop: 22 }}>
+                <div className="settings-section-title">
+                    <Keyboard size={18} /> On-screen keyboard
+                </div>
+            </header>
+
+            <button
+                type="button"
+                className={`theme-card ${osk ? 'on' : ''}`}
+                onClick={() => { const next = !osk; setOsk(next); setOskEnabled(next); }}
+                aria-pressed={osk}
+            >
+                <div className="theme-card-header">
+                    <Keyboard size={16} />
+                    <span className="theme-card-name">{osk ? 'On' : 'Off'}</span>
+                    {osk && <span className="theme-card-check"><Check size={14} /></span>}
+                </div>
+                <div className="theme-card-tagline">
+                    A touch keyboard opens whenever you tap a text or number field.
+                </div>
+            </button>
+
+            <div className="theme-hint">
+                Leave this on for the touchscreen. Turn it off if this machine has a
+                physical keyboard. Remembered on this browser.
             </div>
         </div>
     );

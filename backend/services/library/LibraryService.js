@@ -34,7 +34,7 @@ class LibraryService {
         for (const e of entries) {
             if (!e.isDirectory()) continue;
             const meta = this._readMeta(e.name);
-            if (meta) out.push(meta);
+            if (meta) out.push({ ...meta, provenance: meta.provenance || null });
         }
         // Newest first.
         out.sort((a, b) => (b.savedAt || '').localeCompare(a.savedAt || ''));
@@ -68,6 +68,68 @@ class LibraryService {
         return meta;
     }
 
+    /**
+     * Store a file that is already on disk (cloud ingest). The body is moved
+     * into place with an async rename so a large upload never blocks the event
+     * loop the way upsert()'s writeFileSync would while a job is streaming.
+     */
+    async upsertFromFile({ name, fileName, srcPath, provenance }) {
+        if (!name || !fileName || !srcPath) {
+            throw new Error('Missing required fields: name, fileName, srcPath');
+        }
+        const id = `l-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const dir = path.join(this.root, id);
+        await fs.promises.mkdir(dir, { recursive: true });
+        const bodyPath = path.join(dir, 'body.gcode');
+        try {
+            await fs.promises.rename(srcPath, bodyPath);
+        } catch (err) {
+            if (err && err.code !== 'EXDEV') {
+                await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+                throw err;
+            }
+            await fs.promises.copyFile(srcPath, bodyPath);
+            await fs.promises.unlink(srcPath).catch(() => {});
+        }
+        const { size } = await fs.promises.stat(bodyPath);
+        const lineCount = await countLines(bodyPath);
+        const meta = {
+            id,
+            name: this._uniqueCloudName(String(name).slice(0, 120), provenance),
+            fileName: String(fileName).slice(0, 200),
+            size,
+            lineCount,
+            savedAt: new Date().toISOString(),
+            provenance: provenance ? { ...provenance } : null,
+        };
+        await fs.promises.writeFile(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8');
+        this.io?.emit?.('library:added', meta);
+        return meta;
+    }
+
+    get(id) {
+        const meta = this._readMeta(this._safeId(id));
+        return meta ? { ...meta, provenance: meta.provenance || null } : null;
+    }
+
+    markReviewed(id) {
+        const safe = this._safeId(id);
+        const meta = this._readMeta(safe);
+        if (!meta) throw new Error(`Library entry ${id} not found`);
+        if (meta.provenance) meta.provenance = { ...meta.provenance, reviewed: true };
+        fs.writeFileSync(path.join(this.root, safe, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8');
+        this.io?.emit?.('library:updated', meta);
+        return meta;
+    }
+
+    cloudUsageBytes() {
+        let total = 0;
+        for (const meta of this.list()) {
+            if (meta.provenance && meta.provenance.origin === 'cloud') total += Number(meta.size) || 0;
+        }
+        return total;
+    }
+
     remove(id) {
         const dir = path.join(this.root, this._safeId(id));
         try { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -89,6 +151,31 @@ class LibraryService {
         // Strip anything that isn't id-like to prevent path traversal.
         return String(id).replace(/[^a-zA-Z0-9_-]/g, '');
     }
+
+    // Remote uploads never silently shadow a local entry of the same name.
+    _uniqueCloudName(name, provenance) {
+        if (!provenance || provenance.origin !== 'cloud') return name;
+        const taken = new Set(this.list().map(m => m.name));
+        if (!taken.has(name)) return name;
+        for (let n = 2; n < 10000; n++) {
+            const suffix = ` (cloud ${n})`;
+            const candidate = name.slice(0, 120 - suffix.length) + suffix;
+            if (!taken.has(candidate)) return candidate;
+        }
+        return name;
+    }
+}
+
+function countLines(file) {
+    return new Promise((resolve) => {
+        let lines = 1;
+        const rs = fs.createReadStream(file);
+        rs.on('data', (chunk) => {
+            for (let i = 0; i < chunk.length; i++) if (chunk[i] === 0x0A) lines++;
+        });
+        rs.on('end', () => resolve(lines));
+        rs.on('error', () => resolve(0));
+    });
 }
 
 module.exports = { LibraryService };

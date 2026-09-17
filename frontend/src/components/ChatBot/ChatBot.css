@@ -357,6 +357,19 @@
     background: var(--border-hover);
 }
 
+.chatbot-suggestions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.chatbot-suggestion-btn {
+    font-weight: 500;
+    text-align: left;
+}
+
 .chatbot-action-yes {
     background: var(--primary-accent);
     color: var(--bg-main);

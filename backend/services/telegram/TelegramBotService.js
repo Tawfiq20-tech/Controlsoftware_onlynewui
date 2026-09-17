@@ -48,6 +48,7 @@ const DEFAULT_CONFIG = {
 };
 
 const CONFIRMATIONS_TTL_MS = 30000;
+const LAN_ONLY_INFO = 'LAN-only mode — internet traffic is blocked';
 
 class TelegramBotService {
     constructor({ configStore, io, logger, getController, getEngine, dataDir,
@@ -67,6 +68,9 @@ class TelegramBotService {
         this._stateInfo = '';
         this._pendingConfirms = new Map(); // chatId → { action, expiresAt }
         this._auditLog = path.join(this.dataDir, 'telegram-bot.jsonl');
+        // Cleared by LAN-only. Unlike disable(), blocking never rewrites
+        // cfg.enabled, so lifting the block restores what the operator chose.
+        this.outboundAllowed = true;
 
         try { fs.mkdirSync(this.dataDir, { recursive: true }); } catch (_) {}
     }
@@ -76,7 +80,9 @@ class TelegramBotService {
         const merged = { ...DEFAULT_CONFIG, ...cur };
         this._writeCfg(merged);
 
-        if (merged.enabled && merged.token) {
+        if (!this.outboundAllowed) {
+            this._setState('disabled', LAN_ONLY_INFO);
+        } else if (merged.enabled && merged.token) {
             this.enable().catch((err) => {
                 this.log.error?.('telegram.init.enable.failed', { err: err?.message });
                 this._setState('disabled', err?.message || 'enable failed');
@@ -127,7 +133,38 @@ class TelegramBotService {
 
     // ─── Lifecycle ──────────────────────────────────────────────────
 
+    /**
+     * false stops polling without touching cfg.enabled and refuses enable()
+     * and test(); true restarts the bot if the config says it was enabled.
+     */
+    setOutboundAllowed(allowed) {
+        const next = !!allowed;
+        if (next === this.outboundAllowed) return;
+        this.outboundAllowed = next;
+        if (!next) {
+            const bot = this.bot;
+            this.bot = null;
+            if (bot) {
+                bot.stopPolling().catch((err) => this.log.warn?.('telegram.stop.failed', { err: err?.message }));
+            }
+            this._setState('disabled', LAN_ONLY_INFO);
+            return;
+        }
+        const cfg = { ...DEFAULT_CONFIG, ...this._readCfg() };
+        if (cfg.enabled && cfg.token) {
+            this.enable().catch((err) => {
+                this.log.error?.('telegram.resume.failed', { err: err?.message });
+            });
+        } else {
+            this._setState('disabled');
+        }
+    }
+
     async enable() {
+        if (!this.outboundAllowed) {
+            this._setState('disabled', LAN_ONLY_INFO);
+            throw new Error('lan_only');
+        }
         const cfg = { ...DEFAULT_CONFIG, ...this._readCfg() };
         if (!cfg.token) {
             this._setState('disabled', 'no token — paste BotFather token in Settings');
@@ -167,6 +204,10 @@ class TelegramBotService {
 
             // Wait for getMe to confirm token works
             const me = await this.bot.getMe();
+            if (!this.outboundAllowed || !this.bot) {
+                // LAN-only was switched on while getMe was in flight.
+                throw new Error('lan_only');
+            }
             this._patchCfg({ enabled: true });
             this._setState('ready', `connected as @${me.username}`);
             this._sendWelcomePing(me).catch(() => {});
@@ -206,6 +247,7 @@ class TelegramBotService {
     }
 
     async test() {
+        if (!this.outboundAllowed) throw new Error('lan_only');
         const cfg = { ...DEFAULT_CONFIG, ...this._readCfg() };
         if (!this.bot) throw new Error('Bot is not connected');
         if (!cfg.allowedChatIds.length) throw new Error('No allowed chat IDs');

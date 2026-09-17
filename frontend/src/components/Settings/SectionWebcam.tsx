@@ -97,7 +97,7 @@ export default function SectionWebcam() {
                         disabled={detecting}
                         title="Scan and auto-connect plugged-in cameras"
                     >
-                        <Sparkles size={14} color="#38bdf8" /> {detecting ? 'Scanning...' : 'Auto-Detect Camera'}
+                        <Sparkles size={14} style={{ color: 'var(--settings-info)' }} /> {detecting ? 'Scanning...' : 'Auto-Detect Camera'}
                     </button>
                     <button className="settings-btn" onClick={refresh} title="Refresh">
                         <RefreshCw size={14} />
@@ -119,10 +119,10 @@ export default function SectionWebcam() {
                 <div style={{
                     padding: '10px 14px',
                     marginBottom: 16,
-                    background: 'rgba(56, 189, 248, 0.12)',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    background: 'var(--settings-info-bg)',
+                    border: '1px solid var(--settings-info-border)',
                     borderRadius: 6,
-                    color: '#7dd3fc',
+                    color: 'var(--settings-info)',
                     fontSize: 13,
                     display: 'flex',
                     alignItems: 'center',
@@ -137,8 +137,8 @@ export default function SectionWebcam() {
                 <div style={{
                     padding: '12px 16px',
                     marginBottom: 16,
-                    background: 'rgba(74, 222, 128, 0.1)',
-                    border: '1px solid rgba(74, 222, 128, 0.35)',
+                    background: 'var(--settings-ok-bg)',
+                    border: '1px solid var(--settings-ok-border)',
                     borderRadius: 6,
                     display: 'flex',
                     alignItems: 'center',
@@ -147,12 +147,12 @@ export default function SectionWebcam() {
                     gap: 12,
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Sparkles size={18} color="#4ade80" />
+                        <Sparkles size={18} style={{ color: 'var(--settings-ok)' }} />
                         <div>
-                            <div style={{ fontWeight: 600, color: '#4ade80' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--settings-ok)' }}>
                                 Found connected camera: {unconfigured.name}
                             </div>
-                            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
                                 Ready to connect with zero configuration.
                             </div>
                         </div>

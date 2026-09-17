@@ -7,20 +7,23 @@
  *   • Documentation — placeholder for the docs site (Tawfiq msg 7396).
  */
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen } from 'lucide-react';
+import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen, Cloud } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
 import { GCodeParser } from '../../utils/gcodeParser';
 import { remoteAuthHeaders } from '../../utils/remoteAuth';
+import { isRemoteUpload, remoteCloud, type LibraryEntry } from '../Settings/api';
+import RemoteFileReview from './RemoteFileReview';
 import './Library.css';
 
-interface LibraryItem {
-    id: string;
-    name: string;
-    fileName: string;
-    size: number;
-    lineCount?: number;
-    savedAt: string;     // ISO
-}
+type LibraryItem = LibraryEntry;
+
+// Operator review must happen before the first load of a cloud upload (§5.7).
+const needsReview = (item: LibraryItem) => isRemoteUpload(item) && !item.provenance?.reviewed;
+
+const REVIEW_ERROR_TEXT: Record<string, string> = {
+    operator_required: 'Only the machine operator can review remote uploads. Open the kiosk with its operator link.',
+    operator_only: 'Remote uploads can only be reviewed on the machine\'s own screen.',
+};
 
 const FILEFINITY_URL = 'https://main.filefinity.com/model/6a9fed70af386fe917fce2f0/';
 // Documentation site URL — Tawfiq said leave it simple, link gets added later.
@@ -41,6 +44,10 @@ type View = 'home' | 'custom' | 'filefinity';
 export default function Library() {
     const [view, setView] = useState<View>('home');
     const [items, setItems] = useState<LibraryItem[]>([]);
+    const [filter, setFilter] = useState<'all' | 'remote'>('all');
+    const [review, setReview] = useState<{ item: LibraryItem; body: string } | null>(null);
+    const [reviewBusy, setReviewBusy] = useState(false);
+    const [reviewError, setReviewError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const setRawGcodeContent = useCNCStore((s) => s.setRawGcodeContent);
     const setFileInfo = useCNCStore((s) => s.setFileInfo);
@@ -53,7 +60,7 @@ export default function Library() {
 
     async function reload() {
         try {
-            const r = await fetch(`${BACKEND_BASE}/api/library`, { headers: remoteAuthHeaders() });
+            const r = await fetch(`${BACKEND_BASE}/api/library`, { credentials: 'include', headers: remoteAuthHeaders() });
             if (r.ok) setItems(await r.json());
         } catch (_) { /* offline — empty list */ }
     }
@@ -65,6 +72,7 @@ export default function Library() {
         try {
             const r = await fetch(`${BACKEND_BASE}/api/library`, {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
                 body: JSON.stringify({
                     name: file.name.replace(/\.[^.]+$/, ''),
@@ -90,10 +98,43 @@ export default function Library() {
             return;
         }
         try {
-            const r = await fetch(`${BACKEND_BASE}/api/library/${item.id}/body`, { headers: remoteAuthHeaders() });
+            const r = await fetch(`${BACKEND_BASE}/api/library/${item.id}/body`, { credentials: 'include', headers: remoteAuthHeaders() });
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const body = await r.text();
+            if (needsReview(item)) {
+                setReviewError(null);
+                setReview({ item, body });
+                return;
+            }
+            applyBody(item, body);
+        } catch (err) {
+            addConsoleLog('error', `Library load failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
 
+    async function confirmReview() {
+        if (!review) return;
+        const { item, body } = review;
+        setReviewBusy(true);
+        setReviewError(null);
+        try {
+            await remoteCloud.reviewLibraryEntry(item.id);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setReviewError(REVIEW_ERROR_TEXT[msg] || `Review failed: ${msg}`);
+            setReviewBusy(false);
+            return;
+        }
+        const reviewed = { ...item, provenance: item.provenance ? { ...item.provenance, reviewed: true } : item.provenance };
+        setItems((prev) => prev.map((i) => (i.id === item.id ? reviewed : i)));
+        setReviewBusy(false);
+        setReview(null);
+        addConsoleLog('info', `Remote upload reviewed: ${item.fileName}`);
+        applyBody(reviewed, body);
+    }
+
+    function applyBody(item: LibraryItem, body: string) {
+        try {
             // Mirror Sidebar's upload pipeline: parse via GCodeParser so the
             // Visualizer3D, sender, and rest of the store actually see the
             // toolpath. Without this the load is a no-op visually. Tawfiq
@@ -123,10 +164,23 @@ export default function Library() {
     }
 
     async function deleteItem(id: string) {
-        try { await fetch(`${BACKEND_BASE}/api/library/${id}`, { method: 'DELETE', headers: remoteAuthHeaders() }); }
+        try { await fetch(`${BACKEND_BASE}/api/library/${id}`, { method: 'DELETE', credentials: 'include', headers: remoteAuthHeaders() }); }
         catch (_) {}
         setItems((prev) => prev.filter((i) => i.id !== id));
     }
+
+    async function deleteRemoteUploads() {
+        const remoteItems = items.filter(isRemoteUpload);
+        if (remoteItems.length === 0) return;
+        if (!confirm(`Delete all ${remoteItems.length} remote upload${remoteItems.length === 1 ? '' : 's'}? Files you added on this machine are kept.`)) return;
+        for (const item of remoteItems) await deleteItem(item.id);
+        addConsoleLog('info', `Deleted ${remoteItems.length} remote upload${remoteItems.length === 1 ? '' : 's'} from the Library`);
+        setFilter('all');
+        reload();
+    }
+
+    const remoteCount = items.filter(isRemoteUpload).length;
+    const visibleItems = filter === 'remote' ? items.filter(isRemoteUpload) : items;
 
     if (view === 'custom') {
         return (
@@ -135,6 +189,24 @@ export default function Library() {
                     <button className="lib-back" onClick={() => setView('home')}>← Library</button>
                     <h2>Custom Library</h2>
                     <div className="lib-spacer" />
+                    {remoteCount > 0 && (
+                        <>
+                            <select
+                                className="lib-btn"
+                                value={filter}
+                                onChange={(e) => setFilter(e.target.value as 'all' | 'remote')}
+                                aria-label="Filter library"
+                            >
+                                <option value="all">All files</option>
+                                <option value="remote">Remote uploads ({remoteCount})</option>
+                            </select>
+                            {filter === 'remote' && (
+                                <button className="lib-btn lib-btn-danger" onClick={deleteRemoteUploads} title="Delete every file uploaded through the cloud relay">
+                                    <Trash2 size={14} /> Delete remote uploads
+                                </button>
+                            )}
+                        </>
+                    )}
                     <button className="lib-btn lib-btn-primary" onClick={() => fileInputRef.current?.click()}>
                         <Plus size={14} /> Add file
                     </button>
@@ -142,7 +214,7 @@ export default function Library() {
                         style={{ display: 'none' }} onChange={onUpload} />
                 </header>
 
-                {items.length === 0 ? (
+                {visibleItems.length === 0 ? (
                     <div className="lib-empty">
                         <FolderOpen size={56} />
                         <h3>No saved designs yet</h3>
@@ -161,10 +233,23 @@ export default function Library() {
                             </tr>
                         </thead>
                         <tbody>
-                            {items.map((item) => (
+                            {visibleItems.map((item) => (
                                 <tr key={item.id}>
-                                    <td><FileText size={14} /></td>
-                                    <td><b>{item.name}</b></td>
+                                    <td>{isRemoteUpload(item) ? <Cloud size={14} /> : <FileText size={14} />}</td>
+                                    <td>
+                                        <b>{item.name}</b>
+                                        {isRemoteUpload(item) && (
+                                            <>
+                                                <span className={`rfr-badge${item.provenance?.reviewed ? ' reviewed' : ''}`}>
+                                                    Remote upload by {item.provenance?.uploadedBy || 'unknown'}
+                                                </span>
+                                                <span className="rfr-sub">
+                                                    Received {item.provenance?.receivedAt ? new Date(item.provenance.receivedAt).toLocaleString() : '—'}
+                                                    {item.provenance?.reviewed ? ' · reviewed' : ' · review before loading'}
+                                                </span>
+                                            </>
+                                        )}
+                                    </td>
                                     <td><code>{item.fileName}</code></td>
                                     <td>{new Date(item.savedAt).toLocaleString()}</td>
                                     <td>{fmtSize(item.size)}</td>
@@ -182,6 +267,17 @@ export default function Library() {
                             ))}
                         </tbody>
                     </table>
+                )}
+
+                {review && (
+                    <RemoteFileReview
+                        entry={review.item}
+                        body={review.body}
+                        busy={reviewBusy}
+                        error={reviewError}
+                        onCancel={() => { if (!reviewBusy) setReview(null); }}
+                        onLoad={confirmReview}
+                    />
                 )}
             </div>
         );

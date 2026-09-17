@@ -51,9 +51,14 @@ fi
 # chromium is "chromium" on current Raspberry Pi OS, "chromium-browser" on older images.
 CHROMIUM_PKG=chromium
 apt-cache show chromium >/dev/null 2>&1 || CHROMIUM_PKG=chromium-browser
+# network-manager + polkit back Settings -> Wi-Fi (nmcli). Both are already on
+# a full Raspberry Pi OS image; a lite base may not have them.
+POLKIT_PKG=polkitd
+apt-cache show polkitd >/dev/null 2>&1 || POLKIT_PKG=policykit-1
 apt-get install -y --no-install-recommends \
     cage seatd wlr-randr "$CHROMIUM_PKG" fonts-dejavu-core fonts-noto-color-emoji \
-    libudev-dev build-essential python3 curl rsync exfatprogs dosfstools
+    libudev-dev build-essential python3 curl rsync exfatprogs dosfstools \
+    network-manager "$POLKIT_PKG"
 
 # -------------------------------------------------------------- user & app
 log "Creating the kiosk user '$APP_USER'"
@@ -61,7 +66,7 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --create-home --shell /usr/sbin/nologin "$APP_USER"
 fi
 # serial port, camera, GPU, touch input, raw USB (firmware DFU)
-for g in dialout video render input plugdev audio; do
+for g in dialout video render input plugdev audio netdev; do
     getent group "$g" >/dev/null && usermod -aG "$g" "$APP_USER"
 done
 passwd -l "$APP_USER" >/dev/null
@@ -89,6 +94,10 @@ install -m 0755 "$F/kiosk-launch.sh"            /usr/local/bin/onefinity-kiosk
 install -m 0644 "$F/onefinity-backend.service"  /etc/systemd/system/
 install -m 0644 "$F/onefinity-kiosk.service"    /etc/systemd/system/
 install -m 0644 "$F/99-onefinity.rules"         /etc/udev/rules.d/
+# Wi-Fi setup from Settings -> Wi-Fi: NetworkManager asks polkit before it
+# will scan or join, and the kiosk user has no session to answer a prompt.
+mkdir -p /etc/polkit-1/rules.d
+install -m 0644 "$F/50-onefinity-network.rules" /etc/polkit-1/rules.d/
 install -m 0755 "$F/usb-automount.sh"           /usr/local/bin/onefinity-usb-mount
 [ -f /etc/onefinity-kiosk.conf ] || install -m 0644 "$F/onefinity-kiosk.conf" /etc/onefinity-kiosk.conf
 for d in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do

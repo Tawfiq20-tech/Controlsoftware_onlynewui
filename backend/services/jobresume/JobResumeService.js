@@ -61,9 +61,13 @@ class JobResumeService extends EventEmitter {
      * @param {object}   [opts.logger]
      * @param {function} opts.getController  Returns active controller or null
      * @param {function} [opts.getConfig]    Returns ConfigStore instance or null
+     * @param {function} [opts.onProgramLoaded] Called with {name, content} after
+     *                   the resume program is loaded into the controller, so
+     *                   the engine (and remote UIs) show what it really holds
      */
-    constructor({ dataDir, io, logger, getController, getConfig }) {
+    constructor({ dataDir, io, logger, getController, getConfig, onProgramLoaded }) {
         super();
+        this.onProgramLoaded = typeof onProgramLoaded === 'function' ? onProgramLoaded : null;
         this.io            = io;
         this._log          = logger || console;
         this.getController = getController;
@@ -226,6 +230,7 @@ class JobResumeService extends EventEmitter {
             // delay the reloaded program is one line shorter per M3 before the
             // resume point, and lastExecutedLine + 1 skips a line.
             ctl.command('gcode:load', cp.filename, cp.gcodeText, cp.spindleDelay, cp.compileOptions);
+            this._notifyProgramLoaded(cp.filename, cp.gcodeText);
             ctl.command('gcode:startFromLine', fromLine, { safeZ });
         } else {
             if (!opts.skipPreamble) {
@@ -238,9 +243,11 @@ class JobResumeService extends EventEmitter {
                 const remainingLines = origLines.slice(Math.max(0, fromLine - 1));
                 gcodeToLoad = preamble.concat(remainingLines).join('\n');
                 ctl.command('gcode:load', cp.filename, gcodeToLoad);
+                this._notifyProgramLoaded(cp.filename, gcodeToLoad);
                 ctl.command('gcode:startFromLine', 1);
             } else {
                 ctl.command('gcode:load', cp.filename, gcodeToLoad);
+                this._notifyProgramLoaded(cp.filename, gcodeToLoad);
                 ctl.command('gcode:startFromLine', fromLine);
             }
         }
@@ -258,6 +265,15 @@ class JobResumeService extends EventEmitter {
     /**
      * Clear the checkpoint (user decided not to resume).
      */
+    _notifyProgramLoaded(name, content) {
+        if (!this.onProgramLoaded) return;
+        try {
+            this.onProgramLoaded({ name, content: typeof content === 'string' ? content : String(content || '') });
+        } catch (err) {
+            this._log.warn?.(`[JobResume] program-loaded hook failed: ${err && err.message}`);
+        }
+    }
+
     clearCheckpoint() {
         this.store.clear();
         this.io.emit('job:checkpoint', null);

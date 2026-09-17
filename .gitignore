@@ -13,3 +13,21 @@ frontend/node_modules/
 # Raspberry Pi bundle / image builds
 dist-pi/
 backend/data/controller_last_seen.json
+
+# Per-machine identity and secrets: regenerated on first boot, and committing
+# them would put one shared identity/token on every machine (see the matching
+# excludes in pi-kiosk/build-bundle.sh).
+backend/data/device-identity.json
+backend/data/device-identity.json.bak
+backend/data/operator-token
+backend/data/cloud-link.json
+backend/data/cloud-inbox/
+backend/data/job_resume.json
+backend/data/job_resume.json.bak
+backend/data/job_resume_gcode.nc
+
+# Dependencies are installed per-host, never committed.
+node_modules/
+
+# Local snapshot taken before the vertical UI rework; not part of the product.
+_backup_before_vertical_industrial_ui/

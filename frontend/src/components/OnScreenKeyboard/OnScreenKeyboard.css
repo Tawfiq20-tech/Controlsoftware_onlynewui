@@ -1,0 +1,212 @@
+/* ===== On-screen keyboard (kiosk touch input) ===== */
+
+:root {
+    /* Read by App.css to shrink the app while the sheet is up. */
+    --osk-height: 300px;
+}
+
+.osk {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10050;
+    height: var(--osk-height);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 8px 10px;
+    background: var(--bg-sidebar, #121721);
+    border-top: 2px solid var(--border-ui, #242c3d);
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.38);
+    font-family: var(--font-ui, system-ui, sans-serif);
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+}
+
+/* ── Title strip: caret controls, clear, hide ── */
+.osk-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    height: 34px;
+}
+
+.osk-bar-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim, #9ca3af);
+    padding-left: 4px;
+}
+
+.osk-bar-btn {
+    min-width: 52px;
+    height: 30px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-panel, #1d2127);
+    color: var(--text-main, #d1d5db);
+    border: 1px solid var(--border-ui, #242c3d);
+    border-radius: 7px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.osk-bar-btn:active {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.1));
+}
+
+.osk-bar-close {
+    min-width: 44px;
+    color: var(--danger, #ef4444);
+}
+
+/* ── Key grid ── */
+.osk-rows {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+}
+
+.osk-row {
+    flex: 1;
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+    min-height: 0;
+}
+
+.osk-key {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-panel, #1d2127);
+    color: var(--text-main, #e6edf3);
+    border: 1px solid var(--border-ui, #2a313d);
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 90ms ease, transform 90ms ease;
+}
+
+.osk-key:active {
+    background: var(--primary-accent, #f59e0b);
+    color: var(--accent-text, #10131a);
+    transform: translateY(1px);
+}
+
+.osk-key-wide {
+    flex: 1.6 1 0;
+    font-size: 15px;
+    letter-spacing: 0.04em;
+}
+
+.osk-key-space {
+    flex: 4 1 0;
+    font-size: 14px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim, #9ca3af);
+}
+
+.osk-key-alt {
+    background: var(--bg-main, #16191e);
+    color: var(--text-dim, #9ca3af);
+}
+
+.osk-key-go {
+    background: var(--primary-accent, #f59e0b);
+    color: var(--accent-text, #10131a);
+    border-color: var(--primary-accent, #f59e0b);
+}
+
+.osk-key-go:active {
+    filter: brightness(0.9);
+}
+
+/* Shift: lit while armed, outlined while caps-locked. */
+.osk-key.osk-on {
+    background: var(--primary-accent, #f59e0b);
+    color: var(--accent-text, #10131a);
+    border-color: var(--primary-accent, #f59e0b);
+}
+
+.osk-key.osk-locked {
+    background: transparent;
+    color: var(--primary-accent, #f59e0b);
+    border-color: var(--primary-accent, #f59e0b);
+    border-width: 2px;
+}
+
+/* ── Numeric pad: a narrow, centred block, not a full-width stretch ── */
+.osk-numeric .osk-row {
+    max-width: 460px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.osk-numeric .osk-key {
+    font-size: 24px;
+}
+
+/* ── Short screens: keep the keys reachable ── */
+@media (max-height: 700px) {
+    :root {
+        --osk-height: 250px;
+    }
+    .osk-key {
+        min-height: 38px;
+        font-size: 18px;
+    }
+}
+
+/* ── Wide desktop: don't stretch keys across a 2000px monitor ── */
+@media (min-width: 1100px) {
+    .osk-rows {
+        width: 100%;
+        max-width: 1000px;
+        margin: 0 auto;
+    }
+}
+
+/* ── Fixed overlays don't shrink with .app, so lift them off the sheet ──
+   These all use `inset: 0` (or an explicit bottom) and centre their content
+   with flex, so capping the bottom re-centres the dialog above the keys. */
+body.osk-open .pm-overlay,
+body.osk-open .sfl-overlay,
+body.osk-open .ro-overlay,
+body.osk-open .modal-overlay,
+body.osk-open .mp-apply-overlay,
+body.osk-open .ca-confirm-backdrop,
+body.osk-open .fw-confirm-overlay,
+body.osk-open .remote-pin-screen {
+    bottom: var(--osk-height, 300px);
+}
+
+/* The assistant is anchored bottom-right rather than centred. */
+body.osk-open .chatbot-window {
+    bottom: calc(var(--osk-height, 300px) + 12px);
+    height: min(700px, calc(100dvh - var(--osk-height, 300px) - 28px));
+    max-height: calc(100dvh - var(--osk-height, 300px) - 28px);
+}
+
+/* Its launcher parks in the status bar, which the sheet now covers. */
+body.osk-open .chatbot-fab {
+    display: none;
+}

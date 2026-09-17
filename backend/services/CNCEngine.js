@@ -21,8 +21,21 @@ const { createSessionLogger } = require('./SessionLogger');
 const { ConfigStore } = require('./ConfigStore');
 const { isRotaryFile } = require('../lib/rotary');
 const remoteDiagMirror = require('./RemoteDiagMirror');
-const { ControllerRestartMonitor } = require('./ControllerRestartMonitor');
+const configPolicy = require('./remoteAccess/configPolicy');
+const { hasLocalControl, isOperatorIdentity, LOCAL_ROOM } = require('./remoteAccess/RemoteAccessService');
 const logger = require('../logger');
+
+/** Handshake identity set by RemoteAccessService.socketGate (absent without the gate: treated as remote). */
+function socketIdentity(socket) {
+    return socket && socket.data ? socket.data.identity : undefined;
+}
+
+const { ControllerRestartMonitor } = require('./ControllerRestartMonitor');
+
+/** RemoteDiag status without the mirror URL, for sockets without local control. */
+function publicDiagStatus(status) {
+    return { ...status, url: null };
+}
 
 // Commands that start the machine on the loaded program: they wait for a file
 // load still being prepared, or they would run the previous file.
@@ -183,7 +196,10 @@ class CNCEngine extends EventEmitter {
             // routes everything through controller.command → 'command' event,
             // not as a separate top-level socket event). On connect we still
             // push current status so the frontend hydrates the badge state.
-            socket.emit('safety:remoteDiagStatus', remoteDiagMirror.status());
+            {
+                const diag = remoteDiagMirror.status();
+                socket.emit('safety:remoteDiagStatus', hasLocalControl(socketIdentity(socket)) ? diag : publicDiagStatus(diag));
+            }
 
             // ─── Macros ──────────────────────────────────────────
             socket.on('macro:list', (callback) => {
@@ -245,16 +261,33 @@ class CNCEngine extends EventEmitter {
             });
 
             // ─── Config / Preferences ────────────────────────────
+            // The LAN packet filter already refuses these events; the checks
+            // below keep secrets and remote-channel settings safe regardless.
             socket.on('config:get', (key, callback) => {
+                if (typeof callback !== 'function') return;
+                if (typeof key !== 'string') return callback(null, undefined);
                 const value = this.config.get(key);
-                if (typeof callback === 'function') callback(null, value);
+                if (hasLocalControl(socketIdentity(socket))) return callback(null, value);
+                const pub = configPolicy.publicConfigChange(key, value);
+                return callback(null, pub ? pub.value : undefined);
             });
             socket.on('config:set', (key, value) => {
+                if (typeof key !== 'string' || !key) return;
+                const identity = socketIdentity(socket);
+                if (!hasLocalControl(identity)
+                    || (!isOperatorIdentity(identity)
+                        && configPolicy.isOperatorOnlyConfigWrite(key, value, this.config.get('preferences', {})))) {
+                    logger.warn(`[Engine] config:set '${key}' refused: operator only`);
+                    socket.emit('config:denied', { key, error: 'operator_required' });
+                    return;
+                }
                 this.config.set(key, value);
-                this.io.emit('config:change', { key, value });
+                this._emitConfigChange(key, value);
             });
             socket.on('config:getAll', (callback) => {
-                if (typeof callback === 'function') callback(null, this.config.getAll());
+                if (typeof callback !== 'function') return;
+                const all = this.config.getAll();
+                callback(null, hasLocalControl(socketIdentity(socket)) ? all : configPolicy.publicConfigView(all));
             });
 
             // ─── Debug Monitor ───────────────────────────────────
@@ -378,6 +411,26 @@ class CNCEngine extends EventEmitter {
         });
     }
 
+    /**
+     * Sends an event in full to sockets with local control and, when
+     * publicPayload is given, that redacted form to every other socket.
+     */
+    _emitScoped(event, fullPayload, publicPayload) {
+        const io = this.io;
+        if (!io) return;
+        if (typeof io.to === 'function' && typeof io.except === 'function') {
+            io.to(LOCAL_ROOM).emit(event, fullPayload);
+            if (publicPayload !== undefined) io.except(LOCAL_ROOM).emit(event, publicPayload);
+        } else if (publicPayload !== undefined && typeof io.emit === 'function') {
+            io.emit(event, publicPayload);
+        }
+    }
+
+    _emitConfigChange(key, value) {
+        const pub = configPolicy.publicConfigChange(key, value);
+        this._emitScoped('config:change', { key, value }, pub || undefined);
+    }
+
     // ─── Initial State ───────────────────────────────────────────────
 
     _sendInitialState(socket) {
@@ -432,7 +485,10 @@ class CNCEngine extends EventEmitter {
         // Always send config data (macros, tools, preferences)
         socket.emit('macro:list', this.config.getMacros());
         socket.emit('tool:list', this.config.getTools());
-        socket.emit('config:all', this.config.getAll());
+        // Full config (telegram.token, RemoteDiag token, camera URLs) only
+        // to sockets with local control; everyone else gets the public view.
+        const all = this.config.getAll();
+        socket.emit('config:all', hasLocalControl(socketIdentity(socket)) ? all : configPolicy.publicConfigView(all));
     }
 
     // ─── Port Listing ────────────────────────────────────────────────
@@ -1064,6 +1120,16 @@ class CNCEngine extends EventEmitter {
             const opts = args[0] || {};
             const enable = !!opts.enabled;
             const url = typeof opts.url === 'string' ? opts.url : null;
+            // Opening or retargeting the mirror is operator-only: with
+            // remoteDiagAllowInject it is a remote control channel that
+            // bypasses RemoteCommandGate. Anyone at the machine may turn it off.
+            if ((enable || url) && !isOperatorIdentity(socketIdentity(socket))) {
+                logger.warn('[RemoteDiag] toggle refused: operator only');
+                const diag = remoteDiagMirror.status();
+                socket.emit('safety:remoteDiagStatus', hasLocalControl(socketIdentity(socket)) ? diag : publicDiagStatus(diag));
+                socket.emit('remote:denied', { event: 'command', cmd, code: 'operator_required', message: 'Only the machine’s own screen can enable remote diagnostics' });
+                return;
+            }
             if (url) remoteDiagMirror.setUrl(url);
             if (enable) {
                 remoteDiagMirror.start();
@@ -1074,11 +1140,15 @@ class CNCEngine extends EventEmitter {
                 this.config.set('preferences.remoteDiagEnabled', enable);
                 if (url) this.config.set('preferences.remoteDiagUrl', url);
             } catch (_) {}
-            this.io.emit('safety:remoteDiagStatus', remoteDiagMirror.status());
+            {
+                const diag = remoteDiagMirror.status();
+                this._emitScoped('safety:remoteDiagStatus', diag, publicDiagStatus(diag));
+            }
             return;
         }
         if (cmd === 'safety:remoteDiagStatus') {
-            socket.emit('safety:remoteDiagStatus', remoteDiagMirror.status());
+            const diag = remoteDiagMirror.status();
+            socket.emit('safety:remoteDiagStatus', hasLocalControl(socketIdentity(socket)) ? diag : publicDiagStatus(diag));
             return;
         }
 
@@ -1316,6 +1386,29 @@ class CNCEngine extends EventEmitter {
             this.sessionLogger.logJob({ event: 'loaded', name: fileName, total: senderTotal });
         }
         return { ok: true };
+    }
+
+    /**
+     * Record a program another service loaded straight into the controller
+     * (job resume), so loadedFile names what the controller really holds.
+     */
+    noteProgramLoaded(name, gcodeContent) {
+        const content = typeof gcodeContent === 'string' ? gcodeContent : '';
+        const total = (this.controller && this.controller.job && this.controller.job.totalLineCount)
+            || this.controller?.sender?.total
+            || content.split(/\r?\n/).length;
+        this.loadedFile = {
+            name: name || 'untitled.gcode',
+            total,
+            size: content.length,
+            isRotary: isRotaryFile(content),
+            // A checkpoint-resume program (preamble + remaining lines) under the
+            // original name: never startable "from the beginning" remotely.
+            // _handleFileLoad builds loadedFile without this flag.
+            resume: true,
+        };
+        this._loadedGcodeContent = content;
+        this.io.emit('file:load', this.loadedFile);
     }
 
     _handleFileUnload(socket) {

@@ -320,70 +320,83 @@
     font-weight: 800;
 }
 
-/* Circular Jog Control - Clean Reference Design */
-.jog-radial-container {
+/* Square XY Jog Pad — 3×3 grid of square keys */
+.jog-square-pad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+    max-width: 210px;
+    margin: 0 auto;
+}
+
+.jog-sq-btn {
+    aspect-ratio: 1;
+    min-width: 0;
     display: flex;
-    justify-content: center;
     align-items: center;
-}
-
-.jog-clean-svg {
-    width: 240px;
-    height: 240px;
-}
-
-.jog-ref-segment {
-    fill: #8fa3b3;
-    stroke: #1a1a1a;
-    stroke-width: 2;
-    cursor: pointer;
-    transition: fill var(--transition-fast);
-}
-
-.jog-ref-segment:hover {
-    fill: #9fb5c7;
-}
-
-.jog-ref-segment:active {
-    fill: var(--primary-accent);
-}
-
-.jog-ref-icon {
-    fill: white;
-    stroke: none;
-}
-
-.jog-ref-label {
-    fill: white;
+    justify-content: center;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    background: #8fa3b3;
+    color: #fff;
     font-family: var(--font-sans);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-}
-
-.jog-ref-stop {
-    fill: #dc2626;
-    stroke: #1a1a1a;
-    stroke-width: 2;
-    cursor: pointer;
-    transition: fill var(--transition-fast);
-}
-
-.jog-ref-stop:hover {
-    fill: #ef4444;
-}
-
-.jog-ref-stop:active {
-    fill: #b91c1c;
-}
-
-.jog-ref-stop-text {
-    fill: white;
-    font-family: var(--font-sans);
-    font-size: 11px;
+    font-size: 16px;
     font-weight: 800;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    cursor: pointer;
+    touch-action: manipulation;
+    transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.jog-sq-btn:hover {
+    background: #9fb5c7;
+}
+
+/* Diagonal keys: a darker shade of the same slate */
+.jog-sq-corner {
+    background: #72889a;
+}
+
+.jog-sq-corner:hover {
+    background: #8196a8;
+}
+
+/* X±/Y± keys: same slate as the active header tab (Prepare, Carve…) */
+.jog-sq-axis {
+    background: var(--accent);
+    color: var(--accent-text);
+}
+
+.jog-sq-axis:hover {
+    background: var(--accent);
+    filter: brightness(1.15);
+}
+
+.jog-sq-btn:active {
+    background: var(--primary-accent);
+    transform: scale(0.96);
+}
+
+.jog-sq-diag {
+    width: 14px;
+    height: 14px;
+    fill: #fff;
+}
+
+.jog-sq-stop {
+    background: #dc2626;
+    border-color: #1a1a1a;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+}
+
+.jog-sq-stop:hover {
+    background: #ef4444;
+}
+
+.jog-sq-stop:active {
+    background: #b91c1c;
 }
 
 /* Z Control */
@@ -406,10 +419,11 @@
 .jog-z-btn {
     width: 64px;
     height: 64px;
-    border-radius: var(--radius-md);
-    border: 2px solid #1a1a1a;
-    background: #8fa3b3;
-    color: rgba(255, 255, 255, 1);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    /* Same slate as the X±/Y± keys and the active header tab */
+    background: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
     display: flex;
     flex-direction: column;
@@ -423,8 +437,9 @@
 }
 
 .jog-z-btn:hover {
-    background: #9fb5c7;
-    color: #fff;
+    background: var(--accent);
+    filter: brightness(1.15);
+    color: var(--accent-text);
     transform: translateY(-1px);
 }
 
