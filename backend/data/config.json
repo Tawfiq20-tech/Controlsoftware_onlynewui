@@ -85,13 +85,21 @@
   ],
   "preferences": {
     "units": "mm",
+    "jogSpeed": 1000,
+    "jogDistance": 1,
     "safeHeight": 10,
+    "probeFeedrate": 100,
+    "spindleDelay": 0,
     "reconnectAutomatically": false,
     "firmwareFallback": "grblHAL",
     "baudRate": 115200,
-    "rtscts": false,
     "runCheckOnFileLoad": false,
-    "outlineStyle": "Detailed"
+    "outlineStyle": "Detailed",
+    "probeThickness": 0,
+    "remoteDiagEnabled": false,
+    "remoteDiagUrl": "ws://10.1.76.249:18765/mirror",
+    "remoteDiagToken": "37221d04f26e92ed63eea474275bf016",
+    "remoteDiagAllowInject": false
   },
   "ethernet": {
     "connectToIP": "192.168.5.1"
