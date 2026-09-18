@@ -24,3 +24,9 @@ SUBSYSTEM=="input", ATTRS{idVendor}=="0483", ENV{LIBINPUT_IGNORE_DEVICE}="1"
 # picker can open them. No desktop automounter runs on the kiosk.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN{program}+="/usr/local/bin/onefinity-usb-mount add %k"
 ACTION=="remove", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", RUN{program}+="/usr/local/bin/onefinity-usb-mount remove %k"
+
+# Touchscreen re-plugged while the kiosk is running (it can drop off USB for a
+# moment when the controller is plugged in): restart the screen so Chromium
+# picks touch up again. onefinity-touch-replug ignores the boot-time appearance
+# and rate-limits itself.
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="onefinity-touch-replug.service"

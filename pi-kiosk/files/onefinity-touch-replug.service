@@ -1,0 +1,8 @@
+[Unit]
+Description=Recover touch after the touchscreen re-plugs (see onefinity-touch-replug)
+# Started by udev (SYSTEMD_WANTS in 99-onefinity.rules) each time a
+# touchscreen appears; the script itself ignores the boot-time appearance.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/onefinity-touch-replug
