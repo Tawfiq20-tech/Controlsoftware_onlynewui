@@ -7,7 +7,7 @@
  *   • Documentation — placeholder for the docs site (Tawfiq msg 7396).
  */
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen, Cloud } from 'lucide-react';
+import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen, Cloud, QrCode } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
 import { GCodeParser } from '../../utils/gcodeParser';
 import { remoteAuthHeaders } from '../../utils/remoteAuth';
@@ -43,6 +43,31 @@ type View = 'home' | 'custom' | 'filefinity';
 
 export default function Library() {
     const [view, setView] = useState<View>('home');
+    /* Filefinity lives on the internet, and the kiosk's Chromium blocks every
+       URL but this app's own. window.open() there put the operator in a blocked
+       window with no tab bar, no keyboard and no way back -- a power cycle was
+       the only exit. Show the address as a QR to scan instead. */
+    const [showFilefinityQr, setShowFilefinityQr] = useState(false);
+    const [filefinityQr, setFilefinityQr] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!showFilefinityQr || filefinityQr) return;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const r = await fetch(`/api/remote/qr?url=${encodeURIComponent(FILEFINITY_URL)}`, {
+                    credentials: 'include',
+                    headers: { ...remoteAuthHeaders() },
+                });
+                if (!r.ok) return;
+                const data = await r.json();
+                if (!cancelled) setFilefinityQr(data.dataUrl ?? null);
+            } catch (_) {
+                /* The address is shown as text either way. */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [showFilefinityQr, filefinityQr]);
     const [items, setItems] = useState<LibraryItem[]>([]);
     const [filter, setFilter] = useState<'all' | 'remote'>('all');
     const [review, setReview] = useState<{ item: LibraryItem; body: string } | null>(null);
@@ -292,9 +317,9 @@ export default function Library() {
                     <div className="lib-spacer" />
                     <button
                         className="lib-btn lib-btn-primary"
-                        onClick={() => window.open(FILEFINITY_URL, '_blank', 'noopener,noreferrer')}
+                        onClick={() => setShowFilefinityQr((v) => !v)}
                     >
-                        <Globe size={14} /> Open Filefinity ↗
+                        <QrCode size={14} /> {showFilefinityQr ? 'Hide code' : 'Open on my phone'}
                     </button>
                 </header>
 
@@ -305,13 +330,25 @@ export default function Library() {
                         Access community-shared G-code projects, CNC templates, and design files.
                         Download files from Filefinity, then save them to your Custom Library to load and carve directly on your machine.
                     </p>
+                    {showFilefinityQr && (
+                        <div className="lib-qr">
+                            {filefinityQr
+                                ? <img src={filefinityQr} alt="Filefinity address as a QR code" width={180} height={180} />
+                                : <div className="lib-qr-wait">Generating code…</div>}
+                            <div className="lib-qr-url">{FILEFINITY_URL}</div>
+                            <div className="lib-qr-hint">
+                                Scan with your phone to browse Filefinity there, then copy the file
+                                onto a USB stick or send it over remote access.
+                            </div>
+                        </div>
+                    )}
                     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
                         <button
                             className="lib-btn lib-btn-primary"
                             style={{ padding: '9px 18px', fontSize: 13 }}
-                            onClick={() => window.open(FILEFINITY_URL, '_blank', 'noopener,noreferrer')}
+                            onClick={() => setShowFilefinityQr((v) => !v)}
                         >
-                            <Globe size={15} /> Open Filefinity ↗
+                            <QrCode size={15} /> {showFilefinityQr ? 'Hide code' : 'Open on my phone'}
                         </button>
                         <button
                             className="lib-btn"

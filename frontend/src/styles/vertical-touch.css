@@ -191,7 +191,9 @@
 
 /* ─────────────── Status bar ─────────────── */
 .app.is-vertical .status-bar {
-    height: 48px;
+    /* Tall enough to hold the 52px assistant button without it overhanging
+       the content above (see .chatbot-fab below). */
+    height: 58px;
     font-size: 17px;
     padding: 0 10px;
 }
@@ -232,18 +234,30 @@
 /* Assistant launcher parks inside the status bar instead of floating
    over jog keys / macro tiles. */
 .app.is-vertical .status-bar {
-    padding-right: 62px;
+    padding-right: 76px;
 }
+/* 52px: a finger needs 44px minimum, and this sits in the hardest corner of
+   the screen to hit. It is inset from both edges rather than tucked against
+   the bezel, where half the target used to fall off the glass. */
 .app.is-vertical .chatbot-fab {
-    bottom: 5px;
-    right: 8px;
-    width: 40px;
-    height: 40px;
-    border-width: 1px;
+    bottom: 3px;
+    right: 14px;
+    width: 52px;
+    height: 52px;
+    border-width: 2px;
+    /* Taps must not wait on a double-tap-zoom decision. */
+    touch-action: manipulation;
 }
 .app.is-vertical .chatbot-fab svg {
-    width: 21px;
-    height: 21px;
+    width: 26px;
+    height: 26px;
+}
+/* The hover grow is a mouse affordance; on glass it just delays the press. */
+.app.is-vertical .chatbot-fab:hover {
+    transform: none;
+}
+.app.is-vertical .chatbot-fab:active {
+    transform: scale(0.94);
 }
 
 /* ─────────────── Monitor mode: column proportions ─────────────── */
@@ -1235,4 +1249,141 @@ body:has(.app.is-vertical) .camera-fullscreen-close svg {
         flex: 1 0 100%;
         margin: 0;
     }
+}
+
+/* ═══════════════ Kiosk responsiveness (Raspberry Pi) ═══════════════
+ *
+ * The pendant runs Chromium on a Pi's VideoCore GPU, which is an order of
+ * magnitude slower than the desktop this UI was styled on. Three things were
+ * costing most of the frame budget and making taps feel dropped:
+ *
+ *   1. backdrop-filter over the live 3D canvas. Every blurred panel forces the
+ *      compositor to read the GPU framebuffer back, blur it and re-upload, on
+ *      every frame the viewport redraws. The 3D HUD, toolbar, playback bar and
+ *      legend sit on top of the canvas permanently, so this ran continuously.
+ *      All of them were already 85-96% opaque, so dropping the blur costs
+ *      almost nothing visually.
+ *   2. Animations running forever on things that are always on screen -- each
+ *      one keeps a compositor layer awake and repainting while idle.
+ *   3. `transition: all`, which makes the browser watch every property,
+ *      including layout-triggering ones, on every interactive element.
+ *
+ * Everything here is scoped to .app.is-vertical, so the desktop build keeps
+ * the original look.
+ */
+
+/* ── 1. No blur passes on the kiosk ── */
+.app.is-vertical .v3d-hud,
+.app.is-vertical .v3d-toolbar,
+.app.is-vertical .v3d-playback,
+.app.is-vertical .v3d-legend,
+.app.is-vertical .v3d-info-card,
+.app.is-vertical .v3d-simulate-card,
+.app.is-vertical .v3d-carve-banner,
+.app.is-vertical .v3d-modal-overlay,
+.app.is-vertical .job-control-bar,
+.app.is-vertical .viewport-toolbar,
+.app.is-vertical .viewport-status,
+.app.is-vertical .right-tool-btn,
+.app.is-vertical .visualizer-empty-content,
+.app.is-vertical .workspace-controls,
+.app.is-vertical .workspace-info,
+.app.is-vertical .workspace-stats,
+.app.is-vertical .view-presets-panel,
+.app.is-vertical .file-management,
+.app.is-vertical .homing-overlay,
+.app.is-vertical .pm-overlay,
+.app.is-vertical .sfl-overlay,
+.app.is-vertical .ro-overlay,
+.app.is-vertical .modal-overlay,
+.app.is-vertical .ca-confirm-backdrop,
+.app.is-vertical .shortcuts-overlay-backdrop {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* Opaque, since there is no blur left to hide what is behind them. */
+.app.is-vertical .v3d-hud,
+.app.is-vertical .v3d-toolbar,
+.app.is-vertical .v3d-playback,
+.app.is-vertical .v3d-legend,
+.app.is-vertical .v3d-info-card,
+.app.is-vertical .job-control-bar {
+    background: var(--bg-panel, #1d2127);
+}
+
+/* Modal scrims lose the blur, so they darken instead to keep the dialog
+   readable against a busy 3D background. */
+.app.is-vertical .pm-overlay,
+.app.is-vertical .sfl-overlay,
+.app.is-vertical .ro-overlay,
+.app.is-vertical .modal-overlay,
+.app.is-vertical .ca-confirm-backdrop,
+.app.is-vertical .shortcuts-overlay-backdrop,
+.app.is-vertical .v3d-modal-overlay {
+    background: rgba(5, 8, 14, 0.9);
+}
+
+/* ── 2. Nothing animates forever while idle ── */
+.app.is-vertical .sb-rd-dot.live,
+.app.is-vertical .sb-rd-dot.reconnecting,
+.app.is-vertical .chatbot-fab-badge {
+    animation: none;
+}
+/* The alarm blink stays: it is a safety signal, not decoration. */
+
+/* ── 3. Cheap, snappy transitions ── */
+.app.is-vertical {
+    --transition-fast: 90ms ease;
+    --transition-normal: 120ms ease;
+    --transition-slow: 160ms ease;
+}
+/* Press feedback should be immediate; `all` also watches layout properties. */
+.app.is-vertical button,
+.app.is-vertical .nav-tab,
+.app.is-vertical .settings-btn,
+.app.is-vertical .wifi-row-main,
+.app.is-vertical .osk-key {
+    transition: background-color 90ms ease, color 90ms ease, border-color 90ms ease;
+}
+
+/* ── 4. Taps act on touch, without waiting to rule out a double-tap zoom ── */
+.app.is-vertical button,
+.app.is-vertical a,
+.app.is-vertical [role='button'],
+.app.is-vertical input,
+.app.is-vertical select,
+.app.is-vertical textarea,
+.app.is-vertical label {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Hover lifts fire on first touch and delay the press on glass. */
+@media (hover: none) {
+    .app.is-vertical button:hover,
+    .app.is-vertical .nav-tab:hover,
+    .app.is-vertical .settings-btn:hover {
+        transform: none;
+    }
+}
+
+/* Anyone who has asked the OS to reduce motion gets no decoration at all. */
+@media (prefers-reduced-motion: reduce) {
+    .app.is-vertical *,
+    .app.is-vertical *::before,
+    .app.is-vertical *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* Panel open/close: 250ms of slide is a long time to wait for a tap to look
+   like it registered, and the slide repaints a full-height panel each frame. */
+.app.is-vertical .chatbot-window {
+    animation-duration: 120ms;
+}
+.app.is-vertical .chatbot-window.chatbot-closing {
+    animation-duration: 100ms;
 }

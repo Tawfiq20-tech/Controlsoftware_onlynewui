@@ -152,6 +152,8 @@ function segmentAtTime(cumSec: Float32Array, positions: Float32Array, t: number)
 
 
 // Fallbacks — used only if a CSS variable is missing at read time.
+/* Idle redraw interval: ~10 fps when the scene is still (see the tick loop). */
+const IDLE_FRAME_MS = 100;
 const COLOR_FALLBACK = {
     bg:        '#14110d',
     grid:      '#3d2e1f',
@@ -258,6 +260,11 @@ export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false 
     const livePosRef      = useRef<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
     const smoothedToolPosRef = useRef<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
     const lastFrameTimeRef = useRef<number>(0);
+    /* Idle frame-rate cap (see the tick loop): when the scene is still, the
+       viewport is redrawn a few times a second instead of every frame. */
+    const lastRenderRef = useRef<number>(0);
+    const interactUntilRef = useRef<number>(0);
+    const lastDrawnToolRef = useRef({ x: NaN, y: NaN, z: NaN });
     const modeRef          = useRef(mode);
 
     const [view, setView] = useState<ViewPreset | null>('iso');
@@ -414,6 +421,11 @@ export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false 
         rendererRef.current = renderer;
 
         const ctrl = new OrbitControls(cam, renderer.domElement);
+        // Full frame rate while the operator is moving the camera, and for a
+        // moment afterwards so inertial damping stays smooth.
+        ctrl.addEventListener('change', () => {
+            interactUntilRef.current = performance.now() + 600;
+        });
         ctrl.enableDamping = true;
         ctrl.dampingFactor = 0.08;
         ctrl.target.set(envelope.x / 2, envelope.y / 2, 0);
@@ -593,7 +605,38 @@ export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false 
                 );
             }
             ctrl.update();
-            renderer.render(scene, cam);
+
+            // Idle frame-rate cap.
+            //
+            // This loop used to re-render the whole scene 60 times a second
+            // forever, including with the machine parked and nothing on screen
+            // moving. On the Pi's GPU that stays saturated, the main thread
+            // never gets a clear slot, and taps read as ignored -- the button
+            // does depress, the frame showing it just arrives far too late.
+            //
+            // So: full rate whenever anything is actually moving, ~10 fps when
+            // it is not. The scene is still redrawn either way, so nothing can
+            // sit stale; an unaccounted-for change shows up within 100 ms
+            // rather than never.
+            const tool = smoothedToolPosRef.current;
+            const drawn = lastDrawnToolRef.current;
+            const toolMoved = Math.abs(tool.x - drawn.x) > 0.001
+                || Math.abs(tool.y - drawn.y) > 0.001
+                || Math.abs(tool.z - drawn.z) > 0.001;
+            const busy = toolMoved
+                || cursorActiveRef.current
+                || cameraFollowRef.current
+                || machineStateRef.current === 'running'
+                || (spindleSpeedRef.current ?? 0) > 0
+                || now < interactUntilRef.current;
+
+            if (busy || now - lastRenderRef.current >= IDLE_FRAME_MS) {
+                lastRenderRef.current = now;
+                drawn.x = tool.x;
+                drawn.y = tool.y;
+                drawn.z = tool.z;
+                renderer.render(scene, cam);
+            }
             raf = requestAnimationFrame(tick);
         };
         tick();

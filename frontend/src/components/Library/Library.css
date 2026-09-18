@@ -139,3 +139,47 @@
     color: var(--text-dim, #94a3b8);
 }
 .lib-row-actions { display: flex; gap: 6px; }
+
+/* Filefinity address as a scannable code — the kiosk cannot open external
+   URLs, so this is how an operator gets there from the machine. */
+.lib-qr {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 20px;
+    padding: 18px 20px;
+    background: var(--bg-panel, #1d2127);
+    border: 1px solid var(--border-ui, #30363d);
+    border-radius: 12px;
+}
+.lib-qr img {
+    background: #fff;
+    padding: 8px;
+    border-radius: 8px;
+    display: block;
+}
+.lib-qr-wait {
+    width: 180px;
+    height: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim, #94a3b8);
+    font-size: 13px;
+}
+.lib-qr-url {
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    color: var(--text-dim, #94a3b8);
+    word-break: break-all;
+    max-width: 320px;
+    text-align: center;
+}
+.lib-qr-hint {
+    max-width: 340px;
+    text-align: center;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-dim, #94a3b8);
+}
