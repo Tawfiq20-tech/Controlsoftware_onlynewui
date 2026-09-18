@@ -55,10 +55,14 @@ apt-cache show chromium >/dev/null 2>&1 || CHROMIUM_PKG=chromium-browser
 # a full Raspberry Pi OS image; a lite base may not have them.
 POLKIT_PKG=polkitd
 apt-cache show polkitd >/dev/null 2>&1 || POLKIT_PKG=policykit-1
+# ffmpeg drives every camera the sender supports (USB via v4l2, and RTSP).
+# Without it Settings -> Cameras can find a device but never shows a picture --
+# WebcamService reports "ffmpeg not installed". v4l-utils identifies /dev/video*.
 apt-get install -y --no-install-recommends \
     cage seatd wlr-randr "$CHROMIUM_PKG" fonts-dejavu-core fonts-noto-color-emoji \
     libudev-dev build-essential python3 curl rsync exfatprogs dosfstools \
-    network-manager "$POLKIT_PKG"
+    network-manager "$POLKIT_PKG" \
+    ffmpeg v4l-utils
 
 # -------------------------------------------------------------- user & app
 log "Creating the kiosk user '$APP_USER'"

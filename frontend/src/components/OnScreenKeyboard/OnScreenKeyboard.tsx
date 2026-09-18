@@ -147,9 +147,7 @@ export default function OnScreenKeyboard() {
             return;
         }
 
-        const onFocusIn = (e: FocusEvent) => {
-            const target = e.target as Element | null;
-            if (!isEligible(target)) return;
+        const adopt = (target: Field) => {
             if (closeTimer.current !== null) {
                 window.clearTimeout(closeTimer.current);
                 closeTimer.current = null;
@@ -161,6 +159,18 @@ export default function OnScreenKeyboard() {
             setShift(false);
             setOpen(true);
         };
+
+        const onFocusIn = (e: FocusEvent) => {
+            const target = e.target as Element | null;
+            if (isEligible(target)) adopt(target);
+        };
+
+        // Switching the keyboard back on in Settings does not move focus, so no
+        // focusin ever fires and the sheet stayed hidden until the field was
+        // tapped again (closing and reopening the chat was the only way back).
+        // Take whatever already has focus when we start listening.
+        const active = document.activeElement;
+        if (isEligible(active)) adopt(active);
 
         const onFocusOut = () => {
             if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);

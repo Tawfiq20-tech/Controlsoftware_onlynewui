@@ -69,11 +69,15 @@ export default function Library() {
         return () => { cancelled = true; };
     }, [showFilefinityQr, filefinityQr]);
     const [items, setItems] = useState<LibraryItem[]>([]);
+    const [saving, setSaving] = useState(false);
+    const [saveNote, setSaveNote] = useState<string | null>(null);
     const [filter, setFilter] = useState<'all' | 'remote'>('all');
     const [review, setReview] = useState<{ item: LibraryItem; body: string } | null>(null);
     const [reviewBusy, setReviewBusy] = useState(false);
     const [reviewError, setReviewError] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const rawGcodeContent = useCNCStore((s) => s.rawGcodeContent);
+    const fileInfo = useCNCStore((s) => s.fileInfo);
     const setRawGcodeContent = useCNCStore((s) => s.setRawGcodeContent);
     const setFileInfo = useCNCStore((s) => s.setFileInfo);
     const setGcode = useCNCStore((s) => s.setGcode);
@@ -88,6 +92,42 @@ export default function Library() {
             const r = await fetch(`${BACKEND_BASE}/api/library`, { credentials: 'include', headers: remoteAuthHeaders() });
             if (r.ok) setItems(await r.json());
         } catch (_) { /* offline — empty list */ }
+    }
+
+    /**
+     * Save whatever is loaded right now into the machine's own library.
+     *
+     * Without this the only way in was the file picker, which on the pendant
+     * means finding a USB stick every single time -- even for a job that was
+     * already open on screen. The library has always been stored on the
+     * machine's own disk, so this just keeps a copy of what is already there.
+     */
+    async function saveCurrentToLibrary() {
+        const body = rawGcodeContent;
+        if (!body || saving) return;
+        const fileName = fileInfo?.name || `job-${new Date().toISOString().slice(0, 10)}.nc`;
+        setSaving(true);
+        setSaveNote(null);
+        try {
+            const r = await fetch(`${BACKEND_BASE}/api/library`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', ...remoteAuthHeaders() },
+                body: JSON.stringify({
+                    name: fileName.replace(/\.[^.]+$/, ''),
+                    fileName,
+                    body,
+                }),
+            });
+            if (!r.ok) throw new Error(String(r.status));
+            const entry = await r.json() as LibraryItem;
+            setItems((prev) => [entry, ...prev]);
+            setSaveNote(`Saved "${entry.name}" to the library.`);
+        } catch (err) {
+            setSaveNote('Could not save that file to the library.');
+        } finally {
+            setSaving(false);
+        }
     }
 
     async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -232,12 +272,24 @@ export default function Library() {
                             )}
                         </>
                     )}
+                    {rawGcodeContent && (
+                        <button
+                            className="lib-btn"
+                            onClick={saveCurrentToLibrary}
+                            disabled={saving}
+                            title="Keep the job that is open now, so it can be run again without the USB stick"
+                        >
+                            <Download size={14} /> {saving ? 'Saving…' : 'Save loaded file'}
+                        </button>
+                    )}
                     <button className="lib-btn lib-btn-primary" onClick={() => fileInputRef.current?.click()}>
                         <Plus size={14} /> Add file
                     </button>
                     <input type="file" accept=".gcode,.nc,.tap,.cnc,.ngc" ref={fileInputRef}
                         style={{ display: 'none' }} onChange={onUpload} />
                 </header>
+
+                {saveNote && <div className="lib-save-note">{saveNote}</div>}
 
                 {visibleItems.length === 0 ? (
                     <div className="lib-empty">

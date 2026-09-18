@@ -2,7 +2,7 @@
 
 :root {
     /* Read by App.css to shrink the app while the sheet is up. */
-    --osk-height: 300px;
+    --osk-height: 420px;
 }
 
 .osk {
@@ -14,8 +14,8 @@
     height: var(--osk-height);
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 6px 8px 10px;
+    gap: 8px;
+    padding: 8px 10px 14px;
     background: var(--bg-sidebar, #121721);
     border-top: 2px solid var(--border-ui, #242c3d);
     box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.38);
@@ -31,7 +31,7 @@
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
-    height: 34px;
+    height: 42px;
 }
 
 .osk-bar-title {
@@ -45,8 +45,8 @@
 }
 
 .osk-bar-btn {
-    min-width: 52px;
-    height: 30px;
+    min-width: 64px;
+    height: 38px;
     padding: 0 12px;
     display: inline-flex;
     align-items: center;
@@ -89,7 +89,7 @@
 .osk-key {
     flex: 1 1 0;
     min-width: 0;
-    min-height: 44px;
+    min-height: 62px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -98,7 +98,7 @@
     border: 1px solid var(--border-ui, #2a313d);
     border-radius: 8px;
     font-family: inherit;
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 600;
     line-height: 1;
     cursor: pointer;
@@ -168,11 +168,11 @@
 /* ── Short screens: keep the keys reachable ── */
 @media (max-height: 700px) {
     :root {
-        --osk-height: 250px;
+        --osk-height: 320px;
     }
     .osk-key {
-        min-height: 38px;
-        font-size: 18px;
+        min-height: 48px;
+        font-size: 20px;
     }
 }
 

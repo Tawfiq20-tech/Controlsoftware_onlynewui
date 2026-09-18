@@ -22,6 +22,7 @@ import OnScreenKeyboard from './components/OnScreenKeyboard/OnScreenKeyboard';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
 import { useJobWakeLock } from './hooks/useJobWakeLock';
+import { usePersistedPreferences } from './hooks/usePersistedPreferences';
 import { useCNCStore } from './stores/cncStore';
 import { sendDesign } from './utils/designLoad';
 import { GCodeParser } from './utils/gcodeParser';
@@ -40,6 +41,10 @@ function AppInner() {
     // of which header tab is active (Tawfiq msg11358 item 3). See
     // hooks/useAutoConnect.ts for why this can't live inside DevicePanel.
     useAutoConnect();
+
+    // Units, safe height, jog defaults and the rest are kept on the machine,
+    // so they survive a restart and match on a phone (see the hook).
+    usePersistedPreferences();
 
     // Don't let the PC fall asleep mid-carve: the controller stops the machine
     // by itself when the USB port suspends with it.

@@ -193,7 +193,7 @@
 .app.is-vertical .status-bar {
     /* Tall enough to hold the 52px assistant button without it overhanging
        the content above (see .chatbot-fab below). */
-    height: 58px;
+    height: 68px;
     font-size: 17px;
     padding: 0 10px;
 }
@@ -234,23 +234,23 @@
 /* Assistant launcher parks inside the status bar instead of floating
    over jog keys / macro tiles. */
 .app.is-vertical .status-bar {
-    padding-right: 76px;
+    padding-right: 92px;
 }
 /* 52px: a finger needs 44px minimum, and this sits in the hardest corner of
    the screen to hit. It is inset from both edges rather than tucked against
    the bezel, where half the target used to fall off the glass. */
 .app.is-vertical .chatbot-fab {
-    bottom: 3px;
-    right: 14px;
-    width: 52px;
-    height: 52px;
+    bottom: 5px;
+    right: 16px;
+    width: 64px;
+    height: 64px;
     border-width: 2px;
     /* Taps must not wait on a double-tap-zoom decision. */
     touch-action: manipulation;
 }
 .app.is-vertical .chatbot-fab svg {
-    width: 26px;
-    height: 26px;
+    width: 32px;
+    height: 32px;
 }
 /* The hover grow is a mouse affordance; on glass it just delays the press. */
 .app.is-vertical .chatbot-fab:hover {

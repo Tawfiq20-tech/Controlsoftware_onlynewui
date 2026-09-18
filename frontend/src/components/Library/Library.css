@@ -183,3 +183,15 @@
     line-height: 1.55;
     color: var(--text-dim, #94a3b8);
 }
+
+/* Result of "Save loaded file" — keeps the job that is already open, so a USB
+   stick is needed once rather than every time it is run. */
+.lib-save-note {
+    margin: 10px 0 0;
+    padding: 9px 14px;
+    background: var(--settings-ok-bg, rgba(52, 211, 153, 0.1));
+    border: 1px solid var(--settings-ok-border, rgba(52, 211, 153, 0.35));
+    border-radius: 7px;
+    color: var(--settings-ok, #34d399);
+    font-size: 13px;
+}

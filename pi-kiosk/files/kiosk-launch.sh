@@ -37,6 +37,40 @@ if [ "$KIOSK_ROTATE" != "normal" ] && command -v wlr-randr >/dev/null; then
     done
 fi
 
+# ---- operator identity -------------------------------------------------
+# Loopback alone only makes this browser "local": it can drive the machine, but
+# not change machine settings (Wi-Fi, remote access, cloud). Proving it is the
+# screen bolted to the machine needs the launch secret, handed over as ?op=<s>,
+# which the page immediately trades for the operator cookie and strips from the
+# address bar. Without this the kiosk's own Settings refuse it with 403 --
+# Settings -> Wi-Fi could not scan, and remote access could not be set up.
+TOKEN_FILE="${OPERATOR_TOKEN_FILE:-/opt/onefinity-sender/backend/data/operator-token}"
+LAUNCH_URL="$KIOSK_URL"
+for _ in $(seq 1 30); do
+    [ -r "$TOKEN_FILE" ] && break
+    sleep 1
+done
+if [ -r "$TOKEN_FILE" ]; then
+    OP_SECRET="$(tr -d '[:space:]' < "$TOKEN_FILE" | tr '[:upper:]' '[:lower:]')"
+    case "$OP_SECRET" in
+        # The backend writes 64 hex characters; anything else is a truncated or
+        # half-written file, and sending it would burn a failed-claim attempt.
+        [0-9a-f]*)
+            if [ ${#OP_SECRET} -eq 64 ]; then
+                case "$KIOSK_URL" in
+                    *\?*) LAUNCH_URL="$KIOSK_URL&op=$OP_SECRET" ;;
+                    *)    LAUNCH_URL="$KIOSK_URL/?op=$OP_SECRET" ;;
+                esac
+            else
+                echo "onefinity-kiosk: operator token is not 64 hex chars; starting without operator access" >&2
+            fi
+            ;;
+        *) echo "onefinity-kiosk: operator token unreadable; starting without operator access" >&2 ;;
+    esac
+else
+    echo "onefinity-kiosk: $TOKEN_FILE not readable; machine settings will be refused" >&2
+fi
+
 CHROMIUM="$(command -v chromium || command -v chromium-browser)"
 PROFILE="$HOME/.config/onefinity-kiosk"
 mkdir -p "$PROFILE/Default"
@@ -48,7 +82,7 @@ if [ -f "$PREFS" ]; then
 fi
 
 exec "$CHROMIUM" \
-    --kiosk "$KIOSK_URL" \
+    --kiosk "$LAUNCH_URL" \
     --user-data-dir="$PROFILE" \
     --ozone-platform=wayland \
     --noerrdialogs \

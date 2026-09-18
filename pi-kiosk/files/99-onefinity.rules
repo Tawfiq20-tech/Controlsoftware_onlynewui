@@ -2,7 +2,12 @@
 
 # USB-serial controllers (CH340, CP210x, FTDI, STM32 CDC): the kiosk user is
 # in "dialout"; make sure ttyACM/ttyUSB nodes are in that group.
-SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*|ttyUSB[0-9]*", GROUP="dialout", MODE="0660"
+# ID_MM_DEVICE_IGNORE keeps ModemManager off the controller. It probes any new
+# ttyACM looking for a modem and writes AT commands at it, which lands in the
+# middle of the sender's own handshake and can drop the link mid-connect. Pi OS
+# Lite has no ModemManager, but network-manager (installed for Settings ->
+# Wi-Fi) recommends it, so it can appear on an upgrade.
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*|ttyUSB[0-9]*", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
 
 # STM32 DFU bootloader (firmware update, lib/Firmware/Flashing/DFU.js: 0483:df11).
 SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", GROUP="plugdev", MODE="0664"
