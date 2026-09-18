@@ -99,6 +99,7 @@ install -m 0644 "$F/99-onefinity.rules"         /etc/udev/rules.d/
 mkdir -p /etc/polkit-1/rules.d
 install -m 0644 "$F/50-onefinity-network.rules" /etc/polkit-1/rules.d/
 install -m 0755 "$F/usb-automount.sh"           /usr/local/bin/onefinity-usb-mount
+install -m 0755 "$F/touch-rotate.sh"            /usr/local/bin/onefinity-touch-rotate
 [ -f /etc/onefinity-kiosk.conf ] || install -m 0644 "$F/onefinity-kiosk.conf" /etc/onefinity-kiosk.conf
 for d in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
     mkdir -p "$d"

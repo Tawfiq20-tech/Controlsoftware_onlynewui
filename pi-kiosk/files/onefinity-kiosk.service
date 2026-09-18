@@ -20,6 +20,10 @@ StandardError=journal
 UtmpIdentifier=tty1
 UtmpMode=user
 EnvironmentFile=-/etc/onefinity-kiosk.conf
+# Turn the digitiser to match the turned screen before anything draws. The "+"
+# runs it as root: writing udev rules and re-triggering is not the kiosk user's
+# to do. A failure here must not stop the screen coming up, hence "-".
+ExecStartPre=-+/usr/local/bin/onefinity-touch-rotate
 ExecStart=/usr/local/bin/onefinity-kiosk
 # Closing the browser (Alt+F4, crash) brings the sender straight back.
 Restart=always
