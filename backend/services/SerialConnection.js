@@ -450,6 +450,14 @@ class SerialConnection extends EventEmitter {
             // Blacklist: exclude known virtual/non-hardware ports
             // Built-in virtual serial ports (/dev/ttyS0-ttyS99)
             if (/^\/dev\/ttyS\d+$/.test(path)) return false;
+            // Raspberry Pi SoC UARTs. /dev/ttyAMA0 is the on-board serial line
+            // (Bluetooth on most Pi models) and exists on every Pi whether or
+            // not anything is attached to it. The controller on this product
+            // is always USB CDC (/dev/ttyACM*), so ttyAMA is never it -- and
+            // leaving it in put a phantom port in the operator's picker and
+            // broke the "exactly one port" auto-connect rule.
+            if (/^\/dev\/ttyAMA\d+$/.test(path)) return false;
+            if (path === '/dev/ttyprintk') return false;
             // Non-hardware system devices
             if (path === '/dev/console' || path === '/dev/tty') return false;
             // Include everything else — real USB devices, network paths, etc.

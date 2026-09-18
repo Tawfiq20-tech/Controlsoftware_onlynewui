@@ -83,6 +83,16 @@ export function useAutoConnect(): void {
                         (p) => p.vendorId === lastDevice.vendorId && p.productId === lastDevice.productId
                     ) ?? null;
                 }
+                // Nothing remembered yet. On the pendant the controller is
+                // already plugged in when the machine powers up, so it never
+                // "newly appears" either -- which left a freshly flashed Pi
+                // sitting at Disconnected until someone tapped Connect, every
+                // boot until the first successful connect was remembered.
+                // One USB serial device present at start-up is the controller.
+                if (!candidate) {
+                    const usb = ports.filter((p) => p.vendorId && p.productId);
+                    if (usb.length === 1) candidate = usb[0];
+                }
             } else {
                 const newlyAppeared = ports.filter((p) => !prevPaths.has(p.port));
                 if (newlyAppeared.length === 1) candidate = newlyAppeared[0];
