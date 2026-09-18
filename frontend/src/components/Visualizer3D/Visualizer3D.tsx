@@ -190,6 +190,13 @@ function readColors() {
         xAxis:     readCssColor('--axis-x', '#ef4444'),
         yAxis:     readCssColor('--axis-y', '#10b981'),
         zAxis:     readCssColor('--axis-z', '#3b82f6'),
+        // The edge ruler reads in the scene's own neutral rather than the
+        // red/green/blue axis triad. Those are the default colours every 3D
+        // demo ships with: against the stock and the amber toolpath they were
+        // the loudest thing on screen, and the one thing nobody needs to look
+        // at while a job runs.
+        ruler:      readCssColor('--scene-ruler',       '#3d4757'),
+        rulerLabel: readCssColor('--scene-ruler-label', '#94a3b8'),
     };
 }
 
@@ -1520,14 +1527,20 @@ function niceStep(range: number): number {
  *  Tawfiq had removed from the scene (msg 7341). */
 function makeTickLabel(text: string, color: string): THREE.Sprite {
     const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 32;
+    // 2x the sprite's on-screen size: at 64x32 a three-digit number filled the
+    // texture edge to edge and came out soft and blocky, which is most of what
+    // made the ruler look slapped on rather than drawn.
+    canvas.width = 128;
+    canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
-    ctx.font = 'bold 24px sans-serif';
+    // The app's own typeface at a normal weight. Heavy sans-serif made a ruler
+    // tick shout as loudly as the readouts that actually matter.
+    const family = readCssColor('--font-sans', "system-ui, -apple-system, sans-serif");
+    ctx.font = `500 40px ${family}`;
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 32, 16);
+    ctx.fillText(text, 64, 32);
     const tex = new THREE.CanvasTexture(canvas);
     tex.minFilter = THREE.LinearFilter;
     const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
@@ -1550,7 +1563,7 @@ function buildScaleGroup(
     const stepX = niceStep(envelope.x);
     const xTickPts: number[] = [];
     for (let v = 0; v <= envelope.x + 1e-6; v += stepX) {
-        const label = makeTickLabel(String(Math.round(v)), colors.xAxis);
+        const label = makeTickLabel(String(Math.round(v)), colors.rulerLabel);
         label.position.set(v, -labelSize * 0.9, 0.5);
         label.scale.set(labelSize * 2, labelSize, 1);
         group.add(label);
@@ -1558,13 +1571,13 @@ function buildScaleGroup(
     }
     const xTickGeo = new THREE.BufferGeometry();
     xTickGeo.setAttribute('position', new THREE.Float32BufferAttribute(xTickPts, 3));
-    group.add(new THREE.LineSegments(xTickGeo, new THREE.LineBasicMaterial({ color: colors.xAxis })));
+    group.add(new THREE.LineSegments(xTickGeo, new THREE.LineBasicMaterial({ color: colors.ruler })));
 
     const stepY = niceStep(envelope.y);
     const yTickPts: number[] = [];
     for (let v = stepY; v <= envelope.y + 1e-6; v += stepY) {
         // Skip 0 — the X-axis loop above already labels the shared origin.
-        const label = makeTickLabel(String(Math.round(v)), colors.yAxis);
+        const label = makeTickLabel(String(Math.round(v)), colors.rulerLabel);
         label.position.set(-labelSize * 1.3, v, 0.5);
         label.scale.set(labelSize * 2, labelSize, 1);
         group.add(label);
@@ -1572,7 +1585,7 @@ function buildScaleGroup(
     }
     const yTickGeo = new THREE.BufferGeometry();
     yTickGeo.setAttribute('position', new THREE.Float32BufferAttribute(yTickPts, 3));
-    group.add(new THREE.LineSegments(yTickGeo, new THREE.LineBasicMaterial({ color: colors.yAxis })));
+    group.add(new THREE.LineSegments(yTickGeo, new THREE.LineBasicMaterial({ color: colors.ruler })));
 
     group.renderOrder = 40;
     return group;

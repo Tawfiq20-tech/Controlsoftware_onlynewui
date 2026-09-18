@@ -63,6 +63,10 @@
     --scene-cut:     #F28C28;
     --scene-arc:     #F28C28;
     --scene-cursor:  #fde047;
+    /* Ruler down the edges of the bed. Neutral on purpose -- see
+       Visualizer3D buildRuler(). */
+    --scene-ruler:       #3d4757;
+    --scene-ruler-label: #94a3b8;
 }
 
 :root[data-theme='light'] {
@@ -123,6 +127,8 @@
     --scene-cut:     #F28C28;
     --scene-arc:     #F28C28;
     --scene-cursor:  #ef4444;
+    --scene-ruler:       #9aa6b4;
+    --scene-ruler-label: #5b6672;
 }
 
 /* Smooth transitions on theme switch */
