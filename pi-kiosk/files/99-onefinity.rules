@@ -12,6 +12,14 @@ SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*|ttyUSB[0-9]*", GROUP="dialout", MODE="06
 # STM32 DFU bootloader (firmware update, lib/Firmware/Flashing/DFU.js: 0483:df11).
 SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", GROUP="plugdev", MODE="0664"
 
+# The controller is a serial device and nothing else. If its USB descriptor
+# also exposes an HID interface, udev tags it as an input device and libinput
+# picks it up -- and a composite device reporting absolute axes can be taken
+# for a touchscreen, at which point the compositor may route touch to it and
+# the real panel goes dead the moment the controller is plugged in.
+# Nothing here should ever read the board as a keyboard, mouse or digitiser.
+SUBSYSTEM=="input", ATTRS{idVendor}=="0483", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
 # USB sticks with G-code: mount under /media/usb-<device> so the file
 # picker can open them. No desktop automounter runs on the kiosk.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", RUN{program}+="/usr/local/bin/onefinity-usb-mount add %k"
