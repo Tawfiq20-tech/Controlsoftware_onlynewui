@@ -255,6 +255,13 @@ function _wireControllerToStore(): void {
     // The controller board rebooted (power loss / reset): its position is gone.
     // The backend blocks Start until X, Y and Z are zeroed again or the
     // machine is homed; the banner says so until then.
+    controller.on('health:power', (data: unknown) => {
+        const d = data as { ok?: boolean; supported?: boolean; message?: string | null } | null;
+        useCNCStore.getState().setPowerHealth(
+            d && d.supported ? { ok: !!d.ok, supported: true, message: d.message ?? null } : null,
+        );
+    });
+
     controller.on('controller:restarted', (data: unknown) => {
         const d = data as ControllerRestartInfo;
         const s = getStore();

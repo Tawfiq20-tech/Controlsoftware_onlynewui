@@ -44,6 +44,7 @@ const {
 const configPolicy = require('./services/remoteAccess/configPolicy');
 const { TailscaleService } = require('./services/remoteAccess/TailscaleService');
 const { WifiService } = require('./services/network/WifiService');
+const { PowerMonitor } = require('./services/health/PowerMonitor');
 const { DeviceIdentity } = require('./services/remoteAccess/DeviceIdentity');
 const { MdnsResponder } = require('./services/remoteAccess/MdnsResponder');
 const { OperatorToken } = require('./services/remoteAccess/OperatorToken');
@@ -243,6 +244,9 @@ function createBackend({
     // ─── Phase A/B services (AxioCNC + gSender parity) ───────────────
     const getController = () => engine.controller || null;
 
+    // The kiosk has no desktop notifications, so a restricted PSU would
+    // otherwise be invisible until the touchscreen stopped responding.
+    const powerMonitor      = new PowerMonitor({                            io, logger });
     const webcamService     = new WebcamService({     configStore: engine.config, io, logger });
     const gamepadService    = new GamepadService({    configStore: engine.config, io, logger, getController });
     const watchdirService   = new WatchDirService({   configStore: engine.config, io, logger, forbiddenRoots: [dataDir] });
@@ -456,7 +460,8 @@ function createBackend({
     }
 
     if (initServices) {
-        webcamService.init();
+        powerMonitor.start();
+    webcamService.init();
         gamepadService.init();
         watchdirService.init();
         whatsappService.init();
@@ -507,6 +512,7 @@ function createBackend({
 
     // Re-send full state on every new socket connect.
     io.on('connection', (socket) => {
+        socket.emit('health:power', powerMonitor.getStatus());
         const operator = isOperatorIdentity(socket.data && socket.data.identity);
         const local = hasLocalControl(socket.data && socket.data.identity);
         socket.emit('webcam:cameras', local ? webcamService.list() : webcamService.publicList());
@@ -803,6 +809,10 @@ function createBackend({
     // would drop the very link the request arrived on, and the network list
     // says where the machine is. This is a decision for whoever is standing
     // at the screen.
+
+    app.get('/api/health/power', async (req, res) => {
+        res.json(await powerMonitor.refresh());
+    });
 
     app.get('/api/wifi/status', async (req, res) => {
         if (!requireOperator(req, res)) return;
@@ -1641,6 +1651,7 @@ function createBackend({
                 identityRetryTimer = null;
             }
             await step('mdns.stop', () => mdns.stop());
+            await step('power.stop', () => powerMonitor.stop());
             await step('webcam.shutdown', () => webcamService.shutdown());
             await step('remoteAccessConfig.flush', () => remoteAccessConfigStore.flush());
             await step('config.flush', () => engine.config && engine.config.flush && engine.config.flush());
@@ -1675,7 +1686,7 @@ function createBackend({
         services: {
             webcamService, gamepadService, watchdirService, probingService, jobHistoryService, jobResumeService,
             toolLibrary, libraryService, chatbotService, whatsappService, telegramService, firmwareUpdateService,
-            tailscaleService, wifiService,
+            tailscaleService, wifiService, powerMonitor,
         },
         applyOutbound,
         setLanOnly,

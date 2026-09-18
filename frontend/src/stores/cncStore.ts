@@ -79,6 +79,9 @@ interface CNCStore {
     // Set while the controller board has rebooted and its position has not
     // been re-established (zero X/Y/Z or home). SafetyBanner shows it.
     controllerRestart: ControllerRestartInfo | null;
+    /** Pi power headroom; null off a Pi. See services/health/PowerMonitor.js. */
+    powerHealth: { ok: boolean; supported: boolean; message?: string | null } | null;
+    setPowerHealth: (v: { ok: boolean; supported: boolean; message?: string | null } | null) => void;
     setControllerRestart: (r: ControllerRestartInfo | null) => void;
 
     // Whether the backend has a live controller instance for the current serial
@@ -408,6 +411,8 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
 
     controllerRestart: null,
     setControllerRestart: (controllerRestart) => set({ controllerRestart }),
+    powerHealth: null,
+    setPowerHealth: (powerHealth) => set({ powerHealth }),
 
     // Backend controller-instance-ready flag
     controllerReady: false,

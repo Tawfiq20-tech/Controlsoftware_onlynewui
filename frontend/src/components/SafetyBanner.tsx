@@ -26,6 +26,7 @@ export function SafetyBanner() {
     const otherScreenFile = useCNCStore((s) => s.otherScreenFile);
     const myFileName = useCNCStore((s) => s.fileInfo?.name);
     const jobActive = useCNCStore((s) => s.jobActive);
+    const powerHealth = useCNCStore((s) => s.powerHealth);
     const [reloading, setReloading] = useState(false);
     const [dismissed, setDismissed] = useState<Set<string>>(new Set());
 
@@ -38,6 +39,22 @@ export function SafetyBanner() {
     }, [zRunaway, setSafetyZRunaway]);
 
     const banners: JSX.Element[] = [];
+
+    // A starved Pi supply is announced by the desktop OS, but the kiosk has no
+    // desktop -- so the first sign was the touchscreen going dead with nothing
+    // to explain it. It also matters mid-job: an under-volted Pi can brown out
+    // and leave the tool down. Shown first because it explains other symptoms.
+    if (powerHealth && powerHealth.supported && !powerHealth.ok && powerHealth.message) {
+        banners.push(
+            <div key="power" className="ecss-banner ecss-banner--warning">
+                <div className="ecss-banner__icon">⚡</div>
+                <div className="ecss-banner__body">
+                    <strong>Power supply cannot keep up</strong>
+                    <div className="ecss-banner__detail">{powerHealth.message}</div>
+                </div>
+            </div>,
+        );
+    }
 
     // Another screen put a different design on the machine. This screen does
     // not load its own design back by itself any more (that made two screens
