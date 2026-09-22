@@ -99,7 +99,8 @@
     "remoteDiagEnabled": false,
     "remoteDiagUrl": "ws://10.1.76.249:18765/mirror",
     "remoteDiagToken": "37221d04f26e92ed63eea474275bf016",
-    "remoteDiagAllowInject": false
+    "remoteDiagAllowInject": false,
+    "rtscts": false
   },
   "ethernet": {
     "connectToIP": "192.168.5.1"

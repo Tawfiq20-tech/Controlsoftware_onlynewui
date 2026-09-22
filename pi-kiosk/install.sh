@@ -105,6 +105,8 @@ install -m 0644 "$F/50-onefinity-network.rules" /etc/polkit-1/rules.d/
 install -m 0755 "$F/usb-automount.sh"           /usr/local/bin/onefinity-usb-mount
 install -m 0755 "$F/touch-rotate.sh"            /usr/local/bin/onefinity-touch-rotate
 install -m 0755 "$F/touch-replug.sh"            /usr/local/bin/onefinity-touch-replug
+# One command to gather logs onto a USB stick: the kiosk has no terminal.
+install -m 0755 "$F/collect-logs.sh"            /usr/local/bin/onefinity-logs
 install -m 0644 "$F/onefinity-touch-replug.service" /etc/systemd/system/
 [ -f /etc/onefinity-kiosk.conf ] || install -m 0644 "$F/onefinity-kiosk.conf" /etc/onefinity-kiosk.conf
 for d in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
@@ -158,3 +160,4 @@ systemctl enable onefinity-backend.service onefinity-kiosk.service
 
 log "Done. Reboot to start the kiosk: sudo reboot"
 echo "Settings (screen rotation, URL): /etc/onefinity-kiosk.conf"
+echo "Logs for support (writes to a USB stick):  sudo onefinity-logs"
