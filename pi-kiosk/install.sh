@@ -107,6 +107,8 @@ install -m 0755 "$F/touch-rotate.sh"            /usr/local/bin/onefinity-touch-r
 install -m 0755 "$F/touch-replug.sh"            /usr/local/bin/onefinity-touch-replug
 # One command to gather logs onto a USB stick: the kiosk has no terminal.
 install -m 0755 "$F/collect-logs.sh"            /usr/local/bin/onefinity-logs
+install -m 0755 "$F/log-snapshot.sh"            /usr/local/bin/onefinity-logsnap
+install -m 0644 "$F/onefinity-logsnap.service"  /etc/systemd/system/
 install -m 0644 "$F/onefinity-touch-replug.service" /etc/systemd/system/
 [ -f /etc/onefinity-kiosk.conf ] || install -m 0644 "$F/onefinity-kiosk.conf" /etc/onefinity-kiosk.conf
 for d in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
@@ -127,6 +129,17 @@ NAutoVTs=0
 ReserveVT=0
 HandlePowerKey=poweroff
 EOF
+# Keep the journal across reboots. By default it lives in /run and is lost on
+# every restart, so the boot that browned out -- the one worth reading -- would
+# be gone by the time anyone looked. Capped so it cannot fill the card.
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/onefinity-kiosk.conf <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemMaxFileSize=20M
+EOF
+
 # Ctrl+Alt+Del must not reboot a machine mid-carve; no SysRq escape keys.
 systemctl mask ctrl-alt-del.target
 echo 'kernel.sysrq=0' > /etc/sysctl.d/90-onefinity-kiosk.conf
@@ -156,8 +169,9 @@ fi
 # daemon-reload fails inside the image-builder chroot (no systemd running).
 systemctl daemon-reload 2>/dev/null || true
 systemctl set-default graphical.target
-systemctl enable onefinity-backend.service onefinity-kiosk.service
+systemctl enable onefinity-backend.service onefinity-kiosk.service onefinity-logsnap.service
 
 log "Done. Reboot to start the kiosk: sudo reboot"
 echo "Settings (screen rotation, URL): /etc/onefinity-kiosk.conf"
-echo "Logs for support (writes to a USB stick):  sudo onefinity-logs"
+echo "Logs for support (writes to the SD card):  sudo onefinity-logs"
+echo "  Fetch them by putting the card in a PC: the boot drive, onefinity-logs/"

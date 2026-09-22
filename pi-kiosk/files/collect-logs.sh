@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Collects everything needed to diagnose this machine into one file.
 #
-#   sudo onefinity-logs              -> writes to a plugged-in USB stick if there
-#                                       is one, otherwise to /tmp
+#   sudo onefinity-logs              -> writes onto the SD card's boot partition
 #   sudo onefinity-logs /some/dir    -> writes there instead
+#
+# The boot partition is the one place a Windows or Mac PC can read: it is FAT32,
+# so pulling the SD card out and putting it in a card reader shows the file
+# straight away. The rest of the card is ext4 and will not open there at all.
 #
 # The kiosk has no desktop and no terminal on the screen, so without this the
 # only way to get logs off the machine is to know a dozen journalctl incantations
-# over SSH. Hand the USB stick to whoever is helping instead.
+# over SSH. Pull the card instead and send the file on.
 #
 # Secrets are removed on the way out: the operator token, Wi-Fi keys, and the
 # bot/cloud/remote-diagnostics tokens in config.json. The file is meant to be
@@ -18,8 +21,17 @@ APP_DIR=/opt/onefinity-sender
 STAMP="$(date +%Y%m%d-%H%M%S)"
 NAME="onefinity-logs-$(hostname)-$STAMP"
 
+BOOT_DIR=/boot/firmware
+[ -d "$BOOT_DIR" ] || BOOT_DIR=/boot
+
 pick_dest() {
     [ $# -gt 0 ] && { echo "$1"; return; }
+    # The SD card's FAT boot partition: readable in any PC's card reader.
+    if [ -d "$BOOT_DIR" ] && [ -w "$BOOT_DIR" ]; then
+        mkdir -p "$BOOT_DIR/onefinity-logs" 2>/dev/null &&
+            { echo "$BOOT_DIR/onefinity-logs"; return; }
+    fi
+    # Then a USB stick, if one happens to be in.
     for m in /media/usb-*; do
         [ -d "$m" ] && [ -w "$m" ] && { echo "$m"; return; }
     done
@@ -105,6 +117,10 @@ if grep -rqiE '(psk|password|token|secret)"?[[:space:]]*[:=][[:space:]]*"?[A-Za-
     say "WARNING: something secret-looking is still in the bundle; check before sending."
 fi
 
+# The boot partition is small (512 MB) and shared with the firmware: never let
+# these pile up there.
+ls -1t "$DEST"/onefinity-logs-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
+
 ARCHIVE="$DEST/$NAME.tar.gz"
 tar -C "$WORK" -czf "$ARCHIVE" "$NAME" 2>/dev/null
 chmod a+r "$ARCHIVE" 2>/dev/null
@@ -114,6 +130,12 @@ say ""
 say "Written: $ARCHIVE"
 say "Size:    $(du -h "$ARCHIVE" | cut -f1)"
 case "$DEST" in
+    /boot*)
+        say ""
+        say "It is on the SD card's boot partition. To fetch it: shut the Pi down"
+        say "(sudo poweroff), put the card in a PC, and open the small drive that"
+        say "appears -- the file is in the onefinity-logs folder."
+        ;;
     /media/*) say "On the USB stick. Safe to unplug once this command has finished." ;;
     *)        say "Copy it off with:  scp $(whoami)@$(hostname -I | awk '{print $1}'):$ARCHIVE ." ;;
 esac

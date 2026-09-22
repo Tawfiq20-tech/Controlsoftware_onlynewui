@@ -1,0 +1,12 @@
+[Unit]
+Description=Record the previous boot onto the SD card (onefinity-logsnap)
+After=systemd-journald.service local-fs.target
+Wants=systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/onefinity-logsnap
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
