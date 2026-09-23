@@ -1611,6 +1611,14 @@ function createBackend({
         return new Promise((resolve) => {
             server.listen(listenPort, host, () => {
                 const actualPort = server.address().port;
+                // Tell the remote-access service where we actually landed. It
+                // was built with the port we ASKED for, and builds every LAN
+                // address and QR code from it -- so if that port was taken, or
+                // was 0, the operator scanned a code pointing at a port nothing
+                // is listening on.
+                if (actualPort && remoteAccessService.port !== actualPort) {
+                    remoteAccessService.port = actualPort;
+                }
                 const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${actualPort}`;
                 logger.info(`CNC backend listening on ${url}`);
                 logger.info('>>> BACKEND BUILD: vendor-pcap-v3 (msg 7099) — retransmit-on-B until-A + Z-runaway off');
