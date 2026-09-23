@@ -529,6 +529,37 @@ function _wireControllerToStore(): void {
     controller.on('file:load', (data: LoadedFileInfo & { name: string; total: number }) => {
         const s = getStore();
         const ownEcho = takeOwnLoadEcho(data);
+
+        // This screen has no copy of the program the machine is running.
+        // Happens after the screen restarts mid-carve: the browser copy lives
+        // in localStorage, which silently refuses anything past a few MB, so a
+        // large job comes back with an empty 3D view while the carve continues
+        // perfectly. Ask the machine for the program it is actually running.
+        if (!s.rawGcodeContent && data?.name) {
+            void (async () => {
+                try {
+                    const r = await fetch(`${getBackendUrl()}/api/job/program`, {
+                        credentials: 'include',
+                        headers: getRemoteToken() ? { 'X-Remote-Token': getRemoteToken() as string } : {},
+                    });
+                    if (!r.ok) return;   // 403 remote, or 404 nothing loaded
+                    const prog = await r.json() as { name?: string; size?: number; content?: string };
+                    if (!prog?.content) return;
+                    const store = getStore();
+                    if (store.rawGcodeContent) return;   // the operator got there first
+                    store.setRawGcodeContent(prog.content);
+                    store.setFileInfo({
+                        name: prog.name || data.name,
+                        size: prog.size ?? prog.content.length,
+                        lines: data.total ?? 0,
+                    });
+                    store.setFileLoadedBackend(true);
+                    store.addConsoleLog('info', `Recovered "${prog.name || data.name}" from the machine -- the preview is the program that is running.`);
+                } catch (_) {
+                    // Offline or refused: the carve is unaffected, the view stays empty.
+                }
+            })();
+        }
         // Someone else (another tab, another screen) loaded a different design
         // onto the machine -- compared by name AND content, so a re-exported
         // file with the same name counts as different. This screen still shows

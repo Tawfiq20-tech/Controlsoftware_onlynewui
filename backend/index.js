@@ -1423,6 +1423,27 @@ function createBackend({
         });
     });
 
+    // The program the machine is running, so a screen that lost it can draw it
+    // again. `file:load` only carries name/size/total, and the browser copy
+    // lives in localStorage -- which silently refuses anything past a few MB.
+    // Restart the screen mid-carve with a 17 MB program and the job keeps
+    // streaming correctly while the 3D view sits empty, with no way back short
+    // of re-loading the file (which would restart the job).
+    //
+    // Local control only: this is the machine's own program, and it is far too
+    // big to push down a phone's connection on a whim.
+    app.get('/api/job/program', (req, res) => {
+        if (!hasLocalControl(req.remoteIdentity)) {
+            return res.status(403).json({ error: 'local_control_required' });
+        }
+        const content = engine._loadedGcodeContent;
+        const meta = engine.loadedFile;
+        if (typeof content !== 'string' || !content || !meta) {
+            return res.status(404).json({ error: 'no_program_loaded' });
+        }
+        res.json({ name: meta.name, size: meta.size, total: meta.total, content });
+    });
+
     // ─── Job Resume / Checkpoint REST API ───────────────────────────────
 
     app.get('/api/job/checkpoint', (req, res) => {

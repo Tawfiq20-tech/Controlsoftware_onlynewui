@@ -116,8 +116,12 @@ function AppInner() {
         } catch (error) {
             console.error('Error re-parsing restored G-code:', error);
         }
+        // Also runs when the content arrives later than mount: after the screen
+        // restarts mid-carve it is fetched back from the machine (see
+        // backendConnection 'file:load'), and without this the toolpath would
+        // stay blank even once the program was in hand.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [rawGcodeContent]);
 
     // Non-copyable UI (Tawfiq msg12266) — text selection is already locked
     // down globally via index.css `body { user-select: none }` (Tawfiq's own
