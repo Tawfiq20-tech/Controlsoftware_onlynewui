@@ -30,3 +30,20 @@ ACTION=="remove", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", RUN{program}+="/usr/lo
 # picks touch up again. onefinity-touch-replug ignores the boot-time appearance
 # and rate-limits itself.
 ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_TOUCHSCREEN}=="1", TAG+="systemd", ENV{SYSTEMD_WANTS}+="onefinity-touch-replug.service"
+
+# Never let the kernel power down the controller or the touchscreen.
+#
+# USB autosuspend puts an idle device to sleep. A CDC-ACM controller that is
+# merely waiting for the next command looks idle, and once suspended the serial
+# link goes quiet -- the sender then declares it lost, while the device is still
+# plugged in and lsusb still lists it. That is exactly what "it disconnects by
+# itself, without anyone touching it" looks like from the front.
+#
+# -1 disables the idle timer outright; power/control=on keeps it awake even if
+# something re-enables runtime PM later.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{power/autosuspend}="-1", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{power/autosuspend}="-1", ATTR{power/control}="on"
+# Any USB serial adapter driving a controller, whatever chip it uses.
+ACTION=="add", SUBSYSTEM=="usb", DRIVERS=="cdc_acm|ftdi_sio|ch341|cp210x|pl2303", ATTR{power/autosuspend}="-1", ATTR{power/control}="on"
+# And the touch panel, so the screen cannot go quiet either.
+ACTION=="add", SUBSYSTEM=="usb", ENV{ID_INPUT_TOUCHSCREEN}=="1", ATTR{power/autosuspend}="-1", ATTR{power/control}="on"

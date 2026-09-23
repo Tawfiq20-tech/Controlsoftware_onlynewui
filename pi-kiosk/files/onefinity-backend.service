@@ -12,6 +12,13 @@ Environment=PORT=4000
 # The kiosk service shows the UI; the backend must not try to open a browser.
 Environment=NO_BROWSER=1
 Environment=PUPPETEER_SKIP_DOWNLOAD=1
+# The serial loop must win against Chromium and against this process's own
+# compile worker. A million-line program takes ~16 s to compile on a Pi, and
+# while the CPU is saturated the controller's heartbeat can be answered too
+# late -- which drops the link even though nothing is wrong with the cable.
+Nice=-5
+CPUWeight=800
+IOWeight=800
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=2

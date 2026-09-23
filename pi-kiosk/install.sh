@@ -102,6 +102,8 @@ install -m 0644 "$F/99-onefinity.rules"         /etc/udev/rules.d/
 # will scan or join, and the kiosk user has no session to answer a prompt.
 mkdir -p /etc/polkit-1/rules.d
 install -m 0644 "$F/50-onefinity-network.rules" /etc/polkit-1/rules.d/
+mkdir -p /etc/NetworkManager/conf.d
+install -m 0644 "$F/onefinity-nm-powersave.conf" /etc/NetworkManager/conf.d/
 install -m 0755 "$F/usb-automount.sh"           /usr/local/bin/onefinity-usb-mount
 install -m 0755 "$F/touch-rotate.sh"            /usr/local/bin/onefinity-touch-rotate
 install -m 0755 "$F/touch-replug.sh"            /usr/local/bin/onefinity-touch-replug
@@ -156,7 +158,11 @@ fi
 # Silent boot: no rainbow screen, no kernel text, no blinking cursor.
 if [ -f "$BOOT_DIR/cmdline.txt" ]; then
     CMDLINE="$(tr -d '\n' < "$BOOT_DIR/cmdline.txt")"
-    for opt in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0; do
+    # consoleblank=0: the screen never blanks. usbcore.autosuspend=-1: the
+    # kernel never powers down an idle USB device -- a controller waiting for
+    # the next command looks idle, and a suspended one goes silent, which the
+    # sender reports as a lost connection while it is still plugged in.
+    for opt in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 usbcore.autosuspend=-1; do
         case " $CMDLINE " in *" ${opt%%=*}"[=\ ]*) ;; *) CMDLINE="$CMDLINE $opt" ;; esac
     done
     printf '%s\n' "$CMDLINE" > "$BOOT_DIR/cmdline.txt"
