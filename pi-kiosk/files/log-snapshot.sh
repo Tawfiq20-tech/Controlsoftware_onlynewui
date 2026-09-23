@@ -37,6 +37,19 @@ OUT="$OUT_DIR/last-boot.txt"
     echo "--- USB over-current / under-voltage, this boot ---"
     dmesg -T 2>&1 | grep -iE "over-?current|under-?volt|usb .*(disconnect|reset)" | tail -40
     echo
+    echo "--- the link to the controller: drops, timeouts, reconnects ---"
+    # A controller that "disconnects on its own" does not always show up as a
+    # USB event: the serial link can go quiet while the device stays plugged
+    # in, and the sender then declares it lost. Both look identical from the
+    # front, so capture the app's own view of it from this boot and the last.
+    for b in 0 -1; do
+        echo "  [boot $b]"
+        journalctl -b "$b" -u onefinity-backend --no-pager 2>/dev/null |
+            grep -iE "link lost|link down|link restored|heartbeat|LinkLost|serialport:(close|error)|disconnect|reconnect|Controller initialized|port closed|ENOENT|EIO" |
+            tail -40
+    done
+    echo
+
     echo "--- devices seen now ---"
     lsusb 2>&1
 } > "$OUT" 2>&1

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, AlertTriangle, Play, ChevronUp, ChevronDown, RotateCcw } from 'lucide-react';
 import { useCNCStore } from '../stores/cncStore';
 import { backendJobStartFromLine } from '../utils/backendConnection';
@@ -192,7 +193,16 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
         if (!positionBlocked) warnings.push('Keep the existing zero -- re-zeroing now would shift the rest of the cut');
     }
 
-    return (
+    // Rendered into <body>, not where it sits in the tree.
+    //
+    // This dialog is returned from JobControlBar, and that bar carries
+    // `backdrop-filter`. A filtered element becomes the containing block for
+    // its position:fixed descendants -- exactly as a transform does -- so the
+    // overlay was being laid out inside the control bar's little box instead
+    // of over the screen, and the dialog came out cut off at the edges. A
+    // portal puts it outside that ancestor, where fixed means the viewport
+    // again, and no styling added to the bar later can trap it again.
+    return createPortal(
         <div className="sfl-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="dialog" aria-modal="true" aria-label="Start job from line">
             <div className="sfl-modal">
                 <div className="sfl-header">
@@ -308,6 +318,7 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 }

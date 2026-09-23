@@ -1387,3 +1387,21 @@ body:has(.app.is-vertical) .camera-fullscreen-close svg {
 .app.is-vertical .chatbot-window.chatbot-closing {
     animation-duration: 100ms;
 }
+
+/* ── Start-from-line dialog on the pendant ──
+   It carries a G-code preview and a warning block, so on a portrait screen it
+   needs the full width it can get and its own scroll rather than being cut
+   off. (It is portalled to <body>; see StartFromLine.tsx for why.) */
+.app.is-vertical ~ .sfl-overlay,
+body .sfl-overlay {
+    padding: 12px;
+}
+body .sfl-modal {
+    width: min(560px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+}
+/* The middle of the dialog scrolls; header and buttons stay put. */
+body .sfl-modal > *:not(.sfl-header):not(.sfl-footer):not(.sfl-actions) {
+    min-height: 0;
+}
