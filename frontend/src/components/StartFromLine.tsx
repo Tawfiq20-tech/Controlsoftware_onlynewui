@@ -142,6 +142,27 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
     const planOk = !isRsp || (preview?.line === lineNumber && preview.plan.ok);
     const positionBlocked = isRsp && resumePoint ? !resumePoint.positionExact : false;
 
+    /**
+     * Why Start is greyed out, in words.
+     *
+     * It used to just sit there disabled. The commonest reason is the least
+     * obvious: on RSP the button waits for the machine to send back a plan for
+     * this exact line, and that cannot happen until the program has finished
+     * compiling -- which for a million-line file takes the better part of a
+     * minute. Nothing said so, so it looked broken, including on a machine
+     * that had only just been switched on.
+     */
+    const blockedReason: string | null = (() => {
+        if (!connected) return 'Not connected to the machine. Connect first.';
+        if (!rawGcodeContent) return 'No file loaded. Load a G-code file first.';
+        if (positionBlocked) return 'The machine does not know where it is. Home it, or re-zero X/Y/Z at the job’s original origin.';
+        if (!isRsp) return null;
+        if (!preview) return 'Preparing the file… a large program can take a minute. This button turns on by itself.';
+        if (preview.line !== lineNumber) return `Checking line ${lineNumber}…`;
+        if (!preview.plan.ok) return preview.plan.error || 'This line cannot be started from.';
+        return null;
+    })();
+
     const handleStart = () => {
         if (!connected) return;
         if (isRsp) {
@@ -305,6 +326,10 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
                         </div>
                     )}
                 </div>
+
+                {blockedReason && (
+                    <div className="sfl-blocked" role="status">{blockedReason}</div>
+                )}
 
                 <div className="sfl-footer">
                     <button className="sfl-btn-cancel" onClick={onClose}>Cancel</button>

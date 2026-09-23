@@ -370,3 +370,16 @@
     cursor: not-allowed;
     transform: none;
 }
+
+/* Why Start is greyed out. A disabled button with no explanation is the
+   difference between "wait a moment" and "this is broken". */
+.sfl-blocked {
+    margin: 0 20px 12px;
+    padding: 10px 12px;
+    background: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 7px;
+    color: #7dd3fc;
+    font-size: 13px;
+    line-height: 1.5;
+}
