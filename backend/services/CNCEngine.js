@@ -492,35 +492,85 @@ class CNCEngine extends EventEmitter {
     }
 
     /**
-     * Lift the tool clear of the work when a job finishes.
+     * Come back to the origin corner when a design finishes.
      *
-     * A program parks wherever its post processor says. The Carveco files park
-     * at the job's own retract -- 0.2 in, about 5 mm -- which leaves the cutter
-     * close enough to the surface that the smallest useful jog step (10 mm)
-     * drives it into the board before the operator can react. Finishing a job
-     * should leave the machine somewhere it is safe to jog from.
+     * The operator lines the next piece up against X0 Y0, so ending there is
+     * what makes the next setup quick and repeatable. Z is NOT taken to 0 --
+     * work Z0 is the material surface. It ends at a travel height instead, so
+     * the DRO reads 0.000 / 0.000 / <height>: the zero survived, and one jog
+     * step down touches the wood.
      *
-     * Only after a clean finish: an abort, an alarm or an E-stop leaves the
-     * machine exactly where it stopped, because that position is evidence and
-     * moving the tool could make a bad situation worse.
+     * The first version of this sent command('gcode', 'G0 Z10'). The RSP
+     * controller accepts nothing but M3/M4/M5/M7/M8/M9 on that command and
+     * warns "ignored" for the rest, so it never moved an axis while logging
+     * that it had. It now goes through job:returnToOrigin, which is a real
+     * OP_MOVE.
+     *
+     * @param {object} data  the sender:end payload
      */
-    _parkAfterJob() {
+    _returnToOriginAfterJob(data) {
         try {
+            const say = (why) => logger.info(`[Engine] not returning to origin: ${why}`);
+
+            // A macro is not a design. Touch-plate Z-zeroing is a macro, and it
+            // finishes with the operator's hands at the machine -- the last
+            // moment to start an unannounced rapid.
+            if (data && data.macro) return;
             if (!this.controller || !this.connection || !this.connection.isOpen) return;
-            const state = (this.controller.state && this.controller.state.status) || {};
-            const active = String(state.activeState || '').toLowerCase();
-            if (active === 'alarm' || active === 'hold') return;
 
+            const mode = String(this.config.get('preferences.returnToOrigin', 'origin'));
+            if (mode === 'off') return;
+
+            const st = (this.controller.state && this.controller.state.status) || {};
+            const active = String(st.activeState || '').toLowerCase();
+            if (active === 'alarm' || active === 'hold' || st.estop) return say(`machine is ${active || 'in e-stop'}`);
+
+            // The board lost its position at some point in this job: X0 Y0 no
+            // longer means what the operator set.
+            const point = typeof this.controller.getResumePoint === 'function' ? this.controller.getResumePoint() : null;
+            if (point && point.positionExact === false) return say('the machine is not sure where it is');
+            if (this._controllerRestartedThisJob) return say('the controller restarted during this job');
+
+            // How high to travel. safeHeight is a jog convenience, not a
+            // clearance plane: a rapid across the work at that height can still
+            // hit a clamp or the stock itself. Clear the program's own highest
+            // point as well, plus whatever the shop's hold-downs need.
             const safe = Number(this.config.get('preferences.safeHeight', 10)) || 10;
-            const z = Number(state.wpos && state.wpos.z);
-            // Already clear: never move the tool for nothing.
-            if (Number.isFinite(z) && z >= safe - 0.001) return;
+            const extra = Number(this.config.get('preferences.returnClearanceExtra', 0)) || 0;
+            const meta = this.controller._loadedMeta || null;
+            const ext = meta && meta.extents;
+            const fileMaxZ = ext && ext.max && Number.isFinite(Number(ext.max.z)) ? Number(ext.max.z) : null;
 
-            logger.info(`[Engine] job finished -- lifting Z to the safe height (${safe} mm) so it is safe to jog`);
-            this.controller.command('gcode', `G21 G90 G0 Z${safe.toFixed(3)}`);
+            let travelZ = Math.max(safe, fileMaxZ === null ? safe : fileMaxZ) + extra;
+
+            // Never ask for more height than the machine has.
+            const headroom = this.config.get('machine.zHeadroom', null);
+            if (headroom !== null && Number.isFinite(Number(headroom)) && travelZ > Number(headroom)) {
+                travelZ = Number(headroom);
+            }
+
+            // Travelling across the work is only safe if we know what the work
+            // reaches up to. Without extents, lift and stop there.
+            const xy = mode === 'origin' && fileMaxZ !== null && travelZ >= safe - 0.001;
+            if (mode === 'origin' && !xy) {
+                say(fileMaxZ === null
+                    ? 'the height of this program is unknown, so the tool was lifted but not moved across the work'
+                    : 'there is not enough height above the work zero to travel clear');
+            }
+
+            // One tick, so the job:end and workflow:state listeners that follow
+            // this event finish before any new motion starts.
+            setImmediate(() => {
+                try {
+                    logger.info(`[Engine] design finished -- lifting to Z${travelZ.toFixed(3)}${xy ? ' and returning to X0 Y0' : ''}`);
+                    this.controller.command('job:returnToOrigin', { travelZ, xy });
+                } catch (err) {
+                    logger.warn(`[Engine] could not return to origin: ${err && err.message}`);
+                }
+            });
         } catch (err) {
-            // Parking is a convenience: never let it break the end of a job.
-            logger.warn(`[Engine] could not park after the job: ${err && err.message}`);
+            // A convenience must never break the end of a job.
+            logger.warn(`[Engine] could not return to origin: ${err && err.message}`);
         }
     }
 
@@ -814,6 +864,9 @@ class CNCEngine extends EventEmitter {
         });
 
         this.controller.on('sender:start', (data) => {
+            // Cleared per job: a restart during THIS job is what makes the
+            // origin untrustworthy afterwards.
+            this._controllerRestartedThisJob = false;
             this.io.emit('sender:start', data);
             if (this.sessionLogger) this.sessionLogger.logJob({ event: 'started' });
         });
@@ -822,7 +875,7 @@ class CNCEngine extends EventEmitter {
             this._jobPaused = false;
             this.io.emit('sender:end', data);
             if (this.sessionLogger) this.sessionLogger.logJob({ event: 'completed', ...data });
-            if (!data || !data.aborted) this._parkAfterJob();
+            if (!data || !data.aborted) this._returnToOriginAfterJob(data);
         });
 
         this.controller.on('sender:error', (err) => {
@@ -842,6 +895,9 @@ class CNCEngine extends EventEmitter {
         // Resume point (RSP): where a stopped/alarmed job can continue, and
         // the Start From Line dialog's preview of what a resume will do.
         this.controller.on('controller:restarted', (info) => {
+            // The board lost its step counters, so work zero is no longer
+            // where the operator set it -- do not drive to X0 Y0 after this.
+            this._controllerRestartedThisJob = true;
             this.io.emit('controller:restarted', info);
             if (this.sessionLogger) this.sessionLogger.logJob({ event: 'controllerRestarted', ...info });
         });

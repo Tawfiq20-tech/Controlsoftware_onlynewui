@@ -1420,6 +1420,21 @@ class RSPController extends EventEmitter {
             // Scoped narrowly to the M-codes this panel actually sends --
             // any other single-line 'gcode' traffic (MDI console, etc.) is a
             // separate, wider RSP gcode-passthrough gap left untouched here.
+            // Lift clear of the work, then come back to the origin corner, so
+            // the next piece starts from the same zero.
+            //
+            // This is a real OP_MOVE, not a G-code line: `case 'gcode'` below
+            // accepts nothing but M3/M4/M5/M7/M8/M9 and warns "ignored" for
+            // everything else, so a G0 handed to it never moves an axis.
+            case 'job:returnToOrigin': {
+                const o = args[0] || {};
+                this._returnToOrigin(o).catch((exc) => {
+                    logger.warn(`[RSP] return to origin stopped: ${(exc && exc.message) || exc}`);
+                    this.emit('job:returnedToOrigin', { ok: false, reason: (exc && exc.message) || String(exc) });
+                });
+                break;
+            }
+
             case 'gcode': {
                 const line = String(args[0] || '').trim().toUpperCase();
                 if (/^M0*3\b/.test(line) || /^M0*4\b/.test(line)) {
@@ -1691,6 +1706,62 @@ class RSPController extends EventEmitter {
      * instead; the caller already has them.
      * @returns {Promise<{x:number,y:number,z:number,feed:number}>}
      */
+    /**
+     * Retreat upward, then travel home at that height.
+     *
+     * Two separate awaited moves, never one diagonal. Issued together the
+     * board coordinates them into a single straight line, and a cutter still
+     * down in a pocket is dragged sideways through the pocket wall on the way
+     * out. Step 2 is only sent once the board has acknowledged step 1.
+     *
+     * Z is only ever commanded UPWARD here: the target is max(current, asked),
+     * so a mistaken or stale travel height can never drive the tool down into
+     * the work.
+     *
+     * @param {object} o
+     * @param {number} o.travelZ  height to clear to, in work mm
+     * @param {boolean} o.xy      also return to X0 Y0 (false = lift only)
+     */
+    async _returnToOrigin({ travelZ, xy = true, feedZ = 1000, feedXY = 3000 } = {}) {
+        const st = (this.state && this.state.status) || {};
+        const mpos = st.mpos || {};
+        const active = String(st.activeState || '').toLowerCase();
+
+        // The machine is telling us something is wrong, or it no longer knows
+        // where it is. Either way its position is evidence: leave it alone.
+        if (active === 'alarm' || active === 'hold' || st.estop) {
+            this.emit('job:returnedToOrigin', { ok: false, reason: `machine is ${active || 'in e-stop'}` });
+            return;
+        }
+        if (this._positionUncertain) {
+            this.emit('job:returnedToOrigin', { ok: false, reason: 'the machine is not sure where it is' });
+            return;
+        }
+        if (!Number.isFinite(mpos.x) || !Number.isFinite(mpos.y) || !Number.isFinite(mpos.z)) {
+            this.emit('job:returnedToOrigin', { ok: false, reason: 'no position from the board' });
+            return;
+        }
+        if (!Number.isFinite(Number(travelZ))) {
+            this.emit('job:returnedToOrigin', { ok: false, reason: 'no travel height worked out' });
+            return;
+        }
+
+        // Step 1 -- straight up, and only up.
+        const zTarget = Math.max(mpos.z, Number(travelZ));
+        if (zTarget > mpos.z + 0.001) {
+            await this._moveAbsolute(mpos.x, mpos.y, zTarget, feedZ);
+        }
+
+        // Step 2 -- home at that height. Skipped when the caller could not
+        // prove the traverse is clear.
+        if (!xy) {
+            this.emit('job:returnedToOrigin', { ok: true, mode: 'lift', x: mpos.x, y: mpos.y, z: zTarget });
+            return;
+        }
+        await this._moveAbsolute(0, 0, zTarget, feedXY);
+        this.emit('job:returnedToOrigin', { ok: true, mode: 'origin', x: 0, y: 0, z: zTarget });
+    }
+
     _moveAbsolute(x, y, z, feed) {
         if (!this.stream) return Promise.reject(new Error('controller not bound'));
         const mpos = this.state.status.mpos || { x: 0, y: 0, z: 0 };
