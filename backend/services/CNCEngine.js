@@ -39,7 +39,7 @@ function publicDiagStatus(status) {
 
 // Commands that start the machine on the loaded program: they wait for a file
 // load still being prepared, or they would run the previous file.
-const JOB_START_COMMANDS = new Set(['gcode:start', 'gcode:startFromLine', 'gcode:resume', 'cyclestart']);
+const JOB_START_COMMANDS = new Set(['gcode:start', 'gcode:startFresh', 'gcode:startFromLine', 'gcode:resume', 'cyclestart']);
 
 class CNCEngine extends EventEmitter {
     /**

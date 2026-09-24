@@ -1188,6 +1188,50 @@ class RSPController extends EventEmitter {
                 this._clearResumePoint();
                 break;
 
+            // Start this file at line 1, or refuse. Never resume.
+            //
+            // 'gcode:start' resumes from the stop point when one exists, which
+            // is right for a person pressing START -- they stopped it and mean
+            // to carry on. It is wrong for anything automated: a queue that
+            // reached for START would silently continue design 3 at line
+            // 18,402 on a fresh piece of stock.
+            //
+            // This refuses instead of clearing the point, so nothing the
+            // operator might still want is destroyed behind their back. The
+            // caller is expected to offer them the choice.
+            case 'gcode:startFresh': {
+                if (this.job && this.job.active && !this.job.firmwareLost) {
+                    this.emit('console', 'ℹ️ The job is already running.');
+                    return undefined;
+                }
+                if (!this._loadedGcode) {
+                    this.emit('console', '⛔ Nothing was started: no file is loaded.');
+                    return undefined;
+                }
+                if (this._positionUncertain) {
+                    this.emit('console', '⛔ Nothing was started: the machine is not sure where it is. Home it or re-zero first.');
+                    return undefined;
+                }
+                if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
+                    this.emit('console', `⛔ Nothing was started: this design was stopped at line ${this._resumeLine} earlier. Resume it from there, or clear the stop point, then start it again.`);
+                    return undefined;
+                }
+                return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
+            }
+
+            // Throw away a stop point the operator has decided not to resume,
+            // so the design can be run again from the beginning.
+            case 'gcode:clearResumePoint': {
+                if (this.job && this.job.active) {
+                    this.emit('console', 'ℹ️ Stop the job first.');
+                    return undefined;
+                }
+                this._clearResumePoint();
+                this._originChangedSinceStop = false;
+                this.emit('console', 'Stop point cleared -- this design will run from the start.');
+                return undefined;
+            }
+
             case 'gcode:start': {
                 // A double-click or a second client pressing START used to
                 // abort the running job and restart the file from line 1.
