@@ -265,6 +265,36 @@ test('every event backendConnection listens for is bridged by controller.ts', ()
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// 5. Whole-class guard: a screen must be reachable on BOTH layouts.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('every screen App renders has a tab in both the header and the rail', () => {
+    const src = path.join(__dirname, '..', '..', 'frontend', 'src');
+    if (!fs.existsSync(src)) return;   // backend-only checkout
+    const app = fs.readFileSync(path.join(src, 'App.tsx'), 'utf-8');
+    const header = fs.readFileSync(path.join(src, 'components', 'Header.tsx'), 'utf-8');
+    const rail = fs.readFileSync(path.join(src, 'components', 'VerticalNavRail', 'VerticalNavRail.tsx'), 'utf-8');
+
+    // There are two navigations and only one of them is on screen at a time:
+    // VerticalNavRail.css hides the rail above a 1:1 aspect ratio and hides the
+    // header tabs below it. The Queue shipped in the rail alone, so on a
+    // landscape screen -- a laptop, or a panel mounted the other way round --
+    // the screen existed, rendered, and could not be opened at all.
+    const screens = new Set();
+    for (const m of app.matchAll(/activeHeaderTab === '([A-Za-z]+)'/g)) screens.add(m[1]);
+    assert.ok(screens.has('Queue') && screens.has('Library'), 'sanity check: the scan found the screens');
+
+    const tabsLine = (header.match(/const NAV_TABS = \[([^\]]*)\]/) || [])[1] || '';
+    const headerTabs = new Set([...tabsLine.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]));
+    const railTabs = new Set([...rail.matchAll(/\{\s*id: '([A-Za-z]+)'/g)].map((m) => m[1]));
+
+    const missingHeader = [...screens].filter((s2) => !headerTabs.has(s2));
+    const missingRail = [...screens].filter((s2) => !railTabs.has(s2));
+    assert.deepStrictEqual(missingHeader, [], `no way to open these on a landscape screen: ${missingHeader.join(', ')}`);
+    assert.deepStrictEqual(missingRail, [], `no way to open these on the touchscreen: ${missingRail.join(', ')}`);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 
 (async () => {
     console.log('Product hardening regressions...');

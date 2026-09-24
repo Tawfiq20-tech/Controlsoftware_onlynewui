@@ -12,7 +12,11 @@ interface HeaderProps {
     setActiveTab: (tab: string) => void;
 }
 
-const NAV_TABS = ['Prepare', 'Carve', 'Device', 'Project', 'Library', 'Settings'];
+// The landscape tab bar. The portrait touchscreen uses VerticalNavRail
+// instead (the rail is hidden above a 1:1 aspect ratio), so BOTH lists have to
+// carry every screen -- a tab added to only one of them simply does not exist
+// on the other layout.
+const NAV_TABS = ['Prepare', 'Carve', 'Device', 'Project', 'Library', 'Queue', 'Settings'];
 
 // RSP protocol axis byte (RSPController.js AXIS_X/Y/Z, confirmed backend/
 // services/controllers/RSPController.js:67-69) -- EV_FAULT reports this
@@ -94,7 +98,10 @@ export default function Header({
                 <nav className="nav-tabs flex" role="tablist">
                     {NAV_TABS.map(tab => {
                         const isCarving = machineState === 'running' || machineState === 'paused';
-                        const locked = isCarving && tab !== 'Carve';
+                        // Queue stays open while cutting, like it does on the
+                        // rail: checking and reordering what runs next is what
+                        // the operator does while the machine is busy.
+                        const locked = isCarving && tab !== 'Carve' && tab !== 'Queue';
                         return (
                             <button
                                 key={tab}
