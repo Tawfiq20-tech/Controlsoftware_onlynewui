@@ -31,3 +31,15 @@ node_modules/
 
 # Local snapshot taken before the vertical UI rework; not part of the product.
 _backup_before_vertical_industrial_ui/
+
+# The machine's own settings, including remoteDiagToken and the bot tokens.
+# A scrubbed backend/data/config.default.json is what ships; ConfigStore seeds
+# config.json from it on first boot.
+backend/data/config.json
+backend/data/config.json.bak
+backend/data/config.json.tmp
+backend/data/config.json.damaged-*
+# A linked WhatsApp account's credentials.
+backend/data/whatsapp-session/
+# The operator launch link, written at boot when there is no TTY.
+backend/data/operator-link.txt

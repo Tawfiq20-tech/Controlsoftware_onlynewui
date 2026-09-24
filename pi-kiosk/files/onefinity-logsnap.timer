@@ -2,12 +2,17 @@
 Description=Refresh the on-card record of what this boot is doing
 
 [Timer]
-# Two minutes after boot, then every three. The faults being chased do not
+# Two minutes after boot, then every fifteen. The faults being chased do not
 # reboot the Pi, so the card has to hold a recent picture at all times: pull it
-# whenever the fault appears and current-boot.txt is at most three minutes old.
+# whenever the fault appears and current-boot.txt is at most fifteen minutes old.
+#
+# This was every three minutes. Each run re-scanned the whole backend journal
+# and issued a global sync(), so on a long carve the card was saturated every
+# three minutes for seconds at a time. Fifteen minutes plus the bounded scans
+# and the idle scheduling in the .service keep it clear of a running job.
 OnBootSec=2min
-OnUnitActiveSec=3min
-AccuracySec=30s
+OnUnitActiveSec=15min
+AccuracySec=60s
 
 [Install]
 WantedBy=timers.target

@@ -46,8 +46,18 @@ function splitTerse(line) {
 }
 
 /** Map nmcli's stderr onto something an operator can act on. */
+/**
+ * NetworkManager is installed but its service is not running (a failed unit
+ * after a power cut mid-write, or an upgrade that left it masked). Every nmcli
+ * call then exits 8 with this on stderr. Reported as "no adapter" / "radio
+ * off", it is a dead end on a machine with no terminal.
+ */
+const NM_DOWN_RE = /networkmanager is not running/i;
+const NM_DOWN_MESSAGE = 'NetworkManager is not running on this machine, so Wi-Fi cannot be set up. Restart the machine; if it comes back the same way, the kiosk package needs reinstalling.';
+
 function explain(stderr, fallback) {
     const text = String(stderr || '').toLowerCase();
+    if (NM_DOWN_RE.test(text)) return NM_DOWN_MESSAGE;
     if (text.includes('secrets were required') || text.includes('no secrets provided')) {
         return 'Wrong password for this network.';
     }
@@ -98,7 +108,13 @@ class WifiService {
                         this._nmcliMissing = true;
                         return done({ ok: false, missing: true, stdout: '', stderr: 'nmcli not installed' });
                     }
-                    done({ ok: !err, stdout: String(stdout || ''), stderr: String(stderr || (err && err.message) || '') });
+                    const errText = String(stderr || (err && err.message) || '');
+                    done({
+                        ok: !err,
+                        nmDown: !!err && NM_DOWN_RE.test(errText),
+                        stdout: String(stdout || ''),
+                        stderr: errText,
+                    });
                 });
             } catch (exc) {
                 done({ ok: false, stdout: '', stderr: (exc && exc.message) || String(exc) });
@@ -121,6 +137,12 @@ class WifiService {
                 supported: false,
                 reason: 'NetworkManager (nmcli) is not installed on this machine, so Wi-Fi cannot be set up here.',
             };
+        }
+        // Without this the page said "No Wi-Fi adapter found on this machine"
+        // and "Wi-Fi is switched off" -- both wrong, and both leaving the
+        // operator with nothing to do next.
+        if (devices.nmDown) {
+            return { supported: false, reason: NM_DOWN_MESSAGE };
         }
 
         let wifi = null;
@@ -171,7 +193,14 @@ class WifiService {
         const ips = [];
         for (const line of out.stdout.split('\n')) {
             const match = /^IP4\.ADDRESS\[\d+\]:(.+)$/.exec(line.trim());
-            if (match) ips.push(match[1].split('/')[0]);
+            if (!match) continue;
+            const ip = match[1].split('/')[0];
+            // 'device show' covers every device, and NetworkManager 1.42 on
+            // Bookworm manages loopback -- so this used to print "Reachable at
+            // 127.0.0.1" on the screen, alongside a 169.254.x.x from a failed
+            // DHCP. Neither address gets a laptop to the machine.
+            if (/^127\./.test(ip) || /^169\.254\./.test(ip)) continue;
+            ips.push(ip);
         }
         return ips;
     }
@@ -206,9 +235,18 @@ class WifiService {
                 inUse: inUse === '*',
                 saved: saved.has(ssid),
             };
-            // The same SSID shows up once per band/AP; keep the strongest.
+            // The same SSID shows up once per band/AP; keep the strongest row,
+            // but OR the flags across all of them. The merge used to happen
+            // only inside the "stronger" branch, so on a dual-band router --
+            // where nmcli lists the strongest first and the in-use radio is
+            // often the weaker one -- the inUse flag was thrown away. The list
+            // then never showed "Connected" and offered a Connect button for
+            // the network the machine was already on.
             const prev = bySsid.get(ssid);
-            if (!prev || entry.signal > prev.signal) bySsid.set(ssid, { ...entry, inUse: entry.inUse || !!(prev && prev.inUse) });
+            const merged = !prev || entry.signal > prev.signal ? { ...entry } : { ...prev };
+            merged.inUse = entry.inUse || !!(prev && prev.inUse);
+            merged.saved = entry.saved || !!(prev && prev.saved);
+            bySsid.set(ssid, merged);
         }
 
         const networks = [...bySsid.values()].sort((a, b) => {
@@ -242,6 +280,10 @@ class WifiService {
             return { ok: false, error: 'Wi-Fi passwords are at least 8 characters.' };
         }
 
+        // A typed password is passed even for a SAVED SSID: when the shop
+        // changes its key the stale profile still matches, and without this
+        // nmcli reconnected with the old PSK and failed for ever. nmcli updates
+        // the profile's PSK when one is supplied.
         const args = ['--wait', String(NMCLI_WAIT_S), 'device', 'wifi', 'connect', name];
         if (hidden) args.push('hidden', 'yes');
         if (password) args.unshift('--ask');

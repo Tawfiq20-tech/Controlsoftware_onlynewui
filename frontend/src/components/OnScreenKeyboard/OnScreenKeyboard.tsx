@@ -70,6 +70,13 @@ function isNumericField(el: Field): boolean {
     return NUMERIC_TYPES.has(input.type) || inputMode === 'numeric' || inputMode === 'decimal';
 }
 
+/**
+ * Anything that can still GROW into a number: "", "-", "1.", "-0.5".
+ * A keystroke whose result fails this is dropped rather than parked as a
+ * draft, which is what used to deaden the pad.
+ */
+const NUMERIC_PREFIX_RE = /^-?\d*\.?\d*$/;
+
 /** A number input silently blanks anything else, so check before writing. */
 function isWritableNumber(text: string): boolean {
     return text === '' || /^-?\d+(\.\d+)?$/.test(text);
@@ -228,8 +235,13 @@ export default function OnScreenKeyboard() {
 
     const commit = useCallback((el: Field, next: string, caret: number) => {
         if (isNumericField(el)) {
-            // Write as much as the field will keep and park the rest, so "1."
-            // shows "1" rather than blanking the field.
+            // Only ever park a value that is a VALID PREFIX of a number ("1.",
+            // "-", ""). Parking arbitrary rejected text ("800 " after the Space
+            // key, "8.." after a double-tapped dot) froze the field: every
+            // later digit was appended to the poisoned draft, numericPrefix()
+            // cut it back to the same visible value, and the pad went dead with
+            // no feedback. A keystroke that cannot lead to a number is dropped.
+            if (!NUMERIC_PREFIX_RE.test(next)) return;
             const writable = isWritableNumber(next) ? next : numericPrefix(next);
             writeValue(el, writable);
             lastWrittenRef.current = writable;
@@ -344,8 +356,11 @@ export default function OnScreenKeyboard() {
     // Every key blocks pointerdown: the field must keep focus and its caret.
     const keyProps = (fn: () => void) => ({
         type: 'button' as const,
-        onPointerDown: (e: React.PointerEvent) => e.preventDefault(),
-        onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
+        // stopPropagation as well as preventDefault: document-level mousedown
+        // listeners (HomeMenu, CameraView) treat a key press as a click
+        // outside themselves and close, taking the focused field with them.
+        onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); e.stopPropagation(); },
+        onMouseDown: (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); },
         onClick: fn,
     });
 
@@ -355,12 +370,27 @@ export default function OnScreenKeyboard() {
             ref={panelRef}
             role="application"
             aria-label="On-screen keyboard"
+            // A tap on the gap between keys, the title strip or the bottom
+            // padding is a mousedown on a non-focusable area: Chrome moved
+            // focus to <body>, the field fired focusout and the sheet closed
+            // mid-password. Blocking it here keeps focus on the field wherever
+            // in the sheet the tap lands.
+            onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
             <div className="osk-bar">
                 <span className="osk-bar-title">Keyboard</span>
                 <button className="osk-bar-btn" {...keyProps(clearAll)} aria-label="Clear field">Clear</button>
-                <button className="osk-bar-btn" {...keyProps(() => moveCaret(-1))} aria-label="Cursor left">◀</button>
-                <button className="osk-bar-btn" {...keyProps(() => moveCaret(1))} aria-label="Cursor right">▶</button>
+                {/* Chrome throws on setSelectionRange for input[type=number],
+                    and the numeric insert/backspace paths work at the end of
+                    the value regardless, so these two can do nothing at all on
+                    a number field. Don't show controls that cannot work. */}
+                {mode !== 'numeric' && (
+                    <>
+                        <button className="osk-bar-btn" {...keyProps(() => moveCaret(-1))} aria-label="Cursor left">◀</button>
+                        <button className="osk-bar-btn" {...keyProps(() => moveCaret(1))} aria-label="Cursor right">▶</button>
+                    </>
+                )}
                 <button
                     className="osk-bar-btn osk-bar-close"
                     {...keyProps(() => { fieldRef.current?.blur(); close(); })}
@@ -386,7 +416,10 @@ export default function OnScreenKeyboard() {
                                 <button className="osk-key osk-key-wide osk-key-alt" {...keyProps(() => setMode('letters'))}>ABC</button>
                             )}
                             {i === 2 && (
-                                <button className="osk-key osk-key-wide osk-key-alt" {...keyProps(() => insert(' '))}>Space</button>
+                                /* Was a Space key, directly right of "3": a
+                                   space is never valid in a number field and
+                                   one mis-tap used to deaden the whole pad. */
+                                <button className="osk-key osk-key-wide osk-key-alt" {...keyProps(clearAll)}>Clear</button>
                             )}
                             {i === 3 && (
                                 <button className="osk-key osk-key-wide osk-key-go" {...keyProps(pressEnter)} aria-label="Done">

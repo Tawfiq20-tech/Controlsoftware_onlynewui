@@ -67,7 +67,14 @@ function newController() {
     assert.ok(ctrl.lastLoadResult.ok);
     let starts = 0;
     ctrl._startJob = () => { starts += 1; };
-    return { ctrl, out, starts: () => starts };
+    // Home and Zero now clear the position warning only when the FIRMWARE has
+    // acknowledged the op (before, a NAK'd or never-answered OP_HOME still
+    // unblocked Resume on a machine whose position was never re-established).
+    // The fake connection below never replies, so stand in for the device and
+    // let each test choose what it answers.
+    const acks = { ok: true, error: 'ST_ERR_STATE' };
+    ctrl._sendAcked = () => Promise.resolve(acks.ok ? { ok: true } : { ok: false, error: acks.error });
+    return { ctrl, out, acks, starts: () => starts };
 }
 
 function testStartBlockedUntilZeroed() {
@@ -83,11 +90,17 @@ function testStartBlockedUntilZeroed() {
     ctrl.command('gcode:startFromLine', 3, {});
     assert.strictEqual(starts(), 0, 'Start From Line refused after a restart');
 
+    return { ctrl, out, starts };
+}
+
+async function testStartBlockedUntilZeroedTail({ ctrl, out, starts }) {
     ctrl.command('zero:x');
     ctrl.command('zero:y');
+    await settle();
     ctrl.command('gcode:start');
     assert.strictEqual(starts(), 0, 'still refused with Z not zeroed');
     ctrl.command('zero:z');
+    await settle();
     assert.strictEqual(out.cleared.length, 1, 'zeroing X, Y and Z clears it');
     ctrl.command('gcode:start');
     assert.strictEqual(starts(), 1, 'Start allowed once the zero is set again');
@@ -95,12 +108,16 @@ function testStartBlockedUntilZeroed() {
     console.log('  ok  Start and Start From Line stay blocked after a restart until X, Y and Z are zeroed');
 }
 
-function testHomeOrZeroAllClears() {
+/** Let the ack promise and its .then() run. */
+const settle = () => new Promise((r) => setImmediate(r));
+
+async function testHomeOrZeroAllClears() {
     for (const cmd of ['home', 'zero:all']) {
         const { ctrl, out, starts } = newController();
         ctrl.notifyControllerRestarted({ lostJob: null });
         assert.ok(out.console.some((m) => /restarted since it was last connected/.test(m)));
         ctrl.command(cmd);
+        await settle();
         assert.strictEqual(out.cleared.length, 1, `${cmd} clears the restart`);
         ctrl.command('gcode:start');
         assert.strictEqual(starts(), 1);
@@ -109,11 +126,38 @@ function testHomeOrZeroAllClears() {
     console.log('  ok  Home or Zero All clears it in one step');
 }
 
+/**
+ * The half that matters on the machine: a Home or Zero the firmware REFUSED
+ * (E-stop still latched, alarm not cleared, an axis still moving) must leave
+ * the warning in place. This used to clear on dispatch, so Resume and Start
+ * From Line were unblocked on a machine that had never been homed -- the
+ * resume preamble would then travel and plunge at the wrong place.
+ */
+async function testRefusedHomeOrZeroDoesNotClear() {
+    for (const cmd of ['home', 'zero:all']) {
+        const { ctrl, out, acks, starts } = newController();
+        acks.ok = false;
+        ctrl.notifyControllerRestarted({ lostJob: null });
+        ctrl.command(cmd);
+        await settle();
+        assert.strictEqual(out.cleared.length, 0, `a refused ${cmd} must NOT clear the restart`);
+        assert.ok(
+            out.console.some((m) => /did not finish|did not accept/.test(m)),
+            `a refused ${cmd} says so on the console`,
+        );
+        ctrl.command('gcode:start');
+        assert.strictEqual(starts(), 0, `Start stays blocked after a refused ${cmd}`);
+        ctrl.unbind();
+    }
+    console.log('  ok  A Home or Zero the firmware refused leaves the position warning up');
+}
+
 (async () => {
     console.log('Testing controller restart detection...');
     testDetectsRebootAcrossReconnect();
-    testStartBlockedUntilZeroed();
-    testHomeOrZeroAllClears();
+    await testStartBlockedUntilZeroedTail(testStartBlockedUntilZeroed());
+    await testHomeOrZeroAllClears();
+    await testRefusedHomeOrZeroDoesNotClear();
     console.log('ALL TESTS PASSED SUCCESSFULLY!');
     process.exit(0);
 })().catch((err) => {

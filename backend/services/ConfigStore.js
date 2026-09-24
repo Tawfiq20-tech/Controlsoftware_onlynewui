@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
+const logger = require('../logger');
 
 const SAVE_DEBOUNCE_MS = 1000;
 
@@ -143,11 +144,35 @@ class ConfigStore extends EventEmitter {
     _load() {
         try {
             if (fs.existsSync(this.configPath)) {
-                const raw = fs.readFileSync(this.configPath, 'utf-8');
-                const parsed = JSON.parse(raw);
+                let parsed;
+                try {
+                    parsed = JSON.parse(fs.readFileSync(this.configPath, 'utf-8'));
+                } catch (parseErr) {
+                    // A power cut during the old non-atomic write left a
+                    // truncated file here, and this used to fall through to
+                    // "start from DEFAULT_CONFIG" silently -- machine profiles,
+                    // wcsOffsets, the whole hand-tuned probeSettings block, the
+                    // tool library and macros gone. The next set() then wrote
+                    // those defaults over the damaged file, making it permanent.
+                    parsed = this._recoverFromBackup(parseErr);
+                }
                 this.data = this._deepMerge(DEFAULT_CONFIG, parsed);
             } else {
+                // First boot on a freshly flashed machine. The image no longer
+                // carries the build PC's own config.json (it held that PC's
+                // remote-diagnostics URL and token, its bot settings and its
+                // probe geometry, identical on every machine flashed from it),
+                // so seed from the scrubbed factory file beside it.
                 this.data = { ...DEFAULT_CONFIG };
+                const seed = path.join(path.dirname(this.configPath), 'config.default.json');
+                try {
+                    if (fs.existsSync(seed)) {
+                        this.data = this._deepMerge(DEFAULT_CONFIG, JSON.parse(fs.readFileSync(seed, 'utf-8')));
+                        logger.info(`[Config] first boot: seeded settings from ${seed}`);
+                    }
+                } catch (seedErr) {
+                    logger.warn(`[Config] could not read ${seed}: ${seedErr && seedErr.message}; using built-in defaults`);
+                }
                 this._saveImmediate();
             }
             // Seed default machine profiles if none saved
@@ -160,8 +185,54 @@ class ConfigStore extends EventEmitter {
                 this._saveImmediate();
             }
         } catch (err) {
+            logger.error(`[Config] ${this.configPath} could not be read (${err && err.message}); running on built-in defaults. The file on disk has NOT been overwritten.`);
             this.data = { ...DEFAULT_CONFIG };
         }
+    }
+
+    /**
+     * A damaged config.json: move it aside (never delete it) and fall back to
+     * the .bak written before every save. Returns the parsed backup, or {}.
+     * @private
+     */
+    _recoverFromBackup(parseErr) {
+        logger.error(`[Config] ${this.configPath} is damaged: ${parseErr && parseErr.message}`);
+        const damaged = `${this.configPath}.damaged-${Date.now()}`;
+        try {
+            fs.renameSync(this.configPath, damaged);
+            logger.error(`[Config] the damaged file was kept as ${damaged}`);
+        } catch (_) { /* best effort -- keep going either way */ }
+        const backup = `${this.configPath}.bak`;
+        try {
+            if (fs.existsSync(backup)) {
+                const parsed = JSON.parse(fs.readFileSync(backup, 'utf-8'));
+                logger.error(`[Config] recovered the previous good settings from ${backup}`);
+                this.recoveredFromBackup = true;
+                return parsed;
+            }
+        } catch (bakErr) {
+            logger.error(`[Config] ${backup} is unusable too: ${bakErr && bakErr.message}`);
+        }
+        this.settingsLost = true;
+        logger.error('[Config] no usable backup -- starting from built-in defaults.');
+        return {};
+    }
+
+    /**
+     * Reject a key path that would reach Object.prototype. POST /api/config
+     * takes the key straight from the request body, and a walk through
+     * '__proto__' assigned onto Object.prototype -- after which get(), which
+     * used plain property access, served that value for EVERY unset setting in
+     * the backend (remoteDiagEnabled true on a fresh machine, with nothing
+     * written to config.json to show it).
+     * @private
+     */
+    static _safeParts(key) {
+        const parts = String(key).split('.');
+        for (const part of parts) {
+            if (part === '__proto__' || part === 'constructor' || part === 'prototype') return null;
+        }
+        return parts;
     }
 
     /**
@@ -171,14 +242,18 @@ class ConfigStore extends EventEmitter {
      * @returns {*}
      */
     get(key, defaultValue) {
-        const parts = key.split('.');
+        const parts = ConfigStore._safeParts(key);
+        if (!parts) return defaultValue;
         let current = this.data;
 
         for (const part of parts) {
             if (current == null || typeof current !== 'object') {
                 return defaultValue;
             }
-            current = current[part];
+            // Own properties only: an inherited value -- from a polluted
+            // Object.prototype, or just a built-in like 'constructor' -- must
+            // never be served as this machine's setting.
+            current = Object.prototype.hasOwnProperty.call(current, part) ? current[part] : undefined;
         }
 
         return current !== undefined ? current : defaultValue;
@@ -190,11 +265,16 @@ class ConfigStore extends EventEmitter {
      * @param {*} value
      */
     set(key, value) {
-        const parts = key.split('.');
+        const parts = ConfigStore._safeParts(key);
+        if (!parts) {
+            logger.warn(`[Config] refusing to write the unsafe key path "${String(key).slice(0, 80)}"`);
+            return;
+        }
         let current = this.data;
 
         for (let i = 0; i < parts.length - 1; i++) {
-            if (current[parts[i]] == null || typeof current[parts[i]] !== 'object') {
+            if (!Object.prototype.hasOwnProperty.call(current, parts[i])
+                || current[parts[i]] == null || typeof current[parts[i]] !== 'object') {
                 current[parts[i]] = {};
             }
             current = current[parts[i]];
@@ -210,11 +290,15 @@ class ConfigStore extends EventEmitter {
      * @param {string} key
      */
     delete(key) {
-        const parts = key.split('.');
+        const parts = ConfigStore._safeParts(key);
+        if (!parts) {
+            logger.warn(`[Config] refusing to delete the unsafe key path "${String(key).slice(0, 80)}"`);
+            return;
+        }
         let current = this.data;
 
         for (let i = 0; i < parts.length - 1; i++) {
-            if (current[parts[i]] == null) return;
+            if (!Object.prototype.hasOwnProperty.call(current, parts[i]) || current[parts[i]] == null) return;
             current = current[parts[i]];
         }
 
@@ -387,7 +471,25 @@ class ConfigStore extends EventEmitter {
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            fs.writeFileSync(this.configPath, JSON.stringify(this.data, null, 2), 'utf-8');
+            const json = JSON.stringify(this.data, null, 2);
+            // Operators switch this appliance off at the wall. An in-place
+            // writeFileSync leaves a truncated config.json if the power goes
+            // during it, and the whole machine configuration is then lost.
+            // Keep the last good file, then write-and-rename so config.json is
+            // only ever a complete document.
+            const tmp = `${this.configPath}.tmp`;
+            const bak = `${this.configPath}.bak`;
+            try {
+                if (fs.existsSync(this.configPath)) fs.copyFileSync(this.configPath, bak);
+            } catch (_) { /* a missing backup must not stop the save */ }
+            const fd = fs.openSync(tmp, 'w');
+            try {
+                fs.writeFileSync(fd, json, 'utf-8');
+                fs.fsyncSync(fd);
+            } finally {
+                fs.closeSync(fd);
+            }
+            fs.renameSync(tmp, this.configPath);
         } catch (err) {
             this.emit('error', err);
         }
@@ -408,6 +510,10 @@ class ConfigStore extends EventEmitter {
     _deepMerge(target, source) {
         const result = { ...target };
         for (const key of Object.keys(source)) {
+            // JSON.parse('{"__proto__":{...}}') makes __proto__ an OWN key, and
+            // plain assignment below would then run the prototype setter. A
+            // hand-edited or tampered config.json must not be able to do that.
+            if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
             if (
                 source[key] &&
                 typeof source[key] === 'object' &&

@@ -480,6 +480,18 @@ class CNCEngine extends EventEmitter {
             if (this.loadedFile) {
                 socket.emit('file:load', this.loadedFile);
             }
+
+            // Controller identity. 'controller:type' and 'controller:initialized'
+            // are emitted once at bind; a screen that restarts mid-carve joined
+            // after that and kept firmwareType 'unknown' (treated as RSP), so on
+            // an RTS/GRBL machine the Start-From-Line dialog waited forever for a
+            // preview the backend has no handler for -- and controllerReady, which
+            // serialport:open sets false, was never set true again.
+            socket.emit('controller:type', this.controller.type);
+            socket.emit('controller:initialized', this._controllerInitialized || {
+                firmwareType: this.controller.type,
+                firmwareVersion: '',
+            });
         }
 
         // Always send config data (macros, tools, preferences)
@@ -835,6 +847,9 @@ class CNCEngine extends EventEmitter {
 
         // Initialization
         this.controller.on('initialized', (info) => {
+            // Kept so _sendInitialState() can replay it to a screen that
+            // restarted after bind (see there).
+            this._controllerInitialized = info;
             this.io.emit('controller:initialized', info);
             if (this.sessionLogger) {
                 this.sessionLogger.logConnection(true, `Initialized: ${info.firmwareType} ${info.firmwareVersion}`);
@@ -966,6 +981,10 @@ class CNCEngine extends EventEmitter {
         });
 
         this.controller.on('error', (err) => {
+            // A refusal the controller has already explained on the console.
+            // Re-broadcasting it printed the same sentence twice, once as
+            // "Error undefined: ...".
+            if (err && err.silent) return;
             this.io.emit('controller:error', err);
         });
 
@@ -1482,7 +1501,7 @@ class CNCEngine extends EventEmitter {
      * Record a program another service loaded straight into the controller
      * (job resume), so loadedFile names what the controller really holds.
      */
-    noteProgramLoaded(name, gcodeContent) {
+    noteProgramLoaded(name, gcodeContent, options) {
         const content = typeof gcodeContent === 'string' ? gcodeContent : '';
         const total = (this.controller && this.controller.job && this.controller.job.totalLineCount)
             || this.controller?.sender?.total
@@ -1498,6 +1517,13 @@ class CNCEngine extends EventEmitter {
             resume: true,
         };
         this._loadedGcodeContent = content;
+        // loadedFile / _loadedGcodeContent / _loadedFileOptions are read as one
+        // record (see the sender:start handler). Leaving the options out here
+        // saved the next checkpoint with spindleDelay/compileOptions undefined,
+        // so a second resume recompiled the file with wireCompiler DEFAULTS --
+        // no motion limit, wrong maxRate/safeHeight, one fewer line per M3 --
+        // and the resume line then landed in the wrong place.
+        this._loadedFileOptions = (options && typeof options === 'object') ? options : null;
         this.io.emit('file:load', this.loadedFile);
     }
 

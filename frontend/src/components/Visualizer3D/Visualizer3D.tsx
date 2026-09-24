@@ -514,7 +514,12 @@ export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false 
         // numbered ticks, not the big floating XYZ text that was removed per
         // Tawfiq msg 7341. Toggleable via showScale, off the same toolbar row
         // as the other overlay toggles. Requested msg11907/11912/11914.
-        const scaleGroup = buildScaleGroup(envelope, COLORS);
+        // readColors() here, not the module-level COLORS snapshot: that
+        // constant is evaluated during module import, BEFORE main.tsx runs
+        // applyStoredTheme(), so it is always the dark palette whatever the
+        // operator saved. Every other scene colour survived because the
+        // cnc:theme effect re-reads live values on mount; the ruler did not.
+        const scaleGroup = buildScaleGroup(envelope, readColors());
         scene.add(scaleGroup);
 
         groupRef.current = {
@@ -709,6 +714,17 @@ export default function Visualizer3D({ mode = 'prepare', hideGcodePanel = false 
             g.cutsMaterial.color.set(c.cut);
             g.arcsMaterial.color.set(c.arc);
             (g.progress.material as THREE.LineBasicMaterial).color.set(c.progress);
+            // The ruler ticks were never recoloured, so in light theme the
+            // numbers stayed on the dark tokens (~2:1 contrast) and the
+            // bed-edge measurements could not be read. Sprite labels carry a
+            // baked CanvasTexture, so they are rebuilt, not tinted.
+            g.scale.traverse((o) => {
+                const seg = o as THREE.LineSegments;
+                if (seg.isLineSegments) (seg.material as THREE.LineBasicMaterial).color.set(c.ruler);
+            });
+            if (g.scale.userData.rebuild) {
+                try { g.scale.userData.rebuild(c); } catch { /* a ruler that cannot recolour must not kill the frame */ }
+            }
             // Spindle uses realistic material colors (grey body, dark collet,
             // copper bit) — independent of theme so it always reads as a real
             // tool. No traverse-recolor here.
@@ -1560,13 +1576,35 @@ function buildScaleGroup(
     const labelSize = Math.max(envelope.x, envelope.y) * 0.022;
     const tickLen = labelSize * 0.5;
 
+    // Every tick label, so the theme handler can rebuild them. A Sprite carries
+    // a baked CanvasTexture, so the label colour cannot simply be tinted.
+    const labels: { text: string; pos: [number, number, number]; sprite: THREE.Sprite }[] = [];
+    const addLabel = (text: string, x: number, y: number, z: number) => {
+        const sprite = makeTickLabel(text, colors.rulerLabel);
+        sprite.position.set(x, y, z);
+        sprite.scale.set(labelSize * 2, labelSize, 1);
+        group.add(sprite);
+        labels.push({ text, pos: [x, y, z], sprite });
+    };
+    group.userData.rebuild = (c: ReturnType<typeof readColors>) => {
+        for (const entry of labels) {
+            const old = entry.sprite;
+            const mat = old.material as THREE.SpriteMaterial;
+            group.remove(old);
+            mat.map?.dispose();
+            mat.dispose();
+            const sprite = makeTickLabel(entry.text, c.rulerLabel);
+            sprite.position.set(entry.pos[0], entry.pos[1], entry.pos[2]);
+            sprite.scale.set(labelSize * 2, labelSize, 1);
+            group.add(sprite);
+            entry.sprite = sprite;
+        }
+    };
+
     const stepX = niceStep(envelope.x);
     const xTickPts: number[] = [];
     for (let v = 0; v <= envelope.x + 1e-6; v += stepX) {
-        const label = makeTickLabel(String(Math.round(v)), colors.rulerLabel);
-        label.position.set(v, -labelSize * 0.9, 0.5);
-        label.scale.set(labelSize * 2, labelSize, 1);
-        group.add(label);
+        addLabel(String(Math.round(v)), v, -labelSize * 0.9, 0.5);
         xTickPts.push(v, 0, 0, v, -tickLen, 0);
     }
     const xTickGeo = new THREE.BufferGeometry();
@@ -1577,10 +1615,7 @@ function buildScaleGroup(
     const yTickPts: number[] = [];
     for (let v = stepY; v <= envelope.y + 1e-6; v += stepY) {
         // Skip 0 — the X-axis loop above already labels the shared origin.
-        const label = makeTickLabel(String(Math.round(v)), colors.rulerLabel);
-        label.position.set(-labelSize * 1.3, v, 0.5);
-        label.scale.set(labelSize * 2, labelSize, 1);
-        group.add(label);
+        addLabel(String(Math.round(v)), -labelSize * 1.3, v, 0.5);
         yTickPts.push(0, v, 0, -tickLen, v, 0);
     }
     const yTickGeo = new THREE.BufferGeometry();

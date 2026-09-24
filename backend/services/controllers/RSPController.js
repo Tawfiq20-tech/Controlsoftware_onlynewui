@@ -66,6 +66,11 @@ const AXIS_BIT_Y = 0x02;
 const AXIS_BIT_Z = 0x04;
 const AXIS_MASK_ALL = AXIS_BIT_X | AXIS_BIT_Y | AXIS_BIT_Z;
 
+// OP_HOME acks on COMPLETION (like OP_MOVE), not on acceptance, so the 3 s
+// default would report a perfectly normal homing cycle as a failure. A full
+// traverse on the biggest machine in the range is well under this.
+const HOME_TIMEOUT_S = 180.0;
+
 const FEED_OVERRIDE_MIN = 10.0;
 const FEED_OVERRIDE_MAX = 200.0;
 const FEED_OVERRIDE_COARSE = 10.0;
@@ -417,7 +422,13 @@ class RSPController extends EventEmitter {
             const totalLines = this._fileTotalLines();
             // A failed job always keeps its resume point (it used to be wiped
             // when the failure came through the old 'done' path).
-            if (stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
+            //
+            // A MACRO has no resume point -- _setResumePoint() returns early
+            // for one -- so printing "Press START to continue from line N"
+            // after a failed macro named a line in the MACRO while START would
+            // act on the loaded design's own (different) resume point. The
+            // 'done' handler and gcode:stop already guard on _jobIsMacro.
+            if (!this._jobIsMacro && stopLine > 1 && (!totalLines || stopLine <= totalLines)) {
                 this._setResumePoint(stopLine, `job stopped: ${reason}`, { hardStop: !!(this.job && this.job.firmwareLost) });
                 this.emit('console', `⚠️ Job stopped at line ${stopLine}: ${reason}. Press START to continue from line ${stopLine}.`);
             } else {
@@ -658,10 +669,49 @@ class RSPController extends EventEmitter {
      * Refuse to resume while the controller's position is known to be wrong.
      * @returns {boolean} true if blocked (and a console message was emitted)
      */
+    /**
+     * OP_ZERO, clearing the position-uncertain flag only if the firmware
+     * accepted it. A NAK'd zero used to clear the warning anyway, so Resume
+     * was unblocked against an origin the controller never actually set.
+     * @private
+     */
+    _zeroAcked(mask, { clearReason = null, noteAxes = false } = {}) {
+        this._sendAcked(defs.OP_ZERO, codec.buildZero(mask)).then((r) => {
+            if (r.ok) {
+                if (noteAxes) this._noteAxesZeroed(mask);
+                if (clearReason) this._clearPositionUncertain(clearReason);
+                return;
+            }
+            const stands = (clearReason || noteAxes) ? ', and the position warning still stands' : '';
+            this.emit('console', `⚠️ [RSP] The machine did not accept the zero: ${r.error}. The work zero was NOT changed${stands}.`);
+        });
+    }
+
     _blockIfPositionUncertain(what) {
         if (!this._positionUncertain) return false;
-        this.emit('console', `⛔ ${what} blocked: ${this._positionUncertain.message} Re-zero X/Y/Z at the job's original origin (or home), then try again.`);
+        this._refuse(`${what} blocked: ${this._positionUncertain.message} Re-zero X/Y/Z at the job's original origin (or home), then try again.`);
         return true;
+    }
+
+    /**
+     * A start/resume that will NOT happen. The console line is for the person
+     * at the machine; the 'error' emit is the only channel a remote caller can
+     * see (cloudLink/MachineAdapter.run() watches 'error' and
+     * 'serialport:error' and reports `accepted` when neither fires, so a
+     * console-only refusal was reported to the phone as a started job).
+     *
+     * EventEmitter throws on an unheard 'error', so only emit when the engine
+     * (or MachineAdapter) is actually listening.
+     */
+    _refuse(message) {
+        this.emit('console', `⛔ ${message}`);
+        // silent: the operator at the machine already has the ⛔ console line
+        // above; CNCEngine does not re-broadcast this as controller:error, so
+        // the local console is not doubled. A caller listening directly on the
+        // controller (cloudLink/MachineAdapter.run) still sees it, which is
+        // what stops a refused remote start being reported as accepted.
+        if (this.listenerCount('error') > 0) this.emit('error', { code: 'refused', message, silent: true });
+        return undefined;
     }
 
     unbind() {
@@ -1020,9 +1070,23 @@ class RSPController extends EventEmitter {
 
             case 'homing':
             case 'home':
-                this._clearPositionUncertain('homed');
+                // The origin flag is set on dispatch on purpose: a homing cycle
+                // that moved at all has already invalidated a resume point, and
+                // flagging one that did not move is harmless (it only asks the
+                // operator to confirm). The POSITION-UNCERTAIN flag is the
+                // opposite: clearing it unblocks Resume / Start From Line, so it
+                // is only cleared once the firmware says the cycle finished OK.
+                // OP_HOME acks on completion (like OP_MOVE), hence the long timeout.
                 this._noteOriginChanged('homed the machine');
-                this._fireAndForget(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL));
+                this.emit('console', '[RSP] Homing…');
+                this._sendAcked(defs.OP_HOME, codec.buildHome(AXIS_MASK_ALL), { timeout: HOME_TIMEOUT_S })
+                    .then((r) => {
+                        if (r.ok) {
+                            this._clearPositionUncertain('homed');
+                            return;
+                        }
+                        this.emit('console', `⚠️ [RSP] Homing did not finish: ${r.error}. The machine has NOT been homed -- the position warning still stands. Clear any alarm or E-stop and try again.`);
+                    });
                 break;
             case 'homing:x':
             case 'home:x':
@@ -1130,34 +1194,32 @@ class RSPController extends EventEmitter {
                 if (p.y !== undefined) mask |= AXIS_BIT_Y;
                 if (p.z !== undefined) mask |= AXIS_BIT_Z;
                 if (!mask) mask = AXIS_MASK_ALL;
-                if (mask === AXIS_MASK_ALL) this._clearPositionUncertain('re-zeroed X/Y/Z');
-                else this._noteAxesZeroed(mask);
                 this._noteOriginChanged('set a new work zero');
-                this._fireAndForget(defs.OP_ZERO, codec.buildZero(mask));
+                this._zeroAcked(mask, mask === AXIS_MASK_ALL
+                    ? { clearReason: 're-zeroed X/Y/Z' }
+                    : { noteAxes: true });
                 break;
             }
             // A per-axis zero moves the origin as much as Zero All does, so it
             // flags the resume point too (Phase 1 D3-M1).
+            // Ack-gated like the others: an axis the firmware never zeroed must
+            // not count towards clearing the position warning.
             case 'zero:x':
-                this._noteAxesZeroed(AXIS_BIT_X);
                 this._noteOriginChanged('set a new X zero');
-                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_X));
+                this._zeroAcked(AXIS_BIT_X, { noteAxes: true });
                 break;
             case 'zero:y':
-                this._noteAxesZeroed(AXIS_BIT_Y);
                 this._noteOriginChanged('set a new Y zero');
-                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Y));
+                this._zeroAcked(AXIS_BIT_Y, { noteAxes: true });
                 break;
             case 'zero:z':
-                this._noteAxesZeroed(AXIS_BIT_Z);
                 this._noteOriginChanged('set a new Z zero');
-                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_BIT_Z));
+                this._zeroAcked(AXIS_BIT_Z, { noteAxes: true });
                 break;
             case 'wcs:zeroAll':
             case 'zero:all':
-                this._clearPositionUncertain('re-zeroed X/Y/Z');
                 this._noteOriginChanged('set a new work zero');
-                this._fireAndForget(defs.OP_ZERO, codec.buildZero(AXIS_MASK_ALL));
+                this._zeroAcked(AXIS_MASK_ALL, { clearReason: 're-zeroed X/Y/Z' });
                 break;
 
             case 'gcode:load': {
@@ -1201,20 +1263,16 @@ class RSPController extends EventEmitter {
             // caller is expected to offer them the choice.
             case 'gcode:startFresh': {
                 if (this.job && this.job.active && !this.job.firmwareLost) {
-                    this.emit('console', 'ℹ️ The job is already running.');
-                    return undefined;
+                    return this._refuse('The job is already running.');
                 }
                 if (!this._loadedGcode) {
-                    this.emit('console', '⛔ Nothing was started: no file is loaded.');
-                    return undefined;
+                    return this._refuse('Nothing was started: no file is loaded.');
                 }
                 if (this._positionUncertain) {
-                    this.emit('console', '⛔ Nothing was started: the machine is not sure where it is. Home it or re-zero first.');
-                    return undefined;
+                    return this._refuse('Nothing was started: the machine is not sure where it is. Home it or re-zero first.');
                 }
                 if (this._resumeGcode !== null && this._resumeGcode === this._loadedGcode && this._resumeLine > 1) {
-                    this.emit('console', `⛔ Nothing was started: this design was stopped at line ${this._resumeLine} earlier. Resume it from there, or clear the stop point, then start it again.`);
-                    return undefined;
+                    return this._refuse(`Nothing was started: this design was stopped at line ${this._resumeLine} earlier. Resume it from there, or clear the stop point, then start it again.`);
                 }
                 return this._startJob(this._loadedGcode, 0, null, this._holdsForFile(1));
             }
@@ -1275,15 +1333,21 @@ class RSPController extends EventEmitter {
 
             case 'gcode:startFromLine': {
                 if (this.job && this.job.active && !this.job.firmwareLost) {
-                    this.emit('console', '⛔ Start From Line is not available while a job is running. Stop the job first.');
-                    return undefined;
+                    return this._refuse('Start From Line is not available while a job is running. Stop the job first.');
                 }
                 // Always the safe program: lift to safe Z, travel to where line
                 // N starts, plunge, continue. (The bare [line] form streamed
                 // the file from line N with no retract or travel -- a straight
                 // cut from wherever the tool was.)
                 const [lineNumber, opts] = args;
-                return this._startFromLineSafe(Number(lineNumber), (opts && typeof opts === 'object') ? opts : {});
+                const n = Math.floor(Number(lineNumber));
+                // A remote/LAN "start the job" carries no line and reaches this
+                // case as 0. Line 0 is outside every file, so buildResumeProgram()
+                // rejected it and NOTHING ran while the caller was told it had.
+                // Below 1 means "from the beginning", which is gcode:startFresh:
+                // line 1, or a refusal -- never a silent mid-file resume.
+                if (!Number.isFinite(n) || n < 1) return this._dispatch('gcode:startFresh', []);
+                return this._startFromLineSafe(n, (opts && typeof opts === 'object') ? opts : {});
             }
 
             case 'gcode:resumePoint':
@@ -1555,6 +1619,36 @@ class RSPController extends EventEmitter {
     }
 
     /** Fire a command without blocking the caller; logs and swallows LinkLost. */
+    /**
+     * Send an op and resolve only on a real ST_OK ack from the firmware.
+     *
+     * _fireAndForget() swallows the reply into logger.warn, which the kiosk
+     * never shows. That is fine for a jog; it is NOT fine for anything that
+     * clears a safety flag, because the flag was being cleared on DISPATCH --
+     * an OP_HOME the firmware answered with ST_ERR_STATE (E-stop latched,
+     * alarm not cleared, axis still moving) still unblocked Resume / Start
+     * From Line on a machine whose position was never re-established.
+     *
+     * Resolves { ok: true } or { ok: false, error } -- never rejects.
+     */
+    _sendAcked(op, payload, { timeout = 3.0 } = {}) {
+        if (!this.stream) return Promise.resolve({ ok: false, error: 'controller not bound' });
+        let p;
+        try {
+            p = this.stream.sendCommand(op, payload, { timeout });
+        } catch (exc) {
+            return Promise.resolve({ ok: false, error: (exc && exc.message) || String(exc) });
+        }
+        return p.then((rsp) => {
+            const status = rsp && rsp.payload && rsp.payload.length >= 2 ? rsp.payload[1] : null;
+            if (status === defs.ST_OK) return { ok: true };
+            const name = status === null
+                ? 'no status in the reply'
+                : (defs.ST_ERR_NAMES[status] || `0x${status.toString(16).padStart(2, '0')}`);
+            return { ok: false, error: name };
+        }).catch((exc) => ({ ok: false, error: (exc && exc.message) || String(exc) }));
+    }
+
     _fireAndForget(op, payload) {
         if (!this.stream) return;
         try {
@@ -2146,8 +2240,7 @@ class RSPController extends EventEmitter {
         const what = resume ? `Resume from line ${line}` : `Start From Line ${line}`;
         const plan = buildResumeProgram(lines, line, this._resumeBuildOptions(opts));
         if (!plan.ok) {
-            this.emit('console', `⚠️ ${what} not started: ${plan.error}`);
-            return undefined;
+            return this._refuse(`${what} not started: ${plan.error}`);
         }
         if (this._blockIfPositionUncertain(what)) return undefined;
         const p = plan.startMm;

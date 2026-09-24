@@ -37,6 +37,11 @@ export default function SectionWifi() {
 
     // The network awaiting a password, and the password being typed for it.
     const [pending, setPending] = useState<WifiNetwork | null>(null);
+    // A hidden network is typed in by name: scan() cannot list one (nmcli
+    // reports an empty SSID for it), and this component used to pass hidden
+    // false with no way to enter an SSID, so such a shop could not be joined
+    // at all from the only Wi-Fi setup path the machine has.
+    const [hiddenSsid, setHiddenSsid] = useState<string | null>(null);
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const passwordRef = useRef<HTMLInputElement | null>(null);
@@ -65,7 +70,14 @@ export default function SectionWifi() {
 
     useEffect(() => {
         void (async () => {
-            const s = await wifi.status().catch(() => null);
+            // Do NOT swallow this. A 403 (operator cookie not claimed yet) left
+            // status null, and the page then rendered "No networks found. Move
+            // closer to the router" -- pointing the operator at the router when
+            // the real problem was authorization.
+            const s = await wifi.status().catch((e) => {
+                setError(e instanceof Error ? e.message : 'Could not read the Wi-Fi status.');
+                return null;
+            });
             setStatus(s);
             if (s?.supported && s.radioOn) void scan(true);
         })();
@@ -82,7 +94,7 @@ export default function SectionWifi() {
         setError(null);
         setNotice(null);
         try {
-            const result = await wifi.connect(network.ssid, secret, false);
+            const result = await wifi.connect(network.ssid, secret, !!network.hidden);
             if (result.ok) {
                 setNotice(`Connected to "${network.ssid}".`);
                 setPending(null);
@@ -91,8 +103,12 @@ export default function SectionWifi() {
                 await scan(false);
             } else {
                 setError(result.error || `Could not connect to "${network.ssid}".`);
-                // Keep the sheet open so the password can be corrected.
-                if (!network.open && !network.saved) setPending(network);
+                // Keep the sheet open so the password can be corrected --
+                // INCLUDING for a saved network. When the shop changes its key
+                // the stale profile still marks the network saved, so this used
+                // to fail for ever with the same message and no way to type the
+                // new password short of finding the small "Forget" button first.
+                if (!network.open && !network.hidden) setPending(network);
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Could not connect.');
@@ -252,9 +268,77 @@ export default function SectionWifi() {
                 </div>
             )}
 
+            {/* ── A network that does not broadcast its name ── */}
+            {hiddenSsid !== null && (
+                <div className="wifi-ask">
+                    <div className="wifi-ask-head">
+                        <Lock size={15} />
+                        <span>Join a hidden network</span>
+                        <button
+                            className="wifi-ask-close"
+                            onClick={() => { setHiddenSsid(null); setPassword(''); }}
+                            aria-label="Cancel"
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+                    <div className="wifi-ask-row">
+                        <input
+                            type="text"
+                            className="wa-input wifi-ask-input"
+                            value={hiddenSsid}
+                            placeholder="Network name (SSID)"
+                            autoComplete="off"
+                            onChange={(e) => setHiddenSsid(e.target.value)}
+                        />
+                    </div>
+                    <div className="wifi-ask-row">
+                        <input
+                            type={showPassword ? 'text' : 'password'}
+                            className="wa-input wifi-ask-input"
+                            value={password}
+                            placeholder="Network password"
+                            autoComplete="off"
+                            onChange={(e) => setPassword(e.target.value)}
+                        />
+                        <button
+                            className="settings-btn"
+                            onClick={() => setShowPassword((v) => !v)}
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                        <button
+                            className="settings-btn primary"
+                            onClick={() => {
+                                const ssid = hiddenSsid.trim();
+                                if (!ssid) return;
+                                void join(
+                                    { ssid, signal: 0, security: 'WPA2', open: false, inUse: false, saved: false, hidden: true },
+                                    password,
+                                );
+                            }}
+                            disabled={!hiddenSsid.trim() || password.length < 8 || busy !== null}
+                        >
+                            {busy === hiddenSsid.trim() ? 'Connecting…' : 'Connect'}
+                        </button>
+                    </div>
+                    <div className="wifi-ask-hint">
+                        Type the name exactly as the router has it -- capitals count.
+                    </div>
+                </div>
+            )}
+
             {/* ── Networks in range ── */}
             <div className="wifi-list-head">
                 <span>Networks in range</span>
+                <button
+                    className="settings-btn"
+                    onClick={() => { setNotice(null); setError(null); setPending(null); setPassword(''); setHiddenSsid(''); }}
+                    disabled={busy !== null}
+                >
+                    Hidden network
+                </button>
                 <button className="settings-btn" onClick={() => void scan(true)} disabled={scanning || busy !== null}>
                     <RefreshCw size={14} className={scanning ? 'spin' : ''} /> {scanning ? 'Scanning…' : 'Scan again'}
                 </button>

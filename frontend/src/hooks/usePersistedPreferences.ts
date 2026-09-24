@@ -37,6 +37,8 @@ import type { AppPreferences } from '../types/cnc';
 const SAVE_DEBOUNCE_MS = 600;
 /** How often to retry the first read while the backend is still starting. */
 const LOAD_RETRY_MS = 2000;
+/** Ceiling for the backoff, so a backend that never comes up is not polled forever at 2 s. */
+const LOAD_RETRY_MAX_MS = 60000;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
     return !!v && typeof v === 'object' && !Array.isArray(v);
@@ -48,11 +50,14 @@ export function usePersistedPreferences() {
 
     /** Set only once the stored values have really been read (rule 1). */
     const loaded = useRef(false);
+    /** This client may not read or write /api/config at all (LAN identity). */
+    const readOnly = useRef(false);
     const timer = useRef<number | null>(null);
 
     useEffect(() => {
         let cancelled = false;
         let retry: number | null = null;
+        let delay = LOAD_RETRY_MS;
 
         const load = async () => {
             try {
@@ -65,10 +70,22 @@ export function usePersistedPreferences() {
                     setAppPreferences((prev) => ({ ...prev, ...(value as Partial<AppPreferences>) }));
                 }
                 loaded.current = true;
-            } catch (_) {
+            } catch (err) {
+                if (cancelled) return;
+                // /api/config is not on the LAN allowlist, so on a phone or
+                // tablet this is a PERMANENT 403 -- the old code retried it
+                // every 2 s for the life of the page. Stop, and let the socket
+                // config:all / config:change path (which does serve LAN
+                // clients) supply preferences instead.
+                const status = (err as { status?: number } | null)?.status;
+                if (status === 401 || status === 403) {
+                    readOnly.current = true;
+                    return;
+                }
                 // Backend not answering yet. Do NOT mark loaded: saving now
                 // would write defaults over the machine's real settings.
-                if (!cancelled) retry = window.setTimeout(load, LOAD_RETRY_MS);
+                retry = window.setTimeout(load, delay);
+                delay = Math.min(delay * 2, LOAD_RETRY_MAX_MS);
             }
         };
 
@@ -80,7 +97,7 @@ export function usePersistedPreferences() {
     }, [setAppPreferences]);
 
     useEffect(() => {
-        if (!loaded.current) return;
+        if (!loaded.current || readOnly.current) return;
         if (timer.current !== null) window.clearTimeout(timer.current);
         timer.current = window.setTimeout(() => {
             timer.current = null;

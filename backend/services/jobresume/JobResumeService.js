@@ -199,6 +199,16 @@ class JobResumeService extends EventEmitter {
         const ctl = this.getController?.();
         if (!ctl) return { ok: false, error: 'No active controller' };
 
+        // Never touch the controller while it is cutting. gcode:load and
+        // gcode:startFromLine both refuse in that state, but this service used
+        // to call _notifyProgramLoaded() regardless, rewriting the engine's
+        // idea of the loaded file out from under the running carve -- and then
+        // report ok:true.
+        const live = ctl.job;
+        if (live && live.active && !live.firmwareLost) {
+            return { ok: false, error: 'A job is running on the machine. Stop it before resuming a checkpoint.' };
+        }
+
         const fromLine = RecoveryOrchestrator.computeResumeLine(cp);
 
         this._log.info?.(`[JobResume] Resuming "${cp.filename}" from line ${fromLine} / ${cp.totalLines}`);
@@ -230,8 +240,23 @@ class JobResumeService extends EventEmitter {
             // delay the reloaded program is one line shorter per M3 before the
             // resume point, and lastExecutedLine + 1 skips a line.
             ctl.command('gcode:load', cp.filename, cp.gcodeText, cp.spindleDelay, cp.compileOptions);
-            this._notifyProgramLoaded(cp.filename, cp.gcodeText);
-            ctl.command('gcode:startFromLine', fromLine, { safeZ });
+            // A refused load leaves the controller holding the OLD program.
+            // Telling the engine the checkpoint is loaded at that point makes
+            // a later file:unload hash-match and delete the only copy of the
+            // interrupted job.
+            if (ctl.lastLoadResult && ctl.lastLoadResult.ok === false) {
+                const m = ctl.lastLoadResult.meta;
+                const why = (m && m.errors && m.errors[0] && m.errors[0].msg) || 'the machine would not load the file';
+                return { ok: false, error: why };
+            }
+            this._notifyProgramLoaded(cp.filename, cp.gcodeText, {
+                spindleDelay: cp.spindleDelay,
+                compileOptions: cp.compileOptions,
+            });
+            const refusal = this._runWatchingForRefusal(ctl, () => {
+                ctl.command('gcode:startFromLine', fromLine, { safeZ });
+            });
+            if (refusal) return { ok: false, error: refusal, fromLine, filename: cp.filename };
         } else {
             if (!opts.skipPreamble) {
                 const currentPos = ctl.state?.status?.mpos || { x: 0, y: 0, z: 0 };
@@ -243,11 +268,17 @@ class JobResumeService extends EventEmitter {
                 const remainingLines = origLines.slice(Math.max(0, fromLine - 1));
                 gcodeToLoad = preamble.concat(remainingLines).join('\n');
                 ctl.command('gcode:load', cp.filename, gcodeToLoad);
-                this._notifyProgramLoaded(cp.filename, gcodeToLoad);
+                this._notifyProgramLoaded(cp.filename, gcodeToLoad, {
+                    spindleDelay: cp.spindleDelay,
+                    compileOptions: cp.compileOptions,
+                });
                 ctl.command('gcode:startFromLine', 1);
             } else {
                 ctl.command('gcode:load', cp.filename, gcodeToLoad);
-                this._notifyProgramLoaded(cp.filename, gcodeToLoad);
+                this._notifyProgramLoaded(cp.filename, gcodeToLoad, {
+                    spindleDelay: cp.spindleDelay,
+                    compileOptions: cp.compileOptions,
+                });
                 ctl.command('gcode:startFromLine', fromLine);
             }
         }
@@ -265,13 +296,48 @@ class JobResumeService extends EventEmitter {
     /**
      * Clear the checkpoint (user decided not to resume).
      */
-    _notifyProgramLoaded(name, content) {
+    _notifyProgramLoaded(name, content, options) {
         if (!this.onProgramLoaded) return;
         try {
-            this.onProgramLoaded({ name, content: typeof content === 'string' ? content : String(content || '') });
+            this.onProgramLoaded({
+                name,
+                content: typeof content === 'string' ? content : String(content || ''),
+                // The engine keeps loadedFile / _loadedGcodeContent /
+                // _loadedFileOptions as ONE record. Leaving the options out
+                // meant the next checkpoint was saved with
+                // spindleDelay/compileOptions undefined, so a second resume
+                // recompiled with wireCompiler DEFAULTS -- no motion limit, the
+                // wrong maxRate and safeHeight, and one fewer line per M3, which
+                // is exactly what shifts computeResumeLine() onto the wrong line.
+                options: options || null,
+            });
         } catch (err) {
             this._log.warn?.(`[JobResume] program-loaded hook failed: ${err && err.message}`);
         }
+    }
+
+    /**
+     * Run a controller command and return the refusal message if the
+     * controller emitted one. RSPController._refuse() emits 'error' for every
+     * start it declines (position uncertain, no file, job running, a line
+     * outside the file); without this the service reported ok:true and the
+     * banner showed a job resuming on a machine that had not moved.
+     * @private
+     */
+    _runWatchingForRefusal(ctl, fn) {
+        if (typeof ctl.on !== 'function' || typeof ctl.removeListener !== 'function') {
+            fn();
+            return null;
+        }
+        const seen = [];
+        const onErr = (e) => seen.push((e && e.message) || String(e));
+        ctl.on('error', onErr);
+        try {
+            fn();
+        } finally {
+            ctl.removeListener('error', onErr);
+        }
+        return seen.length ? seen[0] : null;
     }
 
     clearCheckpoint() {

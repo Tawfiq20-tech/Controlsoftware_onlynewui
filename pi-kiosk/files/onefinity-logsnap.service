@@ -7,6 +7,13 @@ Wants=systemd-journald.service
 Type=oneshot
 ExecStart=/usr/local/bin/onefinity-logsnap
 RemainAfterExit=no
-
-[Install]
-WantedBy=multi-user.target
+# This is diagnostics. It must never compete with the backend, which runs at
+# Nice=-5/CPUWeight=800/IOWeight=800 precisely because CPU or I/O saturation
+# makes the controller heartbeat answer late and the link is then declared
+# lost mid-job. Without these the snapshot ran at default priority and caused
+# the very fault it exists to record.
+Nice=19
+CPUWeight=10
+IOWeight=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle

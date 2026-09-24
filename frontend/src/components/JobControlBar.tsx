@@ -100,7 +100,9 @@ export default function JobControlBar() {
         machineState === 'alarm' ||
         ecssBlocked ||
         loadRefused;
-    const canStop = connected && (jobActive || machineState === 'paused');
+    // 'running' counts too: after a screen restart the machine can be cutting
+    // while this client has not seen a sender:start of its own.
+    const canStop = connected && (jobActive || machineState === 'running' || machineState === 'paused');
 
     // Normally the bar needs a file. But a screen that joined after the carve
     // started (a second tab, a phone, a refresh that lost the local parse) has

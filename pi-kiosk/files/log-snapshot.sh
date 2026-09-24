@@ -19,6 +19,14 @@ BOOT_DIR=/boot/firmware
 OUT_DIR="$BOOT_DIR/onefinity-logs"
 [ -w "$BOOT_DIR" ] || exit 0
 mkdir -p "$OUT_DIR" 2>/dev/null || exit 0
+# Bounds for the journal/dmesg scans below. Without -n, journalctl decompresses
+# and scans the ENTIRE current-boot backend journal (install.sh sizes it at up
+# to 200 MB persistent on the SD card) -- four times per run, every few minutes,
+# for the life of the machine. That is the I/O storm that starved the serial
+# stream mid-carve.
+JOURNAL_LINES=${JOURNAL_LINES:-4000}
+DMESG_LINES=${DMESG_LINES:-4000}
+
 OUT="$OUT_DIR/last-boot.txt"
 NOW="$OUT_DIR/current-boot.txt"
 
@@ -49,7 +57,7 @@ NOW="$OUT_DIR/current-boot.txt"
     # front, so capture the app's own view of it from this boot and the last.
     for b in 0 -1; do
         echo "  [boot $b]"
-        journalctl -b "$b" -u onefinity-backend --no-pager 2>/dev/null |
+        journalctl -b "$b" -u onefinity-backend -n "$JOURNAL_LINES" --no-pager 2>/dev/null |
             grep -iE "link lost|link down|link restored|heartbeat|LinkLost|serialport:(close|error)|disconnect|reconnect|Controller initialized|port closed|ENOENT|EIO" |
             tail -40
     done
@@ -77,12 +85,12 @@ chmod a+r "$OUT" 2>/dev/null
     vcgencmd measure_temp 2>&1
     echo
     echo "--- the link to the controller, this boot ---"
-    journalctl -b 0 -u onefinity-backend --no-pager 2>/dev/null |
+    journalctl -b 0 -u onefinity-backend -n "$JOURNAL_LINES" --no-pager 2>/dev/null |
         grep -iE "link lost|link down|link restored|heartbeat|LinkLost|serialport:(close|error)|disconnect|reconnect|Controller initialized|port closed|ENOENT|EIO|alarm|E-?stop" |
         tail -60
     echo
     echo "--- job activity, this boot ---"
-    journalctl -b 0 -u onefinity-backend --no-pager 2>/dev/null |
+    journalctl -b 0 -u onefinity-backend -n "$JOURNAL_LINES" --no-pager 2>/dev/null |
         grep -iE "gcode:(load|start|stop|pause|resume)|sender:end|job:|superseded|compiled" |
         tail -40
     echo
@@ -90,12 +98,17 @@ chmod a+r "$OUT" 2>/dev/null
     journalctl -b 0 -u onefinity-backend -p warning --no-pager 2>/dev/null | tail -40
     echo
     echo "--- USB events, this boot ---"
-    dmesg -T 2>&1 | grep -iE "usb|over-?current|under-?volt|xhci" | tail -40
+    dmesg -T 2>&1 | tail -n "$DMESG_LINES" | grep -iE "usb|over-?current|under-?volt|xhci" | tail -40
     echo
     echo "--- devices now ---"
     lsusb 2>&1
 } > "$NOW" 2>&1
 chmod a+r "$NOW" 2>/dev/null
 
-sync
+# sync -f on this directory only. A bare `sync` flushes every dirty page on
+# the system; running that every few minutes stalled I/O long enough for the
+# serial loop to miss its heartbeat window and the sender to declare the link
+# lost mid-carve -- manufacturing the exact fault this snapshot exists to
+# diagnose.
+sync -f "$OUT_DIR" 2>/dev/null || sync
 exit 0

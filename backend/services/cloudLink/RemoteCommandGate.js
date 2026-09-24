@@ -80,6 +80,7 @@ const LAN_CLASSIFICATION = Object.freeze({
     'jog': Object.freeze({ tier: 'motion', gateType: 'jog.step' }),
     'gcode:start': Object.freeze({ tier: 'motion', gateType: 'job.start' }),
     'gcode:startFromLine': Object.freeze({ tier: 'motion', gateType: 'job.start' }),
+    'gcode:startFresh': Object.freeze({ tier: 'motion', gateType: 'job.start' }),
     'wcs:zero': Object.freeze({ tier: 'motion', gateType: 'zero' }),
     'wcs:zeroAll': Object.freeze({ tier: 'motion', gateType: 'zero' }),
     'file:load': Object.freeze({ tier: 'motion', gateType: 'job.load' }),
@@ -88,7 +89,7 @@ const LAN_CLASSIFICATION = Object.freeze({
     'safety:remoteDiagStatus': Object.freeze({ tier: 'monitor', gateType: null }),
 });
 
-const LOCAL_MOTION_CMDS = Object.freeze(['jog', 'jog:safe', 'move', 'probe', 'gcode:start', 'gcode:startFromLine', 'gcode:resume', 'cyclestart', 'macro:run', 'gcode', 'wcs:zero', 'wcs:zeroAll']);
+const LOCAL_MOTION_CMDS = Object.freeze(['jog', 'jog:safe', 'move', 'probe', 'gcode:start', 'gcode:startFresh', 'gcode:startFromLine', 'gcode:resume', 'cyclestart', 'macro:run', 'gcode', 'wcs:zero', 'wcs:zeroAll']);
 const LOCAL_MOTION_PREFIXES = Object.freeze(['homing', 'probe:', 'zero:']);
 const LOCAL_MOTION_EVENTS = Object.freeze(['command:raw', 'write', 'writeln', 'gamepad:axes', 'gamepad:button', 'macro:run', 'job:resume:confirm']);
 // Engine commands that change which work zero a job would cut against.

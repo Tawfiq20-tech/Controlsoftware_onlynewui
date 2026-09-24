@@ -450,9 +450,19 @@ function _wireControllerToStore(): void {
 
     // Sender status
     controller.on('sender:status', (status: SenderStatus) => {
+        // The initial-sync emit sends getSenderStatus(), which is null when no
+        // job object exists yet.
+        if (!status) return;
         const s = getStore();
         if (typeof status.progress === 'number') s.setJobProgress(status.progress);
         if (typeof status.received === 'number') s.setCurrentLine(status.received);
+        // jobActive was only ever set by 'sender:start', which the backend
+        // emits once when the job starts and never replays. A screen that
+        // restarted mid-carve therefore had jobActive false for ever: no Stop
+        // button, and Play/Pause tried to START A SECOND JOB. The initial-sync
+        // sender:status carries an active flag; the live progress emit does not, so
+        // the typeof guard leaves the running path untouched.
+        if (typeof status.active === 'boolean') s.setJobActive(status.active);
     });
 
     // jobActive flip points — drive the Play/Pause button independently of
@@ -543,8 +553,17 @@ function _wireControllerToStore(): void {
                         headers: getRemoteToken() ? { 'X-Remote-Token': getRemoteToken() as string } : {},
                     });
                     if (!r.ok) return;   // 403 remote, or 404 nothing loaded
-                    const prog = await r.json() as { name?: string; size?: number; content?: string };
-                    if (!prog?.content) return;
+                    // The program comes back as a raw text body with its
+                    // metadata in headers: JSON-encoding 17 MB stalled the
+                    // backend's event loop, which is the one streaming G-code.
+                    const content = await r.text();
+                    if (!content) return;
+                    const header = (h: string) => r.headers.get(h) || '';
+                    const prog = {
+                        name: header('X-Program-Name') ? decodeURIComponent(header('X-Program-Name')) : undefined,
+                        size: Number(header('X-Program-Size')) || undefined,
+                        content,
+                    };
                     const store = getStore();
                     if (store.rawGcodeContent) return;   // the operator got there first
                     store.setRawGcodeContent(prog.content);

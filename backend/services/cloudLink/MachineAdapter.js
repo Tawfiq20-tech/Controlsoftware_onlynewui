@@ -10,7 +10,7 @@
 'use strict';
 
 const ALLOWED_CMDS = Object.freeze([
-    'jog', 'jogcancel', 'gcode:pause', 'gcode:resume', 'gcode:stop', 'gcode:startFromLine', 'gcode:start',
+    'jog', 'jogcancel', 'gcode:pause', 'gcode:resume', 'gcode:stop', 'gcode:startFromLine', 'gcode:start', 'gcode:startFresh',
     'feedhold', 'wcs:zero',
     'homing', 'homing:X', 'homing:Y', 'homing:Z',
     'feedOverride:reset', 'feedOverride:coarsePlus', 'feedOverride:coarseMinus', 'feedOverride:finePlus', 'feedOverride:fineMinus',
@@ -164,7 +164,13 @@ function plan(controllerType, type, args, snapshot = {}) {
             }
             // RSP gcode:start may resume from the last stop line; a remote
             // start is always a fresh run from the beginning.
-            steps.push(key === 'RSP' ? cmd('gcode:startFromLine', 0) : cmd('gcode:start'));
+            //
+            // This used to be cmd('gcode:startFromLine', 0). Line 0 is outside
+            // the file, so buildResumeProgram() rejected it every time and the
+            // remote operator was told the job had started while the machine
+            // had not moved. 'gcode:startFresh' is the command that actually
+            // means "line 1, or refuse" -- and it refuses out loud.
+            steps.push(key === 'RSP' ? cmd('gcode:startFresh') : cmd('gcode:start'));
             return steps;
         }
         case 'jog.step':

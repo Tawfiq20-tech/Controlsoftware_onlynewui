@@ -87,6 +87,10 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
     const [safeHeight, setSafeHeight] = useState(Math.abs(appPreferences?.safeHeight ?? 5) || 5);
     const [resumePoint, setResumePoint] = useState<ResumePoint | null>(null);
     const [preview, setPreview] = useState<ResumePreview | null>(null);
+    // The machine never answered with a plan. On a controller that has no
+    // gcode:resumePreview handler at all (RTS, GRBL) this dialog used to say
+    // "This button turns on by itself" for ever, on a screen with no console.
+    const [previewTimedOut, setPreviewTimedOut] = useState(false);
     const prefilled = useRef(false);
 
     // Local (non-RSP) view of the file -- same trimmed/non-empty list is used
@@ -124,6 +128,15 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
         return () => clearTimeout(t);
     }, [isRsp, connected, lineNumber, safeHeight]);
 
+    // Compiling a million-line program legitimately takes the better part of a
+    // minute; 90 s with no reply at all means nothing is coming.
+    useEffect(() => {
+        if (!isRsp || !connected) return;
+        if (preview) { setPreviewTimedOut(false); return; }
+        const t = setTimeout(() => setPreviewTimedOut(true), 90000);
+        return () => clearTimeout(t);
+    }, [isRsp, connected, preview]);
+
     const contextLines = isRsp
         ? (preview?.context ?? []).map((c) => ({ num: c.num, text: c.text, isTarget: c.num === lineNumber }))
         : (() => {
@@ -157,7 +170,11 @@ export default function StartFromLine({ onClose }: StartFromLineProps) {
         if (!rawGcodeContent) return 'No file loaded. Load a G-code file first.';
         if (positionBlocked) return 'The machine does not know where it is. Home it, or re-zero X/Y/Z at the job’s original origin.';
         if (!isRsp) return null;
-        if (!preview) return 'Preparing the file… a large program can take a minute. This button turns on by itself.';
+        if (!preview) {
+            return previewTimedOut
+                ? 'The machine has not answered with a plan for this line. It may not support Start From Line, or the link may be down — reconnect and try again.'
+                : 'Preparing the file… a large program can take a minute. This button turns on by itself.';
+        }
         if (preview.line !== lineNumber) return `Checking line ${lineNumber}…`;
         if (!preview.plan.ok) return preview.plan.error || 'This line cannot be started from.';
         return null;

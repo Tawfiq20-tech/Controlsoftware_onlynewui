@@ -25,7 +25,15 @@ BOOT_DIR=/boot/firmware
 [ -d "$BOOT_DIR" ] || BOOT_DIR=/boot
 
 pick_dest() {
-    [ $# -gt 0 ] && { echo "$1"; return; }
+    # An explicit destination is checked. It used to be taken verbatim, so
+    # "sudo onefinity-logs /mnt/stick" when the stick is really at
+    # /media/usb-sda1 made tar fail into /dev/null and the operator was still
+    # told the bundle had been written.
+    if [ $# -gt 0 ]; then
+        if [ ! -d "$1" ]; then say "Not a directory: $1"; exit 1; fi
+        if [ ! -w "$1" ]; then say "Not writable: $1"; exit 1; fi
+        echo "$1"; return
+    fi
     # The SD card's FAT boot partition: readable in any PC's card reader.
     if [ -d "$BOOT_DIR" ] && [ -w "$BOOT_DIR" ]; then
         mkdir -p "$BOOT_DIR/onefinity-logs" 2>/dev/null &&
@@ -67,8 +75,11 @@ grab power.txt vcgencmd get_throttled
 grab power.txt vcgencmd pmic_read_adc EXT5V_V
 grab power.txt vcgencmd measure_temp
 grab power.txt rpi-eeprom-config
-grab power.txt cat /boot/firmware/config.txt
-grab power.txt cat /boot/firmware/cmdline.txt
+# $BOOT_DIR, not a hardcoded path: on a pre-Bookworm or re-imaged card the
+# boot partition is at /boot, and this section then shipped two "No such file
+# or directory" lines instead of the exact settings it exists to show.
+grab power.txt cat "$BOOT_DIR/config.txt"
+grab power.txt cat "$BOOT_DIR/cmdline.txt"
 
 # ---- USB and input: over-current, re-enumeration, the touchscreen ----------
 grab usb.txt lsusb
@@ -112,19 +123,38 @@ grab network.txt nmcli -t -f NAME,TYPE,DEVICE connection show
 grab network.txt nmcli -t -f DEVICE,TYPE,STATE device status
 grab network.txt ip -brief addr
 
+# The operator launch secret travels as a URL query (?op=<hex>) or a cookie,
+# neither of which the key:value check below matches. Strip it from every file
+# before that check runs -- this bundle is emailed, and that secret is a
+# permanent second factor for Wi-Fi, PIN, pairing and permission changes.
+find "$OUT" -type f -print0 | while IFS= read -r -d '' f; do
+    sed -i -E 's/([?&]op=)[0-9a-fA-F]{8,}/\1[removed]/g; s/(onefinity_op=)[A-Za-z0-9_-]{8,}/\1[removed]/g' "$f" 2>/dev/null || true
+done
+
 # Prove the secrets really are gone before this leaves the machine.
-if grep -rqiE '(psk|password|token|secret)"?[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9/+_-]{12,}' "$OUT" 2>/dev/null; then
+if grep -rqiE '(psk|password|token|secret)"?[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9/+_-]{12,}' "$OUT" 2>/dev/null \
+   || grep -rqiE '[?&]op=[0-9a-fA-F]{16,}|onefinity_op=[A-Za-z0-9_-]{16,}' "$OUT" 2>/dev/null; then
     say "WARNING: something secret-looking is still in the bundle; check before sending."
 fi
 
-# The boot partition is small (512 MB) and shared with the firmware: never let
-# these pile up there.
-ls -1t "$DEST"/onefinity-logs-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
-
 ARCHIVE="$DEST/$NAME.tar.gz"
-tar -C "$WORK" -czf "$ARCHIVE" "$NAME" 2>/dev/null
+# Errors used to go to /dev/null and the status was never checked, so a failed
+# or truncated archive was announced as "Written:". On a machine with no screen
+# and no terminal that means a second site visit.
+if ! tar -C "$WORK" -czf "$ARCHIVE" "$NAME"; then
+    say ""
+    say "FAILED to write $ARCHIVE -- nothing was collected."
+    say "The destination may be full or read-only. Try: sudo onefinity-logs /tmp"
+    rm -f "$ARCHIVE"
+    exit 1
+fi
 chmod a+r "$ARCHIVE" 2>/dev/null
 sync
+
+# The boot partition is small (512 MB) and shared with the firmware: never let
+# these pile up there. AFTER a successful tar -- pruning first meant a failed
+# run had already deleted the older bundles.
+ls -1t "$DEST"/onefinity-logs-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
 
 say ""
 say "Written: $ARCHIVE"

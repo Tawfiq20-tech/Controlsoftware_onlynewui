@@ -254,7 +254,7 @@ function createBackend({
     const jobHistoryService = new JobHistoryService({ dataDir,                    io, logger, getController, getEngine: () => engine });
     const jobResumeService  = new JobResumeService({  dataDir, io, logger, getController,
                                                       getConfig: () => engine.config,
-                                                      onProgramLoaded: ({ name, content }) => engine.noteProgramLoaded(name, content) });
+                                                      onProgramLoaded: ({ name, content, options }) => engine.noteProgramLoaded(name, content, options) });
     const toolLibrary       = new ToolLibrary({       configStore: engine.config, io, logger });
     const libraryService    = new LibraryService({    dataDir, io, logger });
     const chatbotService    = new ChatbotService();
@@ -1179,6 +1179,16 @@ function createBackend({
         const { key, value } = req.body || {};
         if (!key) return res.status(400).json({ error: 'Missing key' });
         if (typeof key !== 'string') return res.status(400).json({ error: 'key must be a string' });
+        // The key was previously taken verbatim. '__proto__.x' is neither an
+        // operator-only top level nor 'preferences', so no operator check ran,
+        // and ConfigStore.set() walked straight onto Object.prototype -- after
+        // which every unset setting in the backend read back that value
+        // (remoteDiagEnabled true on a fresh machine, nothing in config.json to
+        // show for it). ConfigStore now refuses these too; this is the outer
+        // door, so the caller gets a real status instead of a silent no-op.
+        if (key.split('.').some((p) => p === '__proto__' || p === 'constructor' || p === 'prototype')) {
+            return res.status(400).json({ error: 'bad key' });
+        }
         // Local identities keep machine settings (D1) but may not open an
         // internet control channel (RemoteDiag inject/URL/token, bot config).
         if (configPolicy.isOperatorOnlyConfigWrite(key, value, engine.config.get('preferences', {}))
@@ -1441,7 +1451,19 @@ function createBackend({
         if (typeof content !== 'string' || !content || !meta) {
             return res.status(404).json({ error: 'no_program_loaded' });
         }
-        res.json({ name: meta.name, size: meta.size, total: meta.total, content });
+        // NOT res.json(): JSON.stringify over a 17 MB program plus express's
+        // default ETag hash runs synchronously on the same event loop that
+        // pumps G-code to the controller, and ~3.7 s of stall is enough for the
+        // RSP link to be declared lost mid-cut. res.end() bypasses the
+        // send/ETag path; the metadata travels in headers.
+        res.set({
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Program-Name': encodeURIComponent(meta.name || ''),
+            'X-Program-Size': String(meta.size || content.length),
+            'X-Program-Total': String(meta.total || 0),
+            'Cache-Control': 'no-store',
+        });
+        res.end(content);
     });
 
     // ─── Job Resume / Checkpoint REST API ───────────────────────────────
@@ -1651,7 +1673,26 @@ function createBackend({
                 if (!isTest) {
                     const link = operatorLink(`http://localhost:${actualPort}`);
                     if (link) {
-                        console.log(`Operator link: ${link}`);
+                        // NEVER to stdout on the appliance. systemd sends stdout
+                        // to the journal (Storage=persistent), collect-logs.sh
+                        // copies the journal into the support bundle, and the
+                        // bundle gets emailed -- so printing the ?op=<secret>
+                        // launch link handed anyone holding that bundle a
+                        // permanently valid operator credential. The Pi runs
+                        // with NO_BROWSER=1 and has no console to read it from
+                        // anyway; a real terminal still gets it.
+                        if (process.stdout.isTTY) {
+                            console.log(`Operator link: ${link}`);
+                        } else {
+                            try {
+                                const linkFile = path.join(dataDir, 'operator-link.txt');
+                                fs.writeFileSync(linkFile, link + '\n', { encoding: 'utf-8', mode: 0o600 });
+                                try { fs.chmodSync(linkFile, 0o600); } catch (_) { /* best effort on FAT */ }
+                                logger.info(`Operator link written to ${linkFile} (owner-readable only).`);
+                            } catch (err) {
+                                logger.warn(`Could not write the operator link file: ${err && err.message}`);
+                            }
+                        }
                     } else {
                         console.warn(`Operator access is unavailable: backend/data/operator-token cannot be read (${operatorToken.getLoadError() || 'unknown error'}). This PC's browsers still have local control.`);
                     }

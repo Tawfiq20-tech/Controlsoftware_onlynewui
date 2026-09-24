@@ -158,7 +158,10 @@ test('job.load and job.start (RSP: load + startFromLine 0; Grbl: gcode:start)', 
         expect: { name: 'sign.nc', size: 11, loadSeq: 1, wcsSeq: 0 },
     });
     assert.strictEqual(r.status, 'accepted', JSON.stringify(r));
-    assert.deepStrictEqual(cmdsOf(h), [['gcode:startFromLine', 0]]);
+    // 'gcode:startFresh' -- line 1 or a refusal, never a resume. This used to
+    // be ['gcode:startFromLine', 0]; line 0 is outside every file, so the
+    // controller rejected it and no remote start ever ran a job.
+    assert.deepStrictEqual(cmdsOf(h), [['gcode:startFresh']]);
     assert.strictEqual(h.engine.fileLoads.length, 2);
     h.dispose();
 

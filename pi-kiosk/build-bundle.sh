@@ -51,6 +51,19 @@ tar -C "$ROOT" -cf - \
     --exclude='backend/data/job_resume.json' \
     --exclude='backend/data/job_resume.json.bak' \
     --exclude='backend/data/job_resume_gcode.nc' \
+    `# THE BUILD PC OWN MACHINE CONFIG: remoteDiagUrl + remoteDiagToken,` \
+    `# the bot tokens and recipients, the webcam entry and one developer` \
+    `# probe geometry -- all identical on every Pi flashed from this image.` \
+    `# config.default.json ships instead and first boot seeds from it.` \
+    --exclude='backend/data/config.json' \
+    --exclude='backend/data/config.json.bak' \
+    --exclude='backend/data/config.json.tmp' \
+    --exclude='backend/data/config.json.damaged-*' \
+    `# A linked WhatsApp account credentials (LocalAuth dataPath): every` \
+    `# machine would authenticate as the builder and contend for one session.` \
+    --exclude='backend/data/whatsapp-session' \
+    `# The operator launch link, written at boot when there is no TTY.` \
+    --exclude='backend/data/operator-link.txt' \
     backend pi-kiosk | tar -C "$STAGE" -xf -
 cp -r frontend/dist "$STAGE/frontend/dist"
 

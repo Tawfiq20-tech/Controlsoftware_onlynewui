@@ -47,6 +47,13 @@ export default function HomeMenu({ isOpen, onClose, anchorRef }: HomeMenuProps) 
     useEffect(() => {
         if (!isOpen) return;
         const handleClick = (e: MouseEvent) => {
+            const target = e.target as Element | null;
+            // The global on-screen keyboard (App.tsx) is mounted outside all
+            // three refs, and its keys preventDefault without stopping
+            // propagation -- so every key press used to close this menu and
+            // unmount the field being typed into. The Ethernet IP box could
+            // not be filled in at all from the touchscreen.
+            if (target?.closest?.('.osk')) return;
             if (
                 panelRef.current?.contains(e.target as Node) ||
                 anchorRef.current?.contains(e.target as Node) ||

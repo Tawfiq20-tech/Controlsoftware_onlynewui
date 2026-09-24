@@ -17,12 +17,18 @@ const BASE = (() => {
 })();
 
 /** Error carrying the backend's `{ error }` message when it sent one. */
-async function failure(r: Response): Promise<Error> {
+export interface ApiError extends Error {
+    /** HTTP status, so callers can tell "not yet" from "never". */
+    status?: number;
+}
+
+async function failure(r: Response): Promise<ApiError> {
     const body = await r.json().catch(() => null) as { error?: string } | null;
-    if (body?.error === 'operator_required') {
-        return new Error('Only the machine operator (the control PC kiosk) can change this setting');
-    }
-    return new Error(body?.error || `${r.status} ${r.statusText}`);
+    const err: ApiError = body?.error === 'operator_required'
+        ? new Error('Only the machine operator (the control PC kiosk) can change this setting')
+        : new Error(body?.error || `${r.status} ${r.statusText}`);
+    err.status = r.status;
+    return err;
 }
 
 // The kiosk page (port 3000) talks to the backend (port 4000) cross-origin, so
@@ -520,6 +526,8 @@ export interface WifiNetwork {
     open: boolean;
     inUse: boolean;
     saved: boolean;
+    /** Typed in by hand: nmcli never lists a network that hides its SSID. */
+    hidden?: boolean;
 }
 
 export interface WifiStatus {

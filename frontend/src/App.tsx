@@ -25,7 +25,7 @@ import { useJobWakeLock } from './hooks/useJobWakeLock';
 import { usePersistedPreferences } from './hooks/usePersistedPreferences';
 import { useCNCStore } from './stores/cncStore';
 import { sendDesign } from './utils/designLoad';
-import { GCodeParser } from './utils/gcodeParser';
+import { parseGcodeAsync } from './utils/gcodeParser';
 
 // The app ships vertical-only (touchscreen pendant). The Auto/Horizontal/
 // Vertical header toggle was removed, so the layout is fixed here.
@@ -103,19 +103,30 @@ function AppInner() {
     // parsed this session.
     useEffect(() => {
         if (!rawGcodeContent || gcode.length > 0) return;
-        try {
-            const result = new GCodeParser().parseGCode(rawGcodeContent);
-            if (result.lines && result.lines.length > 0) {
-                setGcode(result.lines);
-                setToolpathSegments(result.segments);
-                if (result.parsedToolpath) {
-                    setParsedToolpath(result.parsedToolpath);
+        // MUST stay off the main thread. This effect also runs when a screen
+        // that restarted MID-CARVE gets the running program back from the
+        // machine; parsing ~1 M lines synchronously froze the touchscreen for
+        // tens of seconds, with no Stop and no E-STOP reachable while the
+        // machine was cutting. Every other load path already uses the worker.
+        let cancelled = false;
+        parseGcodeAsync(rawGcodeContent)
+            .then((result) => {
+                if (cancelled) return;
+                // A newer program arrived while this one was parsing.
+                if (useCNCStore.getState().rawGcodeContent !== rawGcodeContent) return;
+                if (result.lines && result.lines.length > 0) {
+                    setGcode(result.lines);
+                    setToolpathSegments(result.segments);
+                    if (result.parsedToolpath) {
+                        setParsedToolpath(result.parsedToolpath);
+                    }
+                    addConsoleLog('info', `Restored ${result.lines.length} G-code lines from last session`);
                 }
-                addConsoleLog('info', `Restored ${result.lines.length} G-code lines from last session`);
-            }
-        } catch (error) {
-            console.error('Error re-parsing restored G-code:', error);
-        }
+            })
+            .catch((error) => {
+                console.error('Error re-parsing restored G-code:', error);
+            });
+        return () => { cancelled = true; };
         // Also runs when the content arrives later than mount: after the screen
         // restarts mid-carve it is fetched back from the machine (see
         // backendConnection 'file:load'), and without this the toolpath would

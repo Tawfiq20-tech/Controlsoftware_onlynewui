@@ -84,6 +84,19 @@ rsync -a --delete "${RSYNC_KEEP[@]}" \
     --exclude 'backend/node_modules/' --exclude 'backend/logs/' \
     "$SRC_DIR/backend" "$SRC_DIR/frontend" "$SRC_DIR/pi-kiosk" "$APP_DIR/"
 mkdir -p "$APP_DIR/backend/logs" "$APP_DIR/backend/data"
+
+# backend/data is excluded above so the machine keeps its own state, but parts
+# of that tree are SHIPPED content, not machine state, and were therefore frozen
+# at whatever the machine was first installed from:
+#   firmware/            fw_m3.hex + manifest.json. A bundle whose new hex fixes
+#                        a controller motion or limit-handling bug never reached
+#                        a machine already in service; Settings then flashed the
+#                        old image and reported success.
+#   config.default.json  the scrubbed factory settings a first boot seeds from.
+rsync -a "$SRC_DIR/backend/data/firmware/" "$APP_DIR/backend/data/firmware/"
+[ -f "$SRC_DIR/backend/data/config.default.json" ] &&
+    rsync -a "$SRC_DIR/backend/data/config.default.json" "$APP_DIR/backend/data/config.default.json"
+
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 log "Installing Node dependencies (arm64 native builds)"

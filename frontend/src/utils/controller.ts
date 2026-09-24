@@ -47,6 +47,13 @@ export interface ControllerState {
 
 export interface SenderStatus {
     name: string;
+    /**
+     * Whether the streamer is running. Present on the initial-sync emit from
+     * CNCEngine._sendInitialState (RSPController.getSenderStatus()); ABSENT on
+     * the live per-line progress emit, which is why every read of it is
+     * typeof-guarded.
+     */
+    active?: boolean;
     total: number;
     sent: number;
     received: number;
@@ -148,6 +155,7 @@ export type ControllerEventName =
     | 'controller:restartCleared'
     | 'serialport:read'
     | 'controller:type'
+    | 'health:power'
     | 'controller:state'
     | 'controller:initialized'
     | 'controller:alarm'
@@ -762,6 +770,13 @@ class Controller {
         });
         this.socket.on('health:metrics', (data: HealthMetrics) => {
             this._emit('health:metrics', data);
+        });
+        // Without this bridge nothing ever reached backendConnection's
+        // 'health:power' handler, so powerHealth stayed null and the
+        // under-voltage / USB-current banner could never appear. on() accepts
+        // any string, so the missing subscription failed silently.
+        this.socket.on('health:power', (data: unknown) => {
+            this._emit('health:power', data);
         });
 
         // Homing
