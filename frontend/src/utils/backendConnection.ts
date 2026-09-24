@@ -255,6 +255,12 @@ function _wireControllerToStore(): void {
     // The controller board rebooted (power loss / reset): its position is gone.
     // The backend blocks Start until X, Y and Z are zeroed again or the
     // machine is homed; the banner says so until then.
+    // The design queue. The gate prompt and the Queue screen both read this;
+    // nothing here starts anything, the operator's tap does (QueueGate).
+    controller.on('queue:state', (data: unknown) => {
+        useCNCStore.getState().setQueue((data as import('../stores/cncStore').QueueView) || null);
+    });
+
     controller.on('health:power', (data: unknown) => {
         const d = data as { ok?: boolean; supported?: boolean; message?: string | null } | null;
         useCNCStore.getState().setPowerHealth(

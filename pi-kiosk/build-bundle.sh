@@ -51,6 +51,9 @@ tar -C "$ROOT" -cf - \
     --exclude='backend/data/job_resume.json' \
     --exclude='backend/data/job_resume.json.bak' \
     --exclude='backend/data/job_resume_gcode.nc' \
+    `# The design queue is this machine's own list, not shipped content.` \
+    --exclude='backend/data/queue.json' \
+    --exclude='backend/data/queue.json.tmp' \
     `# THE BUILD PC OWN MACHINE CONFIG: remoteDiagUrl + remoteDiagToken,` \
     `# the bot tokens and recipients, the webcam entry and one developer` \
     `# probe geometry -- all identical on every Pi flashed from this image.` \

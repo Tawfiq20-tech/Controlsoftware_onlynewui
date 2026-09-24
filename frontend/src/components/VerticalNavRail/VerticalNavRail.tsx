@@ -1,4 +1,4 @@
-import { Home, Play, Box, Folder, Layers, Settings, CloudSun } from 'lucide-react';
+import { Home, Play, Box, Folder, Layers, ListOrdered, Settings, CloudSun } from 'lucide-react';
 import onefinityLogo from '../../assets/brand/onefinity-logo.png';
 import { useCNCStore } from '../../stores/cncStore';
 import './VerticalNavRail.css';
@@ -14,6 +14,7 @@ const NAV_ITEMS = [
     { id: 'Device', label: 'Device', icon: Box },
     { id: 'Project', label: 'Project', icon: Folder },
     { id: 'Library', label: 'Library', icon: Layers },
+    { id: 'Queue', label: 'Queue', icon: ListOrdered },
     { id: 'Settings', label: 'Settings', icon: Settings },
 ];
 
@@ -33,7 +34,10 @@ export default function VerticalNavRail({ activeTab, setActiveTab }: Props) {
                 {NAV_ITEMS.map((item) => {
                     const Icon = item.icon;
                     const isActive = activeTab === item.id;
-                    const isLocked = isCarving && item.id !== 'Carve';
+                    // Locked while cutting, except Carve itself and Queue:
+                    // seeing (and reordering) what runs next is exactly what
+                    // the operator does while the machine is busy.
+                    const isLocked = isCarving && item.id !== 'Carve' && item.id !== 'Queue';
 
                     return (
                         <button

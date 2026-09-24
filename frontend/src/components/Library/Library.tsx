@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Globe, Plus, Trash2, Download, FileText, BookOpen, Cloud, QrCode } from 'lucide-react';
 import { useCNCStore } from '../../stores/cncStore';
-import { GCodeParser } from '../../utils/gcodeParser';
+import { parseGcodeAsync } from '../../utils/gcodeParser';
 import { remoteAuthHeaders } from '../../utils/remoteAuth';
 import { isRemoteUpload, remoteCloud, type LibraryEntry } from '../Settings/api';
 import RemoteFileReview from './RemoteFileReview';
@@ -171,7 +171,7 @@ export default function Library() {
                 setReview({ item, body });
                 return;
             }
-            applyBody(item, body);
+            await applyBody(item, body);
         } catch (err) {
             addConsoleLog('error', `Library load failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -195,17 +195,20 @@ export default function Library() {
         setReviewBusy(false);
         setReview(null);
         addConsoleLog('info', `Remote upload reviewed: ${item.fileName}`);
-        applyBody(reviewed, body);
+        await applyBody(reviewed, body);
     }
 
-    function applyBody(item: LibraryItem, body: string) {
+    async function applyBody(item: LibraryItem, body: string) {
         try {
-            // Mirror Sidebar's upload pipeline: parse via GCodeParser so the
-            // Visualizer3D, sender, and rest of the store actually see the
-            // toolpath. Without this the load is a no-op visually. Tawfiq
-            // msg 7430 — "cant able to load and work on it".
-            const parser = new GCodeParser();
-            const result = parser.parseGCode(body);
+            // Mirror Sidebar's upload pipeline: parse so the Visualizer3D,
+            // sender, and rest of the store actually see the toolpath. Without
+            // this the load is a no-op visually. Tawfiq msg 7430 — "cant able
+            // to load and work on it".
+            //
+            // On the WORKER, not here: a 3D finishing file is ~1M lines, and
+            // parsing one on the UI thread locks the touchscreen for tens of
+            // seconds -- no Stop, no E-STOP, nothing.
+            const result = await parseGcodeAsync(body);
             if (!result.lines || result.lines.length === 0) {
                 addConsoleLog('warning', `Library file ${item.fileName} parsed to 0 lines`);
                 return;

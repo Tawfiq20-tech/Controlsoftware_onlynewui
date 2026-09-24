@@ -22,6 +22,8 @@ import OnScreenKeyboard from './components/OnScreenKeyboard/OnScreenKeyboard';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useAutoConnect } from './hooks/useAutoConnect';
 import { useJobWakeLock } from './hooks/useJobWakeLock';
+import QueueGate from './components/Queue/QueueGate';
+import QueuePanel from './components/Queue/QueuePanel';
 import { usePersistedPreferences } from './hooks/usePersistedPreferences';
 import { useCNCStore } from './stores/cncStore';
 import { sendDesign } from './utils/designLoad';
@@ -328,6 +330,11 @@ function AppInner() {
                                     <Library />
                                 </ErrorBoundary>
                             )}
+                            {activeHeaderTab === 'Queue' && (
+                                <ErrorBoundary fallbackMessage="Queue error">
+                                    <QueuePanel />
+                                </ErrorBoundary>
+                            )}
                         </div>
                     </main>
                 )}
@@ -348,6 +355,13 @@ function AppInner() {
 
             {/* Onefinity Assistant — floating chat widget, always available */}
             <ChatBot />
+
+            {/* One tap between two designs. Floats over every screen, because
+                a design finishes while the operator is at the machine, not on
+                the Queue page. */}
+            <ErrorBoundary fallbackMessage="Queue gate error">
+                <QueueGate />
+            </ErrorBoundary>
 
             {/* Touch input for every text field in the app (see OnScreenKeyboard.tsx). */}
             <OnScreenKeyboard />

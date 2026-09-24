@@ -36,6 +36,7 @@ const { ToolLibrary } = require('./services/toollibrary/ToolLibrary');
 const { WhatsAppService } = require('./services/whatsapp/WhatsAppService');
 const { TelegramBotService } = require('./services/telegram/TelegramBotService');
 const { LibraryService } = require('./services/library/LibraryService');
+const { QueueService } = require('./services/queue/QueueService');
 const { ChatbotService, MAX_MESSAGE_CHARS: CHAT_MAX_MESSAGE_CHARS } = require('./services/chatbot/ChatbotService');
 const { ConfigStore } = require('./services/ConfigStore');
 const {
@@ -257,6 +258,14 @@ function createBackend({
                                                       onProgramLoaded: ({ name, content, options }) => engine.noteProgramLoaded(name, content, options) });
     const toolLibrary       = new ToolLibrary({       configStore: engine.config, io, logger });
     const libraryService    = new LibraryService({    dataDir, io, logger });
+    // Run a list of designs one after another. It loads and checks the next
+    // design the moment the last one finishes; starting it is a tap, because
+    // this board has no spindle output and cannot switch the router (see
+    // services/queue/QueueService.js).
+    const queueService      = new QueueService({      dataDir, io, logger, libraryService,
+                                                      getController, getEngine: () => engine });
+    // A reconnect replaces the controller object the queue's listeners are on.
+    engine.on('controller:bound', () => queueService.noteControllerChanged());
     const chatbotService    = new ChatbotService();
     // Notification services push bot config, recipients, chat IDs and the
     // WhatsApp pairing QR (a credential): only sockets with local control
@@ -522,6 +531,7 @@ function createBackend({
         socket.emit('tools:list', toolLibrary.list());
         socket.emit('probing:strategies', probingService.listStrategies());
         socket.emit('library:list', libraryService.list());
+        socket.emit('queue:state', queueService.getState());
         if (local) {
             const ws = whatsappService.getStatus();
             socket.emit('whatsapp:status', { state: ws.state });
@@ -1596,6 +1606,77 @@ function createBackend({
     app.delete('/api/library/:id', (req, res) => {
         libraryService.remove(req.params.id);
         res.json({ ok: true });
+    });
+
+    // ─── Design queue REST ───────────────────────────────────────────
+    // None of these are on the LAN allowlist (services/remoteAccess/policy.js
+    // is default-deny), so only the machine's own screen reaches them: every
+    // one of them either starts a carve or decides when one starts.
+    app.get('/api/queue', (req, res) => res.json(queueService.getState()));
+
+    app.post('/api/queue', (req, res) => {
+        const r = queueService.add((req.body || {}).libraryId);
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    app.delete('/api/queue/:entryId', (req, res) => {
+        const r = queueService.remove(req.params.entryId);
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    app.post('/api/queue/:entryId/move', (req, res) => {
+        const r = queueService.move(req.params.entryId, (req.body || {}).delta);
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    app.post('/api/queue/clear', (req, res) => {
+        const r = queueService.clear();
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    app.post('/api/queue/reset', (req, res) => {
+        const r = queueService.resetAll();
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    // Arming loads the first design and stops at the gate; it starts nothing.
+    app.post('/api/queue/arm', async (req, res) => {
+        noteLocalCommand(req, '/api/queue/arm');
+        const r = await queueService.setArmed((req.body || {}).armed !== false);
+        res.json(r);
+    });
+
+    // The tap that starts the design waiting at the gate.
+    app.post('/api/queue/start', (req, res) => {
+        noteLocalCommand(req, '/api/queue/start');
+        const r = queueService.startNext();
+        res.status(r.ok ? 200 : 409).json(r);
+    });
+
+    app.post('/api/queue/hold', (req, res) => {
+        const r = queueService.hold();
+        res.status(r.ok ? 200 : 409).json(r);
+    });
+
+    app.post('/api/queue/skip', async (req, res) => {
+        const r = await queueService.skip();
+        res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    // Auto mode starts the next design on a countdown instead of a tap. It is
+    // operator-only: this machine cannot switch the router, so turning it on
+    // is a statement about how the shop runs, not a screen preference.
+    app.post('/api/queue/mode', (req, res) => {
+        if (!requireOperator(req, res)) return undefined;
+        const body = req.body || {};
+        const r = queueService.setMode(body.mode, { routerStaysRunningAcknowledged: body.routerStaysRunningAcknowledged === true });
+        return res.status(r.ok ? 200 : 400).json(r);
+    });
+
+    app.post('/api/queue/delay', (req, res) => {
+        if (!requireOperator(req, res)) return undefined;
+        const r = queueService.setAutoDelay((req.body || {}).seconds);
+        return res.status(r.ok ? 200 : 400).json(r);
     });
 
     // ─── Frontend static serving (production build) ──────────────────

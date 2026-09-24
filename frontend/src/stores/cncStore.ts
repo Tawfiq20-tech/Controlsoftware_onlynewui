@@ -25,6 +25,41 @@ export type CoordSystem = 'Z' | 'XYZ' | 'XY' | 'X' | 'Y';
 export type CoolantState = 'off' | 'mist' | 'flood';
 export type SpindleMode = 'spindle' | 'laser';
 
+export type QueueEntryStatus = 'pending' | 'loaded' | 'running' | 'done' | 'failed' | 'skipped';
+
+export interface QueueEntry {
+    id: string;
+    libraryId: string;
+    name: string;
+    fileName: string;
+    size: number;
+    status: QueueEntryStatus;
+    error: string | null;
+    addedAt: number;
+    startedAt: number;
+    finishedAt: number;
+}
+
+export interface QueueView {
+    state: 'idle' | 'loading' | 'gate' | 'countdown' | 'running' | 'returning' | 'held' | 'done';
+    armed: boolean;
+    mode: 'gate' | 'auto';
+    autoDelaySec: number;
+    message: string;
+    /** Auto mode only: epoch ms when the next design starts by itself. */
+    countdownEndsAt: number;
+    entries: QueueEntry[];
+    activeId: string | null;
+    gateId: string | null;
+    total: number;
+    done: number;
+    pending: number;
+    /** 1-based place in the list of the design at the gate, or running. */
+    position: number;
+    /** False on this board: nothing here switches the router. */
+    spindleControl: boolean;
+}
+
 interface CNCStore {
     // Connection
     connected: boolean;
@@ -82,6 +117,15 @@ interface CNCStore {
     /** Pi power headroom; null off a Pi. See services/health/PowerMonitor.js. */
     powerHealth: { ok: boolean; supported: boolean; message?: string | null } | null;
     setPowerHealth: (v: { ok: boolean; supported: boolean; message?: string | null } | null) => void;
+
+    /**
+     * The design queue (backend/services/queue/QueueService.js). One design
+     * runs, the next is loaded and checked, and the operator taps Start --
+     * this machine has no spindle output, so it cannot switch the router
+     * between two designs and does not pretend to.
+     */
+    queue: QueueView | null;
+    setQueue: (q: QueueView | null) => void;
     setControllerRestart: (r: ControllerRestartInfo | null) => void;
 
     // Whether the backend has a live controller instance for the current serial
@@ -413,6 +457,8 @@ export const useCNCStore = create<CNCStore>((set, get) => ({
     setControllerRestart: (controllerRestart) => set({ controllerRestart }),
     powerHealth: null,
     setPowerHealth: (powerHealth) => set({ powerHealth }),
+    queue: null,
+    setQueue: (queue) => set({ queue }),
 
     // Backend controller-instance-ready flag
     controllerReady: false,

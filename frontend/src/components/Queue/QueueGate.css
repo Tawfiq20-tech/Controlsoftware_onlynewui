@@ -1,0 +1,103 @@
+/* The gate prompt floats over whatever screen is open.
+   Bottom LEFT on purpose: the chat button and its panel own the bottom right
+   (z-index 9998/9999), and a prompt that starts a carve must never end up
+   underneath a chat window. */
+.queue-gate {
+    position: fixed;
+    left: var(--space-5);
+    bottom: 96px;
+    z-index: 9997;
+    width: min(380px, calc(100vw - 2 * var(--space-5)));
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 2px solid var(--success);
+    border-radius: var(--radius-lg);
+    background: var(--bg-panel);
+    color: var(--text-main);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.queue-gate.held { border-color: var(--warning); }
+
+.queue-gate-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+}
+
+.queue-gate-title { flex: 1; font-weight: 700; color: var(--text-bright); }
+
+.queue-gate-msg {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.queue-gate-name {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queue-gate-buttons {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+}
+
+.queue-gate-buttons button {
+    flex: 1;
+    min-height: 64px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-hover);
+    background: var(--bg-input);
+    color: var(--text-main);
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.queue-gate-buttons button:disabled { opacity: 0.45; cursor: default; }
+
+.queue-gate-start {
+    flex: 2 !important;
+    border-color: var(--success) !important;
+    background: color-mix(in srgb, var(--success) 22%, var(--bg-panel)) !important;
+    color: var(--text-bright) !important;
+}
+
+.queue-gate-hold {
+    border-color: var(--warning) !important;
+    background: color-mix(in srgb, var(--warning) 18%, var(--bg-panel)) !important;
+}
+
+.queue-gate-rearm {
+    min-height: 52px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--warning);
+    background: var(--bg-input);
+    color: var(--text-main);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.queue-gate-router {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-dim);
+}

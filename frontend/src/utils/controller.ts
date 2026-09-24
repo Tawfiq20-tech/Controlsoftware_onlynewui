@@ -156,6 +156,7 @@ export type ControllerEventName =
     | 'serialport:read'
     | 'controller:type'
     | 'health:power'
+    | 'queue:state'
     | 'controller:state'
     | 'controller:initialized'
     | 'controller:alarm'
@@ -777,6 +778,11 @@ class Controller {
         // any string, so the missing subscription failed silently.
         this.socket.on('health:power', (data: unknown) => {
             this._emit('health:power', data);
+        });
+
+        // The design queue's whole state, on every change (QueueService._emit).
+        this.socket.on('queue:state', (data: unknown) => {
+            this._emit('queue:state', data);
         });
 
         // Homing

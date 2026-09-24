@@ -43,3 +43,6 @@ backend/data/config.json.damaged-*
 backend/data/whatsapp-session/
 # The operator launch link, written at boot when there is no TTY.
 backend/data/operator-link.txt
+# The design queue on this machine.
+backend/data/queue.json
+backend/data/queue.json.tmp
