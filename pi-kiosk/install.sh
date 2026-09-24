@@ -111,6 +111,7 @@ install -m 0755 "$F/touch-replug.sh"            /usr/local/bin/onefinity-touch-r
 install -m 0755 "$F/collect-logs.sh"            /usr/local/bin/onefinity-logs
 install -m 0755 "$F/log-snapshot.sh"            /usr/local/bin/onefinity-logsnap
 install -m 0644 "$F/onefinity-logsnap.service"  /etc/systemd/system/
+install -m 0644 "$F/onefinity-logsnap.timer"    /etc/systemd/system/
 install -m 0644 "$F/onefinity-touch-replug.service" /etc/systemd/system/
 [ -f /etc/onefinity-kiosk.conf ] || install -m 0644 "$F/onefinity-kiosk.conf" /etc/onefinity-kiosk.conf
 for d in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
@@ -175,7 +176,7 @@ fi
 # daemon-reload fails inside the image-builder chroot (no systemd running).
 systemctl daemon-reload 2>/dev/null || true
 systemctl set-default graphical.target
-systemctl enable onefinity-backend.service onefinity-kiosk.service onefinity-logsnap.service
+systemctl enable onefinity-backend.service onefinity-kiosk.service onefinity-logsnap.service onefinity-logsnap.timer
 
 log "Done. Reboot to start the kiosk: sudo reboot"
 echo "Settings (screen rotation, URL): /etc/onefinity-kiosk.conf"

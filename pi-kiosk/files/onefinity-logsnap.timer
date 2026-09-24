@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh the on-card record of what this boot is doing
+
+[Timer]
+# Two minutes after boot, then every three. The faults being chased do not
+# reboot the Pi, so the card has to hold a recent picture at all times: pull it
+# whenever the fault appears and current-boot.txt is at most three minutes old.
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Writes a short record of the LAST boot onto the SD card's boot partition,
-# every time this one starts. Run by onefinity-logsnap.service.
+# Writes two short records onto the SD card's boot partition:
+#
+#   last-boot.txt     what the PREVIOUS boot did, written once at startup
+#   current-boot.txt  what THIS boot is doing, refreshed every few minutes
+#
+# Run by onefinity-logsnap.service at boot and onefinity-logsnap.timer after.
 #
 # The reason this exists: the faults on this machine -- a brownout reset, a USB
 # over-current that kills the touchscreen -- take the machine down or make the
@@ -16,6 +20,7 @@ OUT_DIR="$BOOT_DIR/onefinity-logs"
 [ -w "$BOOT_DIR" ] || exit 0
 mkdir -p "$OUT_DIR" 2>/dev/null || exit 0
 OUT="$OUT_DIR/last-boot.txt"
+NOW="$OUT_DIR/current-boot.txt"
 
 {
     echo "=== written $(date -Is) (boot $(cut -d. -f1 /proc/uptime)s ago) ==="
@@ -55,5 +60,42 @@ OUT="$OUT_DIR/last-boot.txt"
 } > "$OUT" 2>&1
 
 chmod a+r "$OUT" 2>/dev/null
+
+# ---- what THIS boot is doing, refreshed while the machine runs -------------
+#
+# The faults being chased -- the controller dropping mid-job, the touchscreen
+# going dead -- do NOT reboot the Pi. Their evidence is in the journal of the
+# boot that is still running, which last-boot.txt (written at startup, about
+# the previous boot) can never contain. Pull the card at any point and this
+# file holds what has happened so far.
+{
+    echo "=== written $(date -Is), machine up $(cut -d. -f1 /proc/uptime)s ==="
+    echo
+    echo "--- power now (0x0 = healthy) ---"
+    vcgencmd get_throttled 2>&1
+    vcgencmd pmic_read_adc EXT5V_V 2>&1
+    vcgencmd measure_temp 2>&1
+    echo
+    echo "--- the link to the controller, this boot ---"
+    journalctl -b 0 -u onefinity-backend --no-pager 2>/dev/null |
+        grep -iE "link lost|link down|link restored|heartbeat|LinkLost|serialport:(close|error)|disconnect|reconnect|Controller initialized|port closed|ENOENT|EIO|alarm|E-?stop" |
+        tail -60
+    echo
+    echo "--- job activity, this boot ---"
+    journalctl -b 0 -u onefinity-backend --no-pager 2>/dev/null |
+        grep -iE "gcode:(load|start|stop|pause|resume)|sender:end|job:|superseded|compiled" |
+        tail -40
+    echo
+    echo "--- backend errors and warnings, this boot ---"
+    journalctl -b 0 -u onefinity-backend -p warning --no-pager 2>/dev/null | tail -40
+    echo
+    echo "--- USB events, this boot ---"
+    dmesg -T 2>&1 | grep -iE "usb|over-?current|under-?volt|xhci" | tail -40
+    echo
+    echo "--- devices now ---"
+    lsusb 2>&1
+} > "$NOW" 2>&1
+chmod a+r "$NOW" 2>/dev/null
+
 sync
 exit 0
