@@ -491,6 +491,39 @@ class CNCEngine extends EventEmitter {
         socket.emit('config:all', hasLocalControl(socketIdentity(socket)) ? all : configPolicy.publicConfigView(all));
     }
 
+    /**
+     * Lift the tool clear of the work when a job finishes.
+     *
+     * A program parks wherever its post processor says. The Carveco files park
+     * at the job's own retract -- 0.2 in, about 5 mm -- which leaves the cutter
+     * close enough to the surface that the smallest useful jog step (10 mm)
+     * drives it into the board before the operator can react. Finishing a job
+     * should leave the machine somewhere it is safe to jog from.
+     *
+     * Only after a clean finish: an abort, an alarm or an E-stop leaves the
+     * machine exactly where it stopped, because that position is evidence and
+     * moving the tool could make a bad situation worse.
+     */
+    _parkAfterJob() {
+        try {
+            if (!this.controller || !this.connection || !this.connection.isOpen) return;
+            const state = (this.controller.state && this.controller.state.status) || {};
+            const active = String(state.activeState || '').toLowerCase();
+            if (active === 'alarm' || active === 'hold') return;
+
+            const safe = Number(this.config.get('preferences.safeHeight', 10)) || 10;
+            const z = Number(state.wpos && state.wpos.z);
+            // Already clear: never move the tool for nothing.
+            if (Number.isFinite(z) && z >= safe - 0.001) return;
+
+            logger.info(`[Engine] job finished -- lifting Z to the safe height (${safe} mm) so it is safe to jog`);
+            this.controller.command('gcode', `G21 G90 G0 Z${safe.toFixed(3)}`);
+        } catch (err) {
+            // Parking is a convenience: never let it break the end of a job.
+            logger.warn(`[Engine] could not park after the job: ${err && err.message}`);
+        }
+    }
+
     // ─── Port Listing ────────────────────────────────────────────────
 
     async _handleList(socket, callback) {
@@ -789,6 +822,7 @@ class CNCEngine extends EventEmitter {
             this._jobPaused = false;
             this.io.emit('sender:end', data);
             if (this.sessionLogger) this.sessionLogger.logJob({ event: 'completed', ...data });
+            if (!data || !data.aborted) this._parkAfterJob();
         });
 
         this.controller.on('sender:error', (err) => {
