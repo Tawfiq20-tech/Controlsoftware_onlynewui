@@ -1,1 +1,240 @@
+/* DigitalReadout.tsx had no styling at all before Fix 1 -- this component
+   was previously unreachable from the UI (never mounted), so nobody had
+   noticed. Mounted now in Sidebar's Jog tab and JobControlBar; adding
+   minimal styling here (scoped to this file only) so it's usable, reusing
+   the app's existing CSS custom properties (see frontend/src/index.css)
+   rather than inventing a new palette. */
 
+.digital-readout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    background: var(--bg-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    margin-bottom: var(--space-2);
+}
+
+.dro-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.dro-header h3 {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+}
+
+.wcs-selector select {
+    background: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 4px;
+}
+
+.dro-positions {
+    display: flex;
+    gap: var(--space-3);
+}
+
+.position-type {
+    flex: 1;
+    min-width: 0;
+}
+
+.position-type h4 {
+    margin: 0 0 var(--space-1) 0;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+}
+
+.axis-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.axis-display {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.axis-label {
+    font-weight: 700;
+    font-size: 12px;
+    min-width: 14px;
+    text-align: center;
+}
+
+.axis-value {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+    text-align: right;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+
+.axis-value.readonly {
+    color: var(--text-dim);
+}
+
+.axis-value.editable {
+    cursor: pointer;
+}
+
+.axis-value.editable:hover {
+    background: var(--bg-hover);
+}
+
+.axis-input {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    text-align: right;
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border: 1px solid var(--primary-accent);
+    border-radius: 2px;
+    padding: 0 4px;
+}
+
+.axis-unit {
+    font-size: 10px;
+    color: var(--text-dim);
+    min-width: 18px;
+}
+
+.dro-actions {
+    display: flex;
+    gap: var(--space-1);
+}
+
+.zero-button {
+    flex: 1;
+    padding: 4px var(--space-2);
+    font-size: 11px;
+    font-weight: 500;
+    font-family: inherit;
+    background: var(--bg-main);
+    color: var(--text-main);
+    border: 1px solid var(--border-ui);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.zero-button:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--primary-accent);
+}
+
+.zero-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.zero-button.zero-all {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+}
+
+.zero-button.zero-all:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+.machine-status {
+    display: flex;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+}
+
+.status-indicator.connected .status-dot {
+    background: #2ecc71;
+}
+
+.status-indicator.disconnected {
+    color: var(--text-dim);
+}
+
+/* Compact horizontal variant used inside JobControlBar (Fix 1) -- the
+   default vertical layout above is too tall for a slim always-visible
+   control bar, so collapse Work/Machine position side-by-side into one
+   row and drop the WCS selector + status line (JobControlBar already has
+   its own connection/status context). */
+.digital-readout.jcb-dro {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 4px var(--space-2);
+    margin-bottom: 0;
+}
+
+.digital-readout.jcb-dro .dro-header,
+.digital-readout.jcb-dro .machine-status {
+    display: none;
+}
+
+.digital-readout.jcb-dro .dro-positions {
+    gap: var(--space-2);
+}
+
+.digital-readout.jcb-dro .position-type h4 {
+    display: none;
+}
+
+.digital-readout.jcb-dro .axis-group {
+    flex-direction: row;
+    gap: var(--space-2);
+}
+
+.digital-readout.jcb-dro .axis-display {
+    gap: 3px;
+}
+
+.digital-readout.jcb-dro .axis-value {
+    font-size: 12px;
+    padding: 0;
+}
+
+.digital-readout.jcb-dro .dro-actions {
+    gap: var(--space-1);
+}
+
+.digital-readout.jcb-dro .zero-button {
+    padding: 2px var(--space-1);
+    font-size: 10px;
+    white-space: nowrap;
+}

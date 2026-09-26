@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCNCStore } from '../stores/cncStore';
-import { backendZeroAll, sendBackendCommand } from '../utils/backendConnection';
+import { backendZeroAll, backendZeroWCS } from '../utils/backendConnection';
 import './DigitalReadout.css';
 
 interface DigitalReadoutProps {
@@ -30,13 +30,13 @@ const DigitalReadout: React.FC<DigitalReadoutProps> = ({ className = '' }) => {
 
     const handleZeroXY = () => {
         if (!connected || machineState !== 'idle') return;
-        sendBackendCommand('G10 L20 P0 X0 Y0');
+        backendZeroWCS({ axes: ['x', 'y'] });
         setPosition({ ...position, x: 0, y: 0 });
     };
 
     const handleZeroZ = () => {
         if (!connected || machineState !== 'idle') return;
-        sendBackendCommand('G10 L20 P0 Z0');
+        backendZeroWCS({ axes: ['z'] });
         setPosition({ ...position, z: 0 });
     };
 

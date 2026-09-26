@@ -10,6 +10,7 @@ import {
 } from '../utils/backendConnection';
 import StartFromLine from './StartFromLine';
 import RunOutline from './RunOutline';
+import DigitalReadout from './DigitalReadout';
 import controller from '../utils/controller';
 import './JobControlBar.css';
 
@@ -109,6 +110,10 @@ export default function JobControlBar() {
 
     return (
         <>
+            {/* Digital Readout -- Carve/Job view had no position readout of
+                its own (position was only visible via Sidebar's Position
+                tab). Compact variant (see DigitalReadout.css .jcb-dro). */}
+            <DigitalReadout className="jcb-dro" />
             <div className="job-control-bar">
                 <button
                     className={`job-play-btn ${jobActive && machineState !== 'paused' ? 'running' : ''} ${ecssBlocked ? 'ecss-blocked' : ''}`}

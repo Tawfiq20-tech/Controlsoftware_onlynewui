@@ -24,6 +24,7 @@ import CoolantControl from './CoolantControl';
 import SpindleLaserControl from './SpindleLaserControl';
 import FeedOverrideControl from './FeedOverrideControl';
 import CameraView from './CameraView/CameraView';
+import DigitalReadout from './DigitalReadout';
 import controller from '../utils/controller';
 import './Sidebar.css';
 
@@ -694,6 +695,13 @@ export default function Sidebar() {
                                 </div>
                             </div>
                         )}
+
+                        {/* Digital Readout — Tawfiq: Jog tab had no position
+                            readout of its own, only the Position tab did.
+                            Mounted here so users jogging from this tab can
+                            see live coordinates without switching tabs. */}
+                        <DigitalReadout className="jog-tab-dro" />
+
                         <span className="section-label">Manual Jog Control</span>
 
                         <div className="jog-grid">
