@@ -31,7 +31,8 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
     { key: '1',          display: '1',       description: 'Step: 0.1 mm',    group: 'Step' },
     { key: '2',          display: '2',       description: 'Step: 1 mm',      group: 'Step' },
     { key: '3',          display: '3',       description: 'Step: 10 mm',     group: 'Step' },
-    { key: '4',          display: '4',       description: 'Step: 100 mm',    group: 'Step' },
+    { key: '4',          display: '4',       description: 'Step: 50 mm',     group: 'Step' },
+    { key: '5',          display: '5',       description: 'Step: 100 mm',    group: 'Step' },
     // Job control
     { key: ' ',          display: 'Space',   description: 'Pause / Resume',  group: 'Job' },
     { key: 'Escape',     display: 'Esc',     description: 'Stop job',        group: 'Job' },
@@ -42,7 +43,7 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
     { key: 'o',          display: 'Ctrl+O',  description: 'Open file',       group: 'File',    modifiers: { ctrl: true } },
 ];
 
-const STEP_PRESETS = [0.1, 1, 10, 100];
+const STEP_PRESETS = [0.1, 1, 10, 50, 100];
 
 const JOG_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown']);
 
@@ -140,7 +141,7 @@ export function useKeyboardShortcuts(
         }
 
         // --- Step presets 1-4 ---
-        if (!e.ctrlKey && !e.altKey && ['1', '2', '3', '4'].includes(e.key)) {
+        if (!e.ctrlKey && !e.altKey && ['1', '2', '3', '4', '5'].includes(e.key)) {
             const idx = parseInt(e.key) - 1;
             setJogDistance(STEP_PRESETS[idx]);
             return;
