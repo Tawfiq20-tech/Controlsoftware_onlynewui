@@ -1157,6 +1157,32 @@ class RSPController extends EventEmitter {
                 throw new Error(`probe rejected: ${name}`);
             }
             const r = codec.parseProbeResult(rsp.payload.subarray(2));
+            // Task #127: defense-in-depth sanity check on the OP_PROBE reply
+            // itself -- separate from (and does NOT touch) the Z-only
+            // direction-bit convention above, which is already correct and
+            // has its own regression history (msg11358 -> msg11499/11514,
+            // see the comment on wireDir). This guards against a different
+            // failure class: trusting a corrupted or desynced probe reply
+            // as a genuine touch-off, which would silently offset the WCS
+            // to a wrong position with no visible error to the operator.
+            // Two independent cross-checks against the only ground truth
+            // available to us -- what we ourselves commanded:
+            //   1. Axis mismatch -- firmware echoed a different axis than
+            //      requested (desynced reply / wrong frame / firmware bug).
+            //   2. Distance sanity -- distMm must land inside
+            //      [0, maxTravelMm] (+ float epsilon), and a CONTACT result
+            //      at ~0 travel is implausible (real contact requires the
+            //      probe to actually move before touching).
+            if (r.axis !== axis) {
+                throw new Error(`probe reply axis mismatch: requested axis ${axis}, firmware reported axis ${r.axis} -- refusing to trust this result (possible desynced reply)`);
+            }
+            const DIST_EPSILON_MM = 0.01;
+            if (r.distMm < -DIST_EPSILON_MM || r.distMm > maxTravelMm + DIST_EPSILON_MM) {
+                throw new Error(`probe reply distance out of range: distMm=${r.distMm.toFixed(3)} not within [0, ${maxTravelMm}]mm -- refusing to trust this result (possible corrupted reply)`);
+            }
+            if (r.result === defs.PROBE_RESULT_CONTACT && r.distMm <= DIST_EPSILON_MM) {
+                throw new Error(`probe reply implausible: CONTACT reported at distMm=${r.distMm.toFixed(3)} (effectively zero travel) -- refusing to trust this result (possible false-positive contact)`);
+            }
             const out = {
                 contact: r.result === defs.PROBE_RESULT_CONTACT,
                 axis: r.axis,
